@@ -1,0 +1,82 @@
+# Repository tooling: tests for scripts/, tools/ and images/, plus the zip -> markdown exporter.
+#
+# This is NOT a published package and has no runtime code of its own (`package = false`): it exists so
+# that `uv sync` gives every contributor and CI the same pinned toolchain for the parts of the
+# repository that are not Rust (execution/) and not the CLI (apps/cli has its own project and lock).
+#
+#   uv sync                         # creates .venv from uv.lock
+#   uv run pytest                   # the script/tool tests (no root, no KVM needed; some skip without root)
+#   uv run ruff check . && uv run mypy
+#   ACF_INTEGRATION=1 uv run pytest tests/integration tests/isolation   # on a KVM host, with an image installed
+#   make control-plane              # the control-plane half of those suites against the in-memory host (no KVM)
+#
+# Floors below are the newest releases verified on PyPI on 2026-10-13 and re-verified on 2026-10-17 (docs/DEPENDENCY_PROVENANCE.md).
+[project]
+name = "acf-repo-tools"
+version = "0.0.0"
+description = "Development tooling for the Agent Compute Fabric repository (tests for scripts, tools and images)."
+requires-python = ">=3.12"
+license = "Apache-2.0"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-timeout>=2.4.0",
+    "jsonschema>=4.26.0",
+    "types-jsonschema>=4.26.0.20261006",
+    "mypy>=2.4.0",
+    "ruff>=0.17.1",
+    "shellcheck-py>=0.11.0.1",  # ShellCheck 0.11.0 as a wheel: `shellcheck` on PATH inside the venv
+]
+
+[tool.uv]
+package = false
+
+# --------------------------------------------------------------------------------------------
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = ["apps", "target", "dist", ".venv"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W", "F", "I", "N", "UP", "B", "A", "C4", "SIM", "RUF", "PT", "PERF", "PL", "TID",
+    "T20", "ARG", "S", "ANN", "ERA", "PIE", "RET", "TRY", "FBT", "DTZ", "ISC", "ICN", "G", "LOG",
+]
+ignore = [
+    "TRY003",  # explicit messages in exception constructors are fine in small scripts
+    "RET505",  # explicit else after return is sometimes clearer
+    "S603", "S607",  # these scripts exist to run other programs; arguments are never shell-interpreted
+    "T201",  # they are command-line tools: print() is their output
+    "PLR0911", "PLR0912", "PLR0913", "PLR0915",  # a parser's branches are the point of a parser
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S103", "S105", "S106", "S108", "S311", "S604", "PLR0917", "PLR2004", "ANN", "ARG", "FBT", "T20", "SLF001", "E501"]
+# S604 in tests: `shell=True` there is the driver's keyword for the CLI's own --shell flag; nothing is spawned through a shell.
+
+[tool.ruff.lint.isort]
+known-first-party = ["acf_driver", "acf_proc", "acf_integration", "acf_testkit", "check_pins", "check_kernel_config", "elf_info", "pack_zip", "rootfs_check", "write_image_manifest", "zip_to_markdown"]
+
+# --------------------------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+mypy_path = "tools:tests/helpers"
+files = ["tools", "tests"]  # including tests/integration and tests/isolation: the KVM-only suites are type-checked everywhere
+
+# --------------------------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests/tools", "tests/scripts"]
+pythonpath = ["tools", "tests/helpers"]
+addopts = "-ra --strict-markers --strict-config --import-mode=importlib"
+timeout = 300
+markers = [
+    "needs_root: needs uid 0 (skipped otherwise): the script under test extracts tarballs or builds filesystems with real ownership",
+    "integration: boots a real microVM through acf-local; needs ACF_INTEGRATION=1, KVM and an installed image",
+    "isolation: attacks the sandbox from inside; same requirements as integration",
+    "control_plane: also valid against the in-memory host with the shipped config and policy (ACF_CONTROL_PLANE=1, no KVM)",
+    "driver_selftest: proves the integration driver against the in-memory host (ACF_DRIVER_SELFTEST=1, no KVM)",
+]

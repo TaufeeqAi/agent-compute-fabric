@@ -1,0 +1,33 @@
+# Dependabot keeps every pinned input fresh: the workflows' actions, the Rust lock file and both Python
+# lock files. Each ecosystem is a separate, reviewable pull request, so a bump that breaks the build
+# names its cause. Nothing is auto-merged: this repository's code runs as root on a host.
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      rust-patch-and-minor:
+        update-types: [minor, patch]
+
+  # uv.lock of the repository tooling (tests, ruff, mypy, shellcheck)
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+
+  # uv.lock of the CLI (typer, pydantic, rich): this one is runtime supply-chain surface
+  - package-ecosystem: uv
+    directory: /apps/cli
+    schedule:
+      interval: weekly

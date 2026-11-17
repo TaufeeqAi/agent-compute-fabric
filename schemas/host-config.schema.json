@@ -1,0 +1,305 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "HostConfig",
+  "type": "object",
+  "properties": {
+    "envelope": {
+      "$ref": "#/$defs/Envelope",
+      "default": {
+        "disk_mib": 65536,
+        "max_sandboxes": 16,
+        "max_snapshots": 64,
+        "memory_mib": 8192,
+        "min_free_headroom_mib": 2048,
+        "snapshot_quota_bytes": 34359738368,
+        "vcpus": 4
+      }
+    },
+    "firecracker": {
+      "$ref": "#/$defs/FirecrackerConfig"
+    },
+    "paths": {
+      "$ref": "#/$defs/Paths",
+      "default": {
+        "policy_path": "/etc/acf/policy.yaml",
+        "runtime_dir": "/run/acf",
+        "socket_path": "/run/acf/host-agent.sock",
+        "state_root": "/var/lib/acf"
+      }
+    },
+    "recovery": {
+      "$ref": "#/$defs/RecoveryConfig",
+      "default": {
+        "max_attempts": 3,
+        "teardown_timeout_ms": 10000
+      }
+    },
+    "schema_version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "security": {
+      "$ref": "#/$defs/SecurityConfig",
+      "default": {
+        "allowed_gids": [],
+        "allowed_uids": [
+          0
+        ],
+        "idle_timeout_secs": 300,
+        "max_connections": 32,
+        "max_request_bytes": 1048576,
+        "socket_gid": null,
+        "socket_mode": "0660",
+        "trusted_owner_uids": [
+          0
+        ]
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "firecracker"
+  ],
+  "$defs": {
+    "Envelope": {
+      "description": "The machine's schedulable envelope (spec §18.1). Admission reserves against this.",
+      "type": "object",
+      "properties": {
+        "disk_mib": {
+          "type": "integer",
+          "format": "uint64",
+          "default": 65536,
+          "minimum": 0
+        },
+        "max_sandboxes": {
+          "type": "integer",
+          "format": "uint32",
+          "default": 16,
+          "minimum": 0
+        },
+        "max_snapshots": {
+          "type": "integer",
+          "format": "uint32",
+          "default": 64,
+          "minimum": 0
+        },
+        "memory_mib": {
+          "type": "integer",
+          "format": "uint64",
+          "default": 8192,
+          "minimum": 0
+        },
+        "min_free_headroom_mib": {
+          "description": "Free space that must remain on the state filesystem after a reservation.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 2048,
+          "minimum": 0
+        },
+        "snapshot_quota_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "default": 34359738368,
+          "minimum": 0
+        },
+        "vcpus": {
+          "type": "integer",
+          "format": "uint32",
+          "default": 4,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "FirecrackerConfig": {
+      "type": "object",
+      "properties": {
+        "api_ready_timeout_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "default": 5000,
+          "minimum": 0
+        },
+        "boot_args": {
+          "type": "string",
+          "default": "reboot=k panic=1 pci=off nomodule 8250.nr_uarts=0 i8042.noaux i8042.nomux i8042.dumbkbd swiotlb=noforce"
+        },
+        "cgroup_parent": {
+          "description": "Pre-created cgroup v2 directory (under `cgroup_root`) with the cpu/memory/pids controllers\ndelegated; the jailer creates one child per sandbox beneath it.",
+          "type": "string",
+          "default": "acf"
+        },
+        "cgroup_root": {
+          "type": "string",
+          "default": "/sys/fs/cgroup"
+        },
+        "diagnostic_log": {
+          "description": "Off by default: a log file is guest-influenced host disk growth (Firecracker prod guidance).",
+          "type": "boolean",
+          "default": false
+        },
+        "firecracker_bin": {
+          "type": "string"
+        },
+        "guest_ready_timeout_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "default": 30000,
+          "minimum": 0
+        },
+        "jailer_bin": {
+          "type": "string"
+        },
+        "pinned_version": {
+          "description": "Exact release the profile was validated against, e.g. `v1.17.0`. A mismatch at startup is\na hard failure: Firecracker snapshots are only valid on the same version (spec §20.4).",
+          "type": "string"
+        },
+        "shutdown_grace_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "default": 2000,
+          "minimum": 0
+        },
+        "uid_range_size": {
+          "type": "integer",
+          "format": "uint32",
+          "default": 4096,
+          "minimum": 0
+        },
+        "uid_range_start": {
+          "type": "integer",
+          "format": "uint32",
+          "default": 100000,
+          "minimum": 0
+        },
+        "vmm_overhead_mib": {
+          "description": "Memory the VMM itself needs beyond guest RAM; budgeted in admission and in `memory.max`.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 64,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "firecracker_bin",
+        "jailer_bin",
+        "pinned_version"
+      ]
+    },
+    "Paths": {
+      "type": "object",
+      "properties": {
+        "policy_path": {
+          "type": "string",
+          "default": "/etc/acf/policy.yaml"
+        },
+        "runtime_dir": {
+          "type": "string",
+          "default": "/run/acf"
+        },
+        "socket_path": {
+          "type": "string",
+          "default": "/run/acf/host-agent.sock"
+        },
+        "state_root": {
+          "type": "string",
+          "default": "/var/lib/acf"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RecoveryConfig": {
+      "type": "object",
+      "properties": {
+        "max_attempts": {
+          "description": "A record recovery has touched this many times is quarantined, not retried (spec §22.7).",
+          "type": "integer",
+          "format": "uint32",
+          "default": 3,
+          "minimum": 0
+        },
+        "teardown_timeout_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "default": 10000,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "SecurityConfig": {
+      "type": "object",
+      "properties": {
+        "allowed_gids": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "allowed_uids": {
+          "description": "Callers allowed by uid. Empty list + empty gids = nobody (even root) may connect.",
+          "type": "array",
+          "default": [
+            0
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "idle_timeout_secs": {
+          "type": "integer",
+          "format": "uint64",
+          "default": 300,
+          "minimum": 0
+        },
+        "max_connections": {
+          "type": "integer",
+          "format": "uint",
+          "default": 32,
+          "minimum": 0
+        },
+        "max_request_bytes": {
+          "type": "integer",
+          "format": "uint",
+          "default": 1048576,
+          "minimum": 0
+        },
+        "socket_gid": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "default": null,
+          "minimum": 0
+        },
+        "socket_mode": {
+          "description": "Octal string, e.g. \"0660\". The socket is the first access-control layer (spec §16.1).",
+          "type": "string",
+          "default": "0660"
+        },
+        "trusted_owner_uids": {
+          "description": "Owners trusted for policy/config files.",
+          "type": "array",
+          "default": [
+            0
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

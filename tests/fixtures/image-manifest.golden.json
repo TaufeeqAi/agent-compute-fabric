@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "name": "golden",
+  "architecture": "x86_64",
+  "kernel": {
+    "file": "vmlinux",
+    "sha256": "1e9d3805de16cbf866ce3bd5da41a6c7a75bbbfaca7090430f29d53db9d16333",
+    "size": 14
+  },
+  "rootfs": {
+    "file": "rootfs.ext4",
+    "sha256": "500c099d6ac9515b8f186d6be03b2f1a278e6632660d288e48b8a30f5ed66a34",
+    "size": 14
+  },
+  "boot_args": null,
+  "guest_agent_version": "0.1.0",
+  "provenance": "acf-image-build/1; image=golden; fixture for the Python <-> Rust manifest contract test"
+}

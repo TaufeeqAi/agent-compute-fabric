@@ -1,0 +1,7 @@
+# Pinned so every build (CI, release, your laptop) uses the toolchain the test-suite was verified with.
+# rust-version in Cargo.toml is deliberately equal: no older compiler has been verified (several
+# dependencies already require >= 1.89: serde-saphyr, uuid).
+[toolchain]
+channel = "1.97.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

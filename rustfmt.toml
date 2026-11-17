@@ -1,0 +1,5 @@
+# Stable-channel options only, so `cargo fmt --check` behaves the same on every toolchain.
+edition = "2024"
+max_width = 140
+use_small_heuristics = "Max"
+newline_style = "Unix"

@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ImageManifest",
+  "type": "object",
+  "properties": {
+    "architecture": {
+      "type": "string"
+    },
+    "boot_args": {
+      "description": "Overrides the host default boot args. Part of the image identity.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "guest_agent_version": {
+      "type": "string"
+    },
+    "kernel": {
+      "$ref": "#/$defs/FileEntry"
+    },
+    "name": {
+      "type": "string"
+    },
+    "provenance": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "rootfs": {
+      "$ref": "#/$defs/FileEntry"
+    },
+    "schema_version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "name",
+    "architecture",
+    "kernel",
+    "rootfs",
+    "guest_agent_version"
+  ],
+  "$defs": {
+    "FileEntry": {
+      "type": "object",
+      "properties": {
+        "file": {
+          "type": "string"
+        },
+        "sha256": {
+          "description": "Lowercase hex sha256.",
+          "type": "string"
+        },
+        "size": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "file",
+        "sha256",
+        "size"
+      ]
+    }
+  }
+}

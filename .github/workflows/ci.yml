@@ -1,0 +1,119 @@
+# Every job runs a `make` target, so CI and a contributor's laptop run the same commands.
+# Nothing here needs KVM or a Firecracker binary: those checks live in integration.yml.
+#
+# Actions are pinned to full commit SHAs, each followed by the release tag it was resolved from. The SHAs
+# were resolved with `git ls-remote` on 2026-10-18 (annotated tags are peeled to the commit they point at),
+# so a moved or re-published tag cannot change what runs. Dependabot (.github/dependabot.yml) proposes
+# updates and rewrites both the SHA and the tag comment.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+
+jobs:
+  rust:
+    name: Rust - fmt, clippy, tests, schemas
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # rust-toolchain.toml pins the compiler (and rustfmt/clippy); rustup >= 1.28 installs it only on request.
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - run: make rust-fmt
+      - run: make rust-lint
+      - run: make rust-test
+      - run: make check-schemas
+
+  release:
+    name: Release build - purity proof and static guest agent
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      # Builds acf-host WITHOUT the `testing` feature and fails if any test-only string is in the binary
+      # (the check is validated against a binary that has the feature: it must be able to find something).
+      - run: make release
+      - run: make guest-agent
+      - name: Checksums
+        run: |
+          set -euo pipefail
+          mkdir out
+          cp target/release/acf-host "target/$(uname -m)-unknown-linux-musl/release/acf-guest-agent" out/
+          (cd out && sha256sum acf-host acf-guest-agent | tee SHA256SUMS)
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: acf-phase1-binaries
+          path: out/
+          if-no-files-found: error
+
+  cli:
+    name: CLI - lint, tests, end-to-end against the in-memory host
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.13.1"
+          enable-cache: true
+      - run: make py-lint
+      - run: make py-test
+      # A missing host binary FAILS here (ACF_REQUIRE_E2E=1 in the Makefile), it is never a quiet skip.
+      - run: make e2e
+      - run: make driver-selftest
+      # The same host-facing checks the KVM suite makes (admission, ceilings, state machine, identity, policy), run
+      # against the in-memory host loaded with the SHIPPED config/host.example.yaml and policies/default.yaml.
+      - run: make control-plane
+      # Authorisation is tested with a real client running as another uid, which needs root. Unprivileged those
+      # tests SKIP; ACF_REQUIRE_ROOT=1 turns that skip into a failure so the gate cannot go green without them.
+      - name: Control-plane checks that need root
+        run: sudo --preserve-env=HOME env "PATH=$PATH" ACF_REQUIRE_ROOT=1 make control-plane
+
+  tools:
+    name: Tooling - lint, script tests (as root), pins, systemd units
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.13.1"
+          enable-cache: true
+      - run: make tools-lint
+      # The init, rootfs and image-build tests need uid 0 (real ownership, PID namespaces, mke2fs -d).
+      # Without it they would SKIP, which is not the same as passing.
+      - name: Script and image tests (as root)
+        run: sudo --preserve-env=HOME env "PATH=$PATH" make tools-pytest
+      - run: make check-pins
+      - run: make systemd-verify

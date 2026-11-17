@@ -1,0 +1,100 @@
+# The KVM-only half of the Phase 1 acceptance gate: boots real Firecracker microVMs and attacks them.
+#
+# It runs on a SELF-HOSTED runner that you control and have labelled [self-hosted, linux, x64, kvm]:
+# the job needs /dev/kvm, root, Docker (to build the guest image), a cgroup v2 host and a guest kernel.
+# GitHub-hosted runners are not a substitute (nested virtualisation is not reliably available there).
+# Trigger it by hand; it is not part of ci.yml because a machine that can run it is a scarce resource.
+#
+# What it exercises, in order, is exactly the operator path in docs/OPERATIONS.md:
+#   install Firecracker (pinned) -> install the host agent + units -> build and install a guest image
+#   -> start acf-host.service -> `make integration`
+# so a green run also proves the install scripts and the systemd units on a real machine.
+name: integration
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_path:
+        description: Absolute path ON THE RUNNER of an uncompressed guest kernel (vmlinux) that matches images/images.lock
+        required: true
+        type: string
+      firecracker_sha256:
+        description: sha256 of the Firecracker release tarball, verified out of band (empty = use scripts/firecracker.lock)
+        required: false
+        default: ""
+        type: string
+      allow_unpinned:
+        description: DEVELOPMENT ONLY - build the image although a pin in images/images.lock is UNSET (recorded in its manifest)
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  # One run at a time: the tests own this machine's /var/lib/acf, its cgroup parent and its microVMs.
+  group: integration
+  cancel-in-progress: false
+
+jobs:
+  kvm:
+    name: Real microVMs - lifecycle, execution, snapshots, recovery, isolation
+    runs-on: [self-hosted, linux, x64, kvm]
+    timeout-minutes: 120
+    env:
+      # Inputs reach the shell only through the environment, never by interpolation into the script.
+      KERNEL_PATH: ${{ inputs.kernel_path }}
+      FIRECRACKER_SHA256: ${{ inputs.firecracker_sha256 }}
+      ALLOW_UNPINNED: ${{ inputs.allow_unpinned }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.13.1"
+          enable-cache: true
+      - name: Build the production host agent (purity-checked) and the static guest agent
+        run: |
+          set -euo pipefail
+          make release
+          make guest-agent
+      - name: Install Firecracker and the jailer (pinned release)
+        run: |
+          set -euo pipefail
+          args=()
+          if [ -n "$FIRECRACKER_SHA256" ]; then args=(--sha256 "$FIRECRACKER_SHA256"); fi
+          sudo scripts/install-firecracker.sh "${args[@]}"
+      - name: Install the host agent, its configuration, policy and systemd units
+        run: sudo scripts/host-setup.sh install --acf-host target/release/acf-host
+      - name: Build and install the python guest image
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [ "$ALLOW_UNPINNED" = "true" ]; then args=(--allow-unpinned); fi
+          sudo --preserve-env=TMPDIR scripts/build-image.sh --image python --kernel "$KERNEL_PATH" --install "${args[@]}"
+      - name: Start the host agent and print the preflight report
+        run: |
+          set -euo pipefail
+          sudo systemctl daemon-reload
+          sudo systemctl enable --now acf-host.service
+          sudo /opt/acf/bin/acf-host doctor
+      - name: Integration and isolation tests
+        run: sudo --preserve-env=HOME env "PATH=$PATH" make integration
+      - name: Collect the host agent journal
+        if: always()
+        run: sudo journalctl -u acf-host.service -u acf-cgroup.service --no-pager | tee acf-host.journal.txt >/dev/null || true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: acf-host-journal
+          path: acf-host.journal.txt
+          if-no-files-found: warn
+      - name: Stop the host agent
+        if: always()
+        run: sudo systemctl stop acf-host.service || true

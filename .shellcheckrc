@@ -1,0 +1,6 @@
+# ShellCheck configuration for every script in this repository (shellcheck finds this file by itself).
+#
+# The scripts under scripts/ `source` scripts/lib/common.sh by a path relative to themselves; without
+# these two lines ShellCheck looks relative to the current directory and cannot follow it.
+external-sources=true
+source-path=SCRIPTDIR

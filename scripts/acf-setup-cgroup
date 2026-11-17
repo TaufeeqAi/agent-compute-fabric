@@ -1,0 +1,60 @@
+#!/bin/sh
+# acf-setup-cgroup [PARENT]
+#
+# Idempotently create the cgroup v2 directory under which the Firecracker jailer places one child
+# cgroup per VM, with the cpu, memory and pids controllers delegated to those children. This is the
+# "pre-created cgroup v2 parent" that `firecracker.cgroup_parent` names (default: acf), and the
+# thing `acf-host doctor` checks as `cgroup_parent`.
+#
+# It runs at every boot (deploy/systemd/acf-cgroup.service) and from `scripts/host-setup.sh`.
+# POSIX sh, no dependencies: it must work on a minimal host before anything else is installed.
+#
+#   ACF_CGROUP_ROOT   cgroup v2 mount point (default /sys/fs/cgroup); overridable for tests
+#
+# Exit: 0 ok / already correct, 1 the host cannot provide the profile, 2 usage.
+
+set -eu
+
+ROOT="${ACF_CGROUP_ROOT:-/sys/fs/cgroup}"
+PARENT="${1:-acf}"
+NEED="cpu memory pids"
+
+die() {
+    printf 'acf-setup-cgroup: ERROR: %s\n' "$*" >&2
+    exit 1
+}
+
+case "$PARENT" in
+    '' | . | .. | */* | -*) printf 'acf-setup-cgroup: invalid cgroup name: %s\n' "$PARENT" >&2; exit 2 ;;
+esac
+
+[ -r "$ROOT/cgroup.controllers" ] ||
+    die "$ROOT is not a cgroup v2 (unified) mount. Boot with systemd.unified_cgroup_hierarchy=1 (hybrid and v1 layouts are not supported)."
+
+available="$(cat "$ROOT/cgroup.controllers")"
+for c in $NEED; do
+    case " $available " in
+        *" $c "*) ;;
+        *) die "the '$c' controller is not available at $ROOT (available: $available)" ;;
+    esac
+done
+
+# Enable a controller for the children of a cgroup, unless it already is. Reading
+# cgroup.subtree_control lists the enabled controllers; writing "+name" enables one.
+enable_for_children() {
+    dir=$1
+    enabled="$(cat "$dir/cgroup.subtree_control" 2>/dev/null || true)"
+    for c in $NEED; do
+        case " $enabled " in
+            *" $c "*) ;;
+            *) printf '+%s' "$c" >"$dir/cgroup.subtree_control" || die "cannot enable '$c' in $dir/cgroup.subtree_control" ;;
+        esac
+    done
+}
+
+# Controllers must be enabled at every level on the way down: the root first, then our parent.
+enable_for_children "$ROOT"
+[ -d "$ROOT/$PARENT" ] || mkdir "$ROOT/$PARENT" || die "cannot create $ROOT/$PARENT"
+enable_for_children "$ROOT/$PARENT"
+
+printf 'acf-setup-cgroup: %s delegates: %s\n' "$ROOT/$PARENT" "$NEED"

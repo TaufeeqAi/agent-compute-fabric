@@ -1,0 +1,26 @@
+[package]
+name = "acf-wire"
+description = "Length-delimited framing and the host<->guest agent protocol shared by acf-host and acf-guest-agent."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+# Async framing helpers (host side only; the guest agent stays std-only).
+tokio = ["dep:tokio"]
+
+[dependencies]
+base64 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[lints]
+workspace = true

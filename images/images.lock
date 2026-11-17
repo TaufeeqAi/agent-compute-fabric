@@ -1,0 +1,40 @@
+# Image pins. Read by scripts/build-image.sh and scripts/pin-images.sh with a strict KEY=VALUE parser
+# (never sourced). Checked by `make check-pins`; `make check-pins-release` additionally FAILS while
+# anything below is UNSET.
+#
+# An image is only as reproducible as what it is built from, so every input is pinned by content:
+#   * the OCI base image, by registry digest (BASE_DIGEST_<alias>)
+#   * the guest kernel, by the sha256 of the vmlinux file (KERNEL_SHA256_<arch>)
+# UNSET means "not pinned yet": build-image.sh REFUSES (exit 3) unless you pass --allow-unpinned, which
+# is for local development only and records `unpinned` in the image's manifest provenance, so an
+# unpinned image can never pass for a pinned one.
+#
+# Registry: public.ecr.aws/docker/library is the AWS-hosted mirror of Docker Hub's official images; it
+# is what Firecracker's own rootfs builder (tools/functions: build_rootfs) pulls from, and it avoids
+# Docker Hub's anonymous pull rate limits.
+#
+# The tags below were chosen by the author from knowledge of the Debian 13 ("trixie") generation; the
+# registries could not be reached from the environment this repository was written in, so they were
+# NOT re-resolved. `scripts/pin-images.sh` resolves each tag to a digest (and fails loudly on a tag that
+# does not exist). Bump a base by changing the tag, re-running it, and committing both lines together.
+
+BASE_REF_base=public.ecr.aws/docker/library/debian:trixie-slim
+BASE_DIGEST_base=UNSET
+
+BASE_REF_python=public.ecr.aws/docker/library/python:3.14-slim-trixie
+BASE_DIGEST_python=UNSET
+
+BASE_REF_node=public.ecr.aws/docker/library/node:24-trixie-slim
+BASE_DIGEST_node=UNSET
+
+# The browser image derives from the python image's base (Debian + chromium from the Debian archive).
+BASE_REF_browser=public.ecr.aws/docker/library/python:3.14-slim-trixie
+BASE_DIGEST_browser=UNSET
+
+# Guest kernel: an UNCOMPRESSED vmlinux with the options in tools/check_kernel_config.py built in.
+# Firecracker publishes recipes and configs (resources/guest_configs/, kernel-policy.md); its CI
+# artifacts are on S3 and its microVM kernel sources are under github.com/amazonlinux/linux tags
+# microvm-kernel-*. Whichever you use, pin the file you actually boot:
+#   sha256sum vmlinux-6.1.*   ->  KERNEL_SHA256_x86_64
+KERNEL_SHA256_x86_64=UNSET
+KERNEL_SHA256_aarch64=UNSET

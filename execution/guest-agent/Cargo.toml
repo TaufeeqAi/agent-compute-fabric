@@ -1,0 +1,38 @@
+[package]
+name = "acf-guest-agent"
+description = "In-VM agent: executes bounded commands for the host over AF_VSOCK. Runs inside the untrusted guest."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "acf_guest"
+path = "src/lib.rs"
+
+[[bin]]
+name = "acf-guest-agent"
+path = "src/main.rs"
+
+[dependencies]
+acf-wire = { workspace = true }
+hex = { workspace = true }
+rustix = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+vsock = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints.rust]
+# The single `unsafe` in this crate is `pre_exec` (see exec.rs), explicitly allowed there.
+unsafe_code = "deny"
+unreachable_pub = "warn"
+
+[lints.clippy]
+unwrap_used = "deny"
+panic = "deny"
+dbg_macro = "deny"
+todo = "deny"

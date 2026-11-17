@@ -1,0 +1,26 @@
+# Firecracker release pin. Read by scripts/install-firecracker.sh with a strict KEY=VALUE parser
+# (never sourced). Checked against config/host.example.yaml by `make check-pins`.
+#
+# VERSION must equal `firecracker.pinned_version` in /etc/acf/host.yaml. A Firecracker snapshot is only
+# valid on the exact version that took it, so this is changed only together with the binaries, the
+# guest kernel/agent images and a re-run of tests/integration.
+#
+# Verified upstream, 2026-10-09/12: tag v1.17.0 exists; its CHANGELOG lists [1.17.0] including the
+# `sync_snapshot_files` snapshot parameter this host uses; v1.17.1 and v1.18.0 do not exist.
+VERSION=v1.17.0
+
+# sha256 of the release tarball firecracker-<VERSION>-<arch>.tgz.
+#
+# UNSET means "not pinned yet" and the installer REFUSES to continue (exit 3): ACF will not install
+# a root-executed binary on trust. The digests were not filled in by the author of this repository
+# because the release assets could not be reached from the environment it was written in (see
+# docs/VERIFICATION_STATUS.md); inventing them would be worse than leaving them unset.
+#
+# To pin (do this once, on a machine that can reach GitHub, and review the result in code review):
+#   gh api repos/firecracker-microvm/firecracker/releases/tags/v1.17.0 \
+#     --jq '.assets[] | select(.name | endswith(".tgz")) | "\(.name) \(.digest)"'
+# then cross-check against the release page's published `*.tgz.sha256.txt` before committing.
+# `scripts/install-firecracker.sh --print-digest` downloads the tarball and prints the digest it
+# measured, to compare against those two sources.
+SHA256_x86_64=UNSET
+SHA256_aarch64=UNSET

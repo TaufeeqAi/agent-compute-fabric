@@ -1,0 +1,63 @@
+# ACF Phase 1 host agent: the privileged execution plane (Firecracker + jailer, journal, recovery).
+#
+# Install:
+#   install -m 0644 deploy/systemd/acf-cgroup.service deploy/systemd/acf-host.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now acf-host.service
+#
+# Readiness: the agent recovers first (adopting or cleaning whatever a previous run left), THEN binds
+# its socket. The socket appearing is therefore the readiness signal; ExecStartPost waits for it so
+# anything ordered After=acf-host.service really can connect.
+#
+# Hardening is deliberately moderate. This process is root by necessity (/dev/kvm, mounts, namespaces,
+# cgroups, the jailer's chroot/setuid), and the controls that matter live elsewhere: the jailer, the
+# per-VM uid, the empty network namespace, seccomp inside Firecracker, and the trusted-file loader.
+# Options that would break those mechanisms (ProtectControlGroups, PrivateMounts, a tight
+# CapabilityBoundingSet, ProtectSystem=strict) are intentionally NOT set; tightening them needs a
+# real KVM host to prove nothing breaks (tests/integration), so it is future work, not a guess.
+
+[Unit]
+Description=ACF host agent (Firecracker execution plane)
+Documentation=https://github.com/OWNER/agent-compute-fabric/blob/main/docs/OPERATIONS.md
+Requires=acf-cgroup.service
+After=acf-cgroup.service local-fs.target
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=root
+Group=root
+
+# Optional operator overrides (RUST_LOG=debug, ACF_LOG_FORMAT=json). The dash makes it optional.
+EnvironmentFile=-/etc/default/acf-host
+
+# Print the full preflight report to the journal (one line per check). A failure here is not fatal by
+# itself (the dash); `serve` enforces the same checks and refuses to start with a precise message.
+ExecStartPre=-/opt/acf/bin/acf-host doctor --config /etc/acf/host.yaml
+ExecStart=/opt/acf/bin/acf-host serve --config /etc/acf/host.yaml
+ExecStartPost=/usr/bin/timeout 90 /bin/sh -c 'until [ -S /run/acf/host-agent.sock ]; do sleep 0.2; done'
+
+# SIGTERM = drain: in-flight operations are crash-safe, so after the 30 s drain the agent exits and
+# the next start recovers whatever was mid-flight. Give it comfortably longer than the drain.
+KillSignal=SIGTERM
+TimeoutStopSec=60
+# VMMs are moved into their own cgroups by the jailer and are NOT the service's children; they must
+# survive an agent restart (recovery adopts them), so only the main process gets the signal.
+KillMode=mixed
+Restart=on-failure
+RestartSec=2s
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=full
+ProtectKernelModules=yes
+ProtectClock=yes
+RestrictRealtime=yes
+LockPersonality=yes
+LimitCORE=0
+LimitNOFILE=1048576
+TasksMax=infinity
+
+[Install]
+WantedBy=multi-user.target

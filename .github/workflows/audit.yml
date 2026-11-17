@@ -1,0 +1,61 @@
+# Known-vulnerability audit of everything this repository locks: Cargo.lock and both uv.lock files.
+#
+# Weekly, and whenever a lock file changes. It is separate from ci.yml on purpose: an advisory published
+# today must not turn yesterday's unrelated pull request red, but it must reach a human quickly.
+# (`cargo audit` and `pip-audit` read advisory databases over the network, so this cannot run offline.)
+name: audit
+
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  push:
+    branches: [main]
+    paths:
+      - Cargo.lock
+      - uv.lock
+      - apps/cli/uv.lock
+      - .github/workflows/audit.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: cargo audit (RustSec)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      # --locked: build cargo-audit from its own published lock file; the version is pinned (verified 2026-10-14).
+      - name: Install cargo-audit
+        run: cargo install --locked cargo-audit --version 0.22.2
+      - name: Audit Cargo.lock (warnings, such as unmaintained crates, fail the job too)
+        run: cargo audit --deny warnings
+
+  python:
+    name: pip-audit (PyPI advisories)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.13.1"
+      - name: Audit the CLI's locked dependencies (runtime supply-chain surface)
+        run: |
+          set -euo pipefail
+          uv --directory apps/cli export --locked --no-dev --no-emit-project --format requirements-txt -o "$RUNNER_TEMP/cli-requirements.txt"
+          uvx --from pip-audit==2.10.1 pip-audit --requirement "$RUNNER_TEMP/cli-requirements.txt" --no-deps --disable-pip --strict
+      - name: Audit the repository tooling's locked dependencies
+        run: |
+          set -euo pipefail
+          uv export --locked --no-emit-project --format requirements-txt -o "$RUNNER_TEMP/tools-requirements.txt"
+          uvx --from pip-audit==2.10.1 pip-audit --requirement "$RUNNER_TEMP/tools-requirements.txt" --no-deps --disable-pip --strict

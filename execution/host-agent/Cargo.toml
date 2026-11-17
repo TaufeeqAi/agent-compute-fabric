@@ -1,0 +1,61 @@
+[package]
+name = "acf-host-agent"
+description = "ACF Phase 1 privileged host agent: admission, operation journal, lifecycle, Firecracker/Jailer backend, snapshots, recovery."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "acf_host"
+path = "src/lib.rs"
+
+[[bin]]
+name = "acf-host"
+path = "src/main.rs"
+
+# Test-only: the real server + coordinator over an in-memory backend, for CLI end-to-end tests.
+# Never built without `--features testing`, so it cannot appear in a release artifact.
+[[bin]]
+name = "acf-host-fake"
+path = "src/bin/acf_host_fake.rs"
+required-features = ["testing"]
+
+[features]
+default = []
+# Test doubles + crash-point injection. NEVER enabled in release builds (see Makefile `release`).
+testing = ["dep:acf-guest-agent"]
+
+[dependencies]
+acf-guest-agent = { path = "../guest-agent", optional = true }
+acf-wire = { workspace = true, features = ["tokio"] }
+async-trait = { workspace = true }
+base64 = { workspace = true }
+cap-std = { workspace = true }
+clap = { workspace = true }
+crc32fast = { workspace = true }
+hex = { workspace = true }
+http-body-util = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+rustix = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde-saphyr = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+acf-host-agent = { path = ".", features = ["testing"] }
+proptest = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

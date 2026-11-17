@@ -1,0 +1,91 @@
+# Agent Compute Fabric — Phase 1 host configuration (schema_version 1).
+#
+# Config answers: WHERE THINGS LIVE AND HOW BIG THIS MACHINE IS. (What callers may do is policy:
+# policies/default.yaml.) Install as /etc/acf/host.yaml:
+#
+#   install -d -m 0755 -o root -g root /etc/acf
+#   install -m 0644 -o root -g root config/host.example.yaml /etc/acf/host.yaml
+#
+# The file is loaded through the trusted-file path: root-owned regular file, no symlink, not
+# group/world-writable, in root-owned non-writable directories, <= 1 MiB. Unknown keys are refused.
+#
+# `acf-host doctor --config /etc/acf/host.yaml` checks that this machine can actually honour the
+# profile (KVM, cgroup v2 delegation, uid range, binaries, policy). `acf-host serve` runs the same
+# checks that are fatal and refuses to start when one fails.
+
+schema_version: 1
+
+paths:
+  # Durable state: journal, sandboxes, snapshots, images, telemetry. Created 0700 root.
+  state_root: /var/lib/acf
+  # Volatile runtime files (created by systemd-tmpfiles, see deploy/tmpfiles.d/acf.conf).
+  runtime_dir: /run/acf
+  # A Unix socket path may be at most 107 bytes; longer paths are refused at startup.
+  # The CLI's default is the same path, so leave it unless you also pass --socket / ACF_SOCKET.
+  socket_path: /run/acf/host-agent.sock
+  policy_path: /etc/acf/policy.yaml
+
+security:
+  # The socket is the first access-control layer; the kernel reports the caller's real uid/gid
+  # (SO_PEERCRED). A caller must match one of these lists. Empty + empty = nobody, not even root.
+  allowed_uids: [0]
+  allowed_gids: []
+  # To let an operator group use the CLI without sudo:
+  #   allowed_gids: [<gid of group "acf">]   socket_gid: <same gid>   socket_mode: "0660"
+  socket_mode: "0660"
+  # socket_gid: 990
+  max_connections: 32
+  max_request_bytes: 1048576
+  idle_timeout_secs: 300
+  # Who may own policy/config/binaries for them to be trusted. Root only.
+  trusted_owner_uids: [0]
+
+# The schedulable envelope of THIS machine. Admission reserves against it; a request that does not
+# fit is refused (ADMISSION_REJECTED), never overcommitted. Size it below what the host really has
+# and leave room for the host agent, the kernel and page cache.
+#   vcpus       : schedulable guest vCPUs (the sum across running sandboxes)
+#   memory_mib  : guest RAM + per-VMM overhead (firecracker.vmm_overhead_mib) summed over sandboxes
+#   disk_mib    : sum of sandbox root disks (sparse files, but budgeted at full size)
+envelope:
+  vcpus: 4
+  memory_mib: 8192
+  disk_mib: 65536
+  max_sandboxes: 16            # must be <= firecracker.uid_range_size
+  snapshot_quota_bytes: 34359738368   # 32 GiB across all snapshots
+  max_snapshots: 64
+  min_free_headroom_mib: 2048  # free space that must remain on the state filesystem after a reservation
+
+firecracker:
+  # Installed by scripts/install-firecracker.sh, root:root 0755, in root-owned directories.
+  firecracker_bin: /opt/acf/bin/firecracker
+  jailer_bin: /opt/acf/bin/jailer
+  # Exact release the profile was validated against. A mismatch at startup is fatal: Firecracker
+  # snapshots are only valid on the same version. Change this only together with the binaries,
+  # the kernel/guest-agent images and a re-run of tests/integration.
+  pinned_version: v1.17.0
+  # cgroup v2 only. The parent must exist with cpu, memory and pids delegated to its children
+  # (scripts/host-setup.sh creates it; deploy/systemd/acf-cgroup.service re-creates it at boot).
+  cgroup_root: /sys/fs/cgroup
+  cgroup_parent: acf
+  # One unique unprivileged uid/gid per running VM, drawn from this range. It must not overlap any
+  # real account (`acf-host doctor` checks /etc/passwd) and must be >= 1000.
+  uid_range_start: 100000
+  uid_range_size: 4096
+  # Memory the VMM itself needs beyond guest RAM; budgeted in admission and in memory.max.
+  vmm_overhead_mib: 64
+  # Off by default: a Firecracker log file is guest-influenced host disk growth.
+  diagnostic_log: false
+  # Kernel command line. The built-in default is Firecracker v1.17.0's own documented default
+  # (reboot=k panic=1 nomodule 8250.nr_uarts=0 i8042.noaux i8042.nomux i8042.dumbkbd swiotlb=noforce)
+  # plus an explicit `pci=off`, because this host uses the MMIO transport. A value set here or in an
+  # image manifest REPLACES the default, so an override must carry every flag it wants to keep.
+  # Leave unset unless you know why.
+  # boot_args: "..."
+  api_ready_timeout_ms: 5000      # VMM API socket must answer within this
+  guest_ready_timeout_ms: 30000   # guest agent must answer Hello within this after boot
+  shutdown_grace_ms: 2000         # graceful stop before SIGKILL
+
+recovery:
+  # A record recovery has touched this many times is quarantined, not retried forever.
+  max_attempts: 3
+  teardown_timeout_ms: 10000

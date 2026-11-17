@@ -1,0 +1,258 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PolicyDoc",
+  "type": "object",
+  "properties": {
+    "capabilities": {
+      "$ref": "#/$defs/Capabilities"
+    },
+    "defaults": {
+      "description": "Optional. When omitted, defaults are derived as `min(built-in, ceiling)`; when present\nthey are validated against the ceilings (an explicit inconsistency is an error).",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PolicyDefaults"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "execution": {
+      "$ref": "#/$defs/ExecutionPolicy",
+      "default": {
+        "cwd_prefixes": [
+          "/workspace",
+          "/tmp"
+        ],
+        "default_cwd": "/workspace",
+        "env_allowlist": [
+          "PATH",
+          "HOME",
+          "LANG",
+          "LC_ALL",
+          "TZ",
+          "PYTHONUNBUFFERED"
+        ],
+        "guest_gid": 1000,
+        "guest_uid": 1000
+      }
+    },
+    "limits": {
+      "$ref": "#/$defs/PolicyLimits"
+    },
+    "name": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "version": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "name",
+    "version",
+    "limits",
+    "capabilities"
+  ],
+  "$defs": {
+    "Capabilities": {
+      "type": "object",
+      "properties": {
+        "exec": {
+          "type": "boolean"
+        },
+        "images": {
+          "description": "Image *aliases* a caller may select. Empty = no images = nothing can be created.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "network_modes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NetworkMode"
+          }
+        },
+        "sandbox_destroy": {
+          "type": "boolean"
+        },
+        "snapshot_create": {
+          "type": "boolean"
+        },
+        "snapshot_delete": {
+          "type": "boolean"
+        },
+        "snapshot_restore": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "network_modes",
+        "images",
+        "exec",
+        "snapshot_create",
+        "snapshot_restore",
+        "snapshot_delete",
+        "sandbox_destroy"
+      ]
+    },
+    "ExecutionPolicy": {
+      "type": "object",
+      "properties": {
+        "cwd_prefixes": {
+          "description": "A command's cwd must be one of these directories or beneath one.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "default_cwd": {
+          "type": "string"
+        },
+        "env_allowlist": {
+          "description": "Exact environment variable names a caller may set. Everything else is rejected.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "guest_gid": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "guest_uid": {
+          "description": "Unprivileged identity commands run as inside the guest.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "env_allowlist",
+        "cwd_prefixes",
+        "default_cwd",
+        "guest_uid",
+        "guest_gid"
+      ]
+    },
+    "NetworkMode": {
+      "description": "Phase 1 network vocabulary: `none` only (spec §18.7, DELTA-015). The enum is\n`non_exhaustive` so adding a mode later is a *minor* contract change that must ship with\nits own semantic contract and adversarial tests.",
+      "type": "string",
+      "enum": [
+        "none"
+      ]
+    },
+    "PolicyDefaults": {
+      "type": "object",
+      "properties": {
+        "pids": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "runtime_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "stderr_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "stdout_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "runtime_ms",
+        "pids",
+        "stdout_bytes",
+        "stderr_bytes"
+      ]
+    },
+    "PolicyLimits": {
+      "type": "object",
+      "properties": {
+        "max_argv_bytes": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "max_argv_items": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "max_disk_mib": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "max_env_entries": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "max_memory_mib": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "max_pids": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "max_runtime_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "max_stderr_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "max_stdout_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "max_vcpus": {
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "max_vcpus",
+        "max_memory_mib",
+        "max_disk_mib",
+        "max_runtime_ms",
+        "max_pids",
+        "max_stdout_bytes",
+        "max_stderr_bytes",
+        "max_argv_items",
+        "max_argv_bytes",
+        "max_env_entries"
+      ]
+    }
+  }
+}

@@ -1,0 +1,5 @@
+# actionlint configuration (https://github.com/rhysd/actionlint): declare the one custom runner label the
+# workflows use, so that the linter can tell a typo from an intentional self-hosted label.
+self-hosted-runner:
+  labels:
+    - kvm   # a machine with /dev/kvm, root, Docker and a cgroup v2 host: see .github/workflows/integration.yml

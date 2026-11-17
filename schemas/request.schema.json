@@ -1,0 +1,632 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RequestEnvelope",
+  "type": "object",
+  "properties": {
+    "body": {
+      "$ref": "#/$defs/Request"
+    },
+    "operation_id": {
+      "description": "Supplying one makes a mutating request resolvable after a lost response (§8.4, §12).",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/OperationId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "protocol": {
+      "type": "string"
+    },
+    "request_id": {
+      "description": "Client correlation id (opaque, echoed back).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "retry": {
+      "description": "\"I am retrying/resolving an operation I already submitted.\" A retry whose record is\nmissing is **rejected**, never re-interpreted as a fresh request (§12.4).",
+      "type": "boolean",
+      "default": false
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "protocol",
+    "body"
+  ],
+  "$defs": {
+    "CommandSpec": {
+      "type": "object",
+      "properties": {
+        "argv": {
+          "description": "Executed directly (no shell). Use `[\"/bin/sh\",\"-c\",\"...\"]` to opt into a shell.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "limits": {
+          "$ref": "#/$defs/RunLimitsRequest",
+          "default": {
+            "max_pids": null,
+            "max_stderr_bytes": null,
+            "max_stdout_bytes": null,
+            "timeout_ms": null
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "argv"
+      ]
+    },
+    "ExecParams": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "$ref": "#/$defs/CommandSpec"
+        },
+        "expected_generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "sandbox_id": {
+          "$ref": "#/$defs/SandboxId"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "sandbox_id",
+        "expected_generation",
+        "command"
+      ]
+    },
+    "Generation": {
+      "description": "Monotonic per-sandbox incarnation counter (spec §11.4). Starts at 1; never reused.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "NetworkMode": {
+      "description": "Phase 1 network vocabulary: `none` only (spec §18.7, DELTA-015). The enum is\n`non_exhaustive` so adding a mode later is a *minor* contract change that must ship with\nits own semantic contract and adversarial tests.",
+      "type": "string",
+      "enum": [
+        "none"
+      ]
+    },
+    "OperationId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9-]{8,64}$"
+    },
+    "OperationSelector": {
+      "type": "object",
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/OperationId"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "operation_id"
+      ]
+    },
+    "Request": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "host_info"
+            }
+          },
+          "required": [
+            "method"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "metrics"
+            }
+          },
+          "required": [
+            "method"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "policy_reload"
+            }
+          },
+          "required": [
+            "method"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "sandbox_create"
+            },
+            "params": {
+              "$ref": "#/$defs/SandboxCreateParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "sandbox_start"
+            },
+            "params": {
+              "$ref": "#/$defs/SandboxTarget"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "sandbox_stop"
+            },
+            "params": {
+              "$ref": "#/$defs/SandboxTarget"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "sandbox_destroy"
+            },
+            "params": {
+              "$ref": "#/$defs/SandboxTarget"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "sandbox_inspect"
+            },
+            "params": {
+              "$ref": "#/$defs/SandboxSelector"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "sandbox_list"
+            }
+          },
+          "required": [
+            "method"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "exec"
+            },
+            "params": {
+              "$ref": "#/$defs/ExecParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "snapshot_create"
+            },
+            "params": {
+              "$ref": "#/$defs/SnapshotCreateParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "snapshot_restore"
+            },
+            "params": {
+              "$ref": "#/$defs/SnapshotRestoreParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "snapshot_delete"
+            },
+            "params": {
+              "$ref": "#/$defs/SnapshotRef"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "snapshot_list"
+            }
+          },
+          "required": [
+            "method"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "operation_get"
+            },
+            "params": {
+              "$ref": "#/$defs/OperationSelector"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "operation_cancel"
+            },
+            "params": {
+              "$ref": "#/$defs/OperationSelector"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "run_inspect"
+            },
+            "params": {
+              "$ref": "#/$defs/RunSelector"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        }
+      ]
+    },
+    "RestoreTarget": {
+      "oneOf": [
+        {
+          "description": "Replace an existing sandbox with a **new generation** of the same id (rollback).",
+          "type": "object",
+          "properties": {
+            "expected_generation": {
+              "$ref": "#/$defs/Generation"
+            },
+            "kind": {
+              "type": "string",
+              "const": "existing"
+            },
+            "sandbox_id": {
+              "$ref": "#/$defs/SandboxId"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "sandbox_id",
+            "expected_generation"
+          ]
+        },
+        {
+          "description": "Materialise the snapshot as a brand-new sandbox.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "new"
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    },
+    "RunId": {
+      "type": "string",
+      "pattern": "^run-[0-9a-f]{32}$"
+    },
+    "RunLimitsRequest": {
+      "description": "Limits a caller may *ask for*. Anything omitted takes the policy default; anything above a\npolicy ceiling is rejected (never silently clamped).",
+      "type": "object",
+      "properties": {
+        "max_pids": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "max_stderr_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "max_stdout_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "timeout_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "RunSelector": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "$ref": "#/$defs/RunId"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "run_id"
+      ]
+    },
+    "SandboxCreateParams": {
+      "type": "object",
+      "properties": {
+        "image": {
+          "description": "Image alias (policy-allowlisted). The resolved immutable identity is recorded.",
+          "type": "string"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resources": {
+          "$ref": "#/$defs/SandboxResources"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "image",
+        "resources"
+      ]
+    },
+    "SandboxId": {
+      "type": "string",
+      "pattern": "^sbx-[0-9a-f]{32}$"
+    },
+    "SandboxResources": {
+      "description": "What a sandbox is *given*. Immutable for the life of a generation.",
+      "type": "object",
+      "properties": {
+        "disk_mib": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "memory_mib": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "network": {
+          "$ref": "#/$defs/NetworkMode"
+        },
+        "vcpus": {
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "vcpus",
+        "memory_mib",
+        "disk_mib",
+        "network"
+      ]
+    },
+    "SandboxSelector": {
+      "type": "object",
+      "properties": {
+        "sandbox": {
+          "description": "Sandbox id **or** name. Read-only lookups only.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "sandbox"
+      ]
+    },
+    "SandboxTarget": {
+      "type": "object",
+      "properties": {
+        "expected_generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "sandbox_id": {
+          "$ref": "#/$defs/SandboxId"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "sandbox_id",
+        "expected_generation"
+      ]
+    },
+    "SnapshotCreateParams": {
+      "type": "object",
+      "properties": {
+        "expected_generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sandbox_id": {
+          "$ref": "#/$defs/SandboxId"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "sandbox_id",
+        "expected_generation"
+      ]
+    },
+    "SnapshotId": {
+      "type": "string",
+      "pattern": "^snp-[0-9a-f]{32}$"
+    },
+    "SnapshotRef": {
+      "type": "object",
+      "properties": {
+        "snapshot_generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "snapshot_id": {
+          "$ref": "#/$defs/SnapshotId"
+        }
+      },
+      "required": [
+        "snapshot_id",
+        "snapshot_generation"
+      ]
+    },
+    "SnapshotRestoreParams": {
+      "type": "object",
+      "properties": {
+        "snapshot": {
+          "$ref": "#/$defs/SnapshotRef"
+        },
+        "target": {
+          "$ref": "#/$defs/RestoreTarget"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "snapshot",
+        "target"
+      ]
+    }
+  }
+}

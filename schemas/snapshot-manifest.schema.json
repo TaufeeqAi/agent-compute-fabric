@@ -1,0 +1,310 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SnapshotManifest",
+  "type": "object",
+  "properties": {
+    "acf_version": {
+      "type": "string"
+    },
+    "artifacts": {
+      "$ref": "#/$defs/SnapshotArtifacts"
+    },
+    "backend": {
+      "$ref": "#/$defs/BackendSummary"
+    },
+    "baseline_state_digest": {
+      "description": "The deterministic guest probe taken just before the snapshot (restore oracle).",
+      "type": "string"
+    },
+    "created_wall": {
+      "type": "string"
+    },
+    "guest_agent_version": {
+      "type": "string"
+    },
+    "host": {
+      "$ref": "#/$defs/HostFingerprint"
+    },
+    "image": {
+      "$ref": "#/$defs/ImageRef"
+    },
+    "policy_id": {
+      "$ref": "#/$defs/PolicyId"
+    },
+    "resources": {
+      "$ref": "#/$defs/SandboxResources"
+    },
+    "schema_version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "snapshot_generation": {
+      "$ref": "#/$defs/Generation"
+    },
+    "snapshot_id": {
+      "$ref": "#/$defs/SnapshotId"
+    },
+    "source": {
+      "$ref": "#/$defs/SandboxRef"
+    },
+    "source_run": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RunId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "snapshot_id",
+    "snapshot_generation",
+    "created_wall",
+    "source",
+    "image",
+    "resources",
+    "artifacts",
+    "backend",
+    "host",
+    "policy_id",
+    "baseline_state_digest",
+    "guest_agent_version",
+    "acf_version"
+  ],
+  "$defs": {
+    "BackendSummary": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "security_profile_id": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "security_profile_id"
+      ]
+    },
+    "FileDigest": {
+      "type": "object",
+      "properties": {
+        "bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "name": {
+          "type": "string"
+        },
+        "sha256": {
+          "description": "Lowercase hex sha256 of the bytes that were copied.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "bytes",
+        "sha256"
+      ]
+    },
+    "Generation": {
+      "description": "Monotonic per-sandbox incarnation counter (spec §11.4). Starts at 1; never reused.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "HostFingerprint": {
+      "type": "object",
+      "properties": {
+        "arch": {
+          "type": "string"
+        },
+        "cpu_flags_digest": {
+          "description": "sha256 of the sorted CPU feature flags. A snapshot restored onto a CPU with *fewer*\nfeatures can crash the guest; Phase 1 requires the identical set (spec §20.4).",
+          "type": "string"
+        },
+        "cpu_model": {
+          "type": "string"
+        },
+        "kernel_release": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "arch",
+        "cpu_model",
+        "cpu_flags_digest",
+        "kernel_release"
+      ]
+    },
+    "ImageRef": {
+      "description": "Immutable execution identity. The alias is a *mutable human label* and is never sufficient\non its own (spec §8.9): `image_id` is the digest of the image manifest.",
+      "type": "object",
+      "properties": {
+        "alias": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "architecture": {
+          "type": "string"
+        },
+        "image_id": {
+          "description": "`sha256:<hex>` of the canonical image manifest.",
+          "type": "string"
+        },
+        "kernel_identity": {
+          "description": "`sha256:<hex>` of the kernel file's bytes.",
+          "type": "string"
+        },
+        "manifest_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "provenance_reference": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rootfs_identity": {
+          "description": "`sha256:<hex>` of the rootfs file's bytes.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "image_id",
+        "architecture",
+        "kernel_identity",
+        "rootfs_identity",
+        "manifest_version"
+      ]
+    },
+    "NetworkMode": {
+      "description": "Phase 1 network vocabulary: `none` only (spec §18.7, DELTA-015). The enum is\n`non_exhaustive` so adding a mode later is a *minor* contract change that must ship with\nits own semantic contract and adversarial tests.",
+      "type": "string",
+      "enum": [
+        "none"
+      ]
+    },
+    "PolicyId": {
+      "description": "Identity of the policy in force when an operation was admitted (spec §16.7).",
+      "type": "object",
+      "properties": {
+        "digest": {
+          "description": "sha256 of the exact bytes that were verified and parsed.",
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "digest"
+      ]
+    },
+    "RunId": {
+      "type": "string",
+      "pattern": "^run-[0-9a-f]{32}$"
+    },
+    "SandboxId": {
+      "type": "string",
+      "pattern": "^sbx-[0-9a-f]{32}$"
+    },
+    "SandboxRef": {
+      "description": "A sandbox incarnation. Destructive operations require *this*, never a name (spec §12.5).",
+      "type": "object",
+      "properties": {
+        "generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "sandbox_id": {
+          "$ref": "#/$defs/SandboxId"
+        }
+      },
+      "required": [
+        "sandbox_id",
+        "generation"
+      ]
+    },
+    "SandboxResources": {
+      "description": "What a sandbox is *given*. Immutable for the life of a generation.",
+      "type": "object",
+      "properties": {
+        "disk_mib": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "memory_mib": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "network": {
+          "$ref": "#/$defs/NetworkMode"
+        },
+        "vcpus": {
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "vcpus",
+        "memory_mib",
+        "disk_mib",
+        "network"
+      ]
+    },
+    "SnapshotArtifacts": {
+      "description": "The three artifacts that together *are* a snapshot (spec §20.3): CPU/device state, guest\nmemory, and the disk the guest was running on. Missing any one makes the others useless.",
+      "type": "object",
+      "properties": {
+        "disk": {
+          "$ref": "#/$defs/FileDigest"
+        },
+        "mem": {
+          "$ref": "#/$defs/FileDigest"
+        },
+        "vmm_version": {
+          "description": "VMM version that wrote the snapshot (restore requires an identical one).",
+          "type": "string"
+        },
+        "vmstate": {
+          "$ref": "#/$defs/FileDigest"
+        }
+      },
+      "required": [
+        "vmstate",
+        "mem",
+        "disk",
+        "vmm_version"
+      ]
+    },
+    "SnapshotId": {
+      "type": "string",
+      "pattern": "^snp-[0-9a-f]{32}$"
+    }
+  }
+}

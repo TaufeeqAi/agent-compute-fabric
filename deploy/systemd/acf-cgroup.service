@@ -1,0 +1,28 @@
+# Creates the cgroup v2 parent under which the Firecracker jailer places one child cgroup per VM,
+# with the cpu, memory and pids controllers delegated to those children.
+#
+# cgroup directories do not survive a reboot, so this runs on every boot, before acf-host.service.
+# It is idempotent (re-running it changes nothing) and it never removes anything.
+#
+# Install:  install -m 0644 deploy/systemd/acf-cgroup.service /etc/systemd/system/
+#
+# Design note (ADR-0004): the parent is a top-level cgroup (/sys/fs/cgroup/acf) created by this
+# oneshot, outside systemd's own accounting tree. The systemd-native alternative is to run the host
+# agent under Delegate=yes and let it manage a subtree beneath its own cgroup; that needs the agent
+# to move itself into a leaf first (the "no internal processes" rule) and is deferred to Phase 2.
+
+[Unit]
+Description=ACF cgroup v2 parent for sandbox VMs
+Documentation=https://github.com/OWNER/agent-compute-fabric/blob/main/docs/OPERATIONS.md
+DefaultDependencies=yes
+After=local-fs.target
+Before=acf-host.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Must match firecracker.cgroup_parent in /etc/acf/host.yaml (default: acf).
+ExecStart=/opt/acf/libexec/acf-setup-cgroup acf
+
+[Install]
+WantedBy=multi-user.target

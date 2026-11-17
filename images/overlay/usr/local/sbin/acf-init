@@ -1,0 +1,278 @@
+#!/bin/sh
+# acf-init — PID 1 of an Agent Compute Fabric guest (Phase 1).
+#
+# The kernel starts this as /sbin/init (a symlink the image build creates). It has exactly one job:
+# turn a bare kernel + root filesystem into "a machine on which acf-guest-agent can run a bounded
+# command for the host", and then stay out of the way.
+#
+#   1. mount the pseudo-filesystems (/proc /sys /dev /dev/pts /dev/shm /run, cgroup v2)
+#   2. grow the root filesystem to the disk the host attached          (resize2fs, online)
+#   3. give the machine a name and a working loopback                   (network=none still has `lo`)
+#   4. start acf-guest-agent and supervise it
+#
+# Failure policy — CRASH-ONLY.
+#   * A step the contract cannot do without (mounts, the disk-size grow, the agent) failing is FATAL:
+#     init exits, the kernel panics ("Attempted to kill init"), `panic=1` on the command line reboots
+#     after one second, and `reboot=k` turns that reboot into a VMM exit. The host sees the VMM end
+#     before the agent ever answered and reports a boot failure — quickly and honestly — instead of
+#     waiting out the 30 s ready timeout for a machine that was never going to answer.
+#   * A step that only improves comfort (hardening sysctls, loopback, wall clock) is a WARNING.
+#   * The agent exiting for any reason is fatal too: a half-alive guest with no agent is worse than none.
+#     There is deliberately no restart loop; the unit of recovery is the sandbox, and the host owns that.
+#
+# Why a shell script and not a binary: it is ~150 lines of "mount this, run that", it is auditable in one
+# sitting, and a shell as PID 1 reaps orphans for free — `wait` collects EVERY child the shell has,
+# including processes re-parented to PID 1 when a command's parent exits. A command that daemonizes
+# therefore cannot leave zombies behind. (Tested under a PID namespace: tests/scripts/test_acf_init.py.)
+#
+# The log goes to /dev/kmsg (the kernel ring buffer). The default boot arguments disable the serial
+# console (8250.nr_uarts=0), so these lines are visible only when the host runs with diagnostics on
+# (`firecracker.diagnostic_log: true`) — which is when you need them.
+#
+# This file is also a library: with ACF_INIT_SOURCE_ONLY=1 it defines its functions and returns
+# without touching the machine, so the pure ones can be tested (tests/scripts/test_acf_init.py).
+#
+# Contract with the rest of the system (change one side, change the other):
+#   /usr/local/bin/acf-guest-agent   the agent; listens on vsock port 5252 (its default)
+#   /var/lib/acf                      holds the agent's canary file (0700, created here)
+#   /workspace                        the default working directory, owned by execution.guest_uid
+#   /usr/local/share/acf/clock-epoch  seconds since the epoch of the image build: the clock never starts before it
+
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+umask 022
+
+AGENT=/usr/local/bin/acf-guest-agent
+CLOCK_EPOCH_FILE=/usr/local/share/acf/clock-epoch
+GUEST_HOSTNAME=acf-sandbox
+
+# ---------------------------------------------------------------------------------------- logging
+
+klog() {
+    if [ -w /dev/kmsg ]; then
+        printf 'acf-init: %s\n' "$*" >/dev/kmsg
+    else
+        printf 'acf-init: %s\n' "$*" >&2
+    fi
+}
+
+warn() { klog "warning: $*"; }
+
+# Exiting PID 1 panics the kernel; with panic=1 and reboot=k the VMM then exits. See the header.
+fatal() {
+    klog "FATAL: $*"
+    exit 1
+}
+
+# ----------------------------------------------------------------------------- pure functions
+# (no side effects: these are what the tests exercise directly)
+
+# root_majmin MOUNTINFO_FILE — print "major:minor" of the filesystem mounted at "/".
+# mountinfo: id parent major:minor root mount-point options ... ; the LAST entry for "/" is the one in force.
+root_majmin() {
+    _mm=""
+    while read -r _id _parent _dev _root _mp _rest; do
+        if [ "$_mp" = "/" ]; then
+            _mm=$_dev
+        fi
+    done <"$1"
+    [ -n "$_mm" ] || return 1
+    printf '%s\n' "$_mm"
+}
+
+# block_name_from_link TARGET — the device name at the end of a /sys/dev/block/<maj:min> link target
+# ("../../devices/platform/virtio-mmio.0/virtio0/block/vda" -> "vda").
+block_name_from_link() {
+    _name=${1##*/}
+    case $_name in
+        '' | . | .. | *[!A-Za-z0-9._-]*) return 1 ;;
+    esac
+    printf '%s\n' "$_name"
+}
+
+# clock_floor_target NOW EPOCH_FILE — print the time to set the clock to when NOW is earlier than the
+# image's build time, nothing otherwise. A Firecracker x86_64 guest has no RTC, so its clock starts at
+# 1970: file mtimes, `make`, certificate checks and `datetime.now()` all go wrong. The image's own
+# build time is a safe lower bound for "now" (the same idea as systemd's clock-epoch). The host does
+# not push the real time in Phase 1; see docs/ARCHITECTURE.md "Known gaps".
+clock_floor_target() {
+    [ -r "$2" ] || return 0
+    # `read` fails on a last line without a newline, yet still fills the variable: accept that file too.
+    _epoch=""
+    read -r _epoch <"$2" || [ -n "$_epoch" ] || return 0
+    case $_epoch in
+        '' | *[!0-9]*) return 0 ;;
+    esac
+    if [ "$1" -lt "$_epoch" ]; then
+        printf '%s\n' "$_epoch"
+    fi
+    return 0
+}
+
+# render_hosts NAME — /etc/hosts for a machine with no network. Without it glibc cannot resolve
+# "localhost" (there is no nss-myhostname here) and every local server a workload starts is unreachable.
+render_hosts() {
+    printf '127.0.0.1\tlocalhost\n'
+    printf '127.0.1.1\t%s\n' "$1"
+    printf '::1\tlocalhost ip6-localhost ip6-loopback\n'
+}
+
+# ------------------------------------------------------------------------------------- the steps
+
+# mount_fs TYPE TARGET [OPTIONS] — mount a pseudo-filesystem at TARGET (SOURCE is the type's name).
+mount_fs() {
+    [ -d "$2" ] || mkdir -p "$2" || return 1
+    if [ -n "${3:-}" ]; then
+        mount -t "$1" -o "$3" "$1" "$2"
+    else
+        mount -t "$1" "$1" "$2"
+    fi
+}
+
+mount_core() {
+    # The kernel may already have mounted devtmpfs (CONFIG_DEVTMPFS_MOUNT); mounting it twice is harmless
+    # but pointless, and without it there is no /dev/null for the next line.
+    [ -c /dev/null ] || mount_fs devtmpfs /dev "mode=0755,nosuid" || fatal "cannot mount devtmpfs on /dev"
+    [ -r /proc/self/mountinfo ] || mount_fs proc /proc "nosuid,nodev,noexec" || fatal "cannot mount /proc"
+    mount_fs sysfs /sys "nosuid,nodev,noexec" || fatal "cannot mount /sys"
+
+    # Standard I/O. The kernel opens /dev/console for PID 1 only if the node exists on the ROOT filesystem
+    # at that moment; when it does not, fds 0-2 are closed and the first open() below would land on fd 0.
+    if [ -c /dev/null ]; then
+        exec </dev/null
+    fi
+    if [ -w /dev/kmsg ]; then
+        exec >/dev/kmsg 2>&1
+    fi
+
+    if mount_fs devpts /dev/pts "nosuid,noexec,ptmxmode=0666,mode=0620,gid=5"; then
+        ln -sf pts/ptmx /dev/ptmx
+    else
+        warn "no pseudo-terminals (devpts); programs that call openpty() will fail"
+    fi
+    mount_fs tmpfs /dev/shm "nosuid,nodev,mode=1777" || warn "cannot mount /dev/shm; POSIX shared memory will fail"
+    mount_fs tmpfs /run "nosuid,nodev,mode=0755,size=16m" || fatal "cannot mount /run"
+    # Without cgroup v2 the agent falls back to RLIMIT_NPROC and reports that in the run's evidence
+    # (containment=rlimit_nproc); tests/integration asserts the shipped image does not.
+    mount_fs cgroup2 /sys/fs/cgroup "nosuid,nodev,noexec" ||
+        warn "cannot mount cgroup2; commands will not get an atomic process-tree bound"
+}
+
+# A command is run with whatever limits the agent has. The kernel hands PID 1 nofile 1024:4096, and
+# 4096 is too low a ceiling for ordinary tooling (a test runner, a bundler); systemd's default is
+# 1024:524288, which lets a program that asks for more get it. Core dumps are off: a crashing
+# workload must not fill the disk it was given.
+# shellcheck disable=SC3045  # `ulimit -c/-H/-S` are not POSIX, but dash (Debian's /bin/sh) implements them
+set_limits() {
+    ulimit -c 0 2>/dev/null || warn "cannot disable core dumps"
+    ulimit -H -n 524288 2>/dev/null || warn "cannot raise the open-file hard limit"
+    ulimit -S -n 1024 2>/dev/null || :
+}
+
+# Belt and braces inside the guest (the VM is the real boundary): the unprivileged user that runs
+# workloads has no business reading the kernel log or kernel addresses.
+#
+# harden [SYSCTL_DIR] — the optional argument exists so tests can aim it at a scratch directory.
+harden() {
+    for _kv in kernel/dmesg_restrict=1 kernel/kptr_restrict=2; do
+        _f=${1:-/proc/sys}/${_kv%%=*}
+        if [ -w "$_f" ]; then
+            { printf '%s' "${_kv#*=}" >"$_f"; } 2>/dev/null || warn "cannot set $_f"
+        fi
+    done
+    return 0
+}
+
+# set_identity [ETC_DIR [HOSTNAME_FILE]] — the optional arguments exist so tests can aim it at a scratch directory.
+# (The braces matter: a shell reports a failed redirection on ITS stderr before a later `2>/dev/null` takes effect.)
+set_identity() {
+    _etc=${1:-/etc}
+    { printf '%s' "$GUEST_HOSTNAME" >"${2:-/proc/sys/kernel/hostname}"; } 2>/dev/null || warn "cannot set the hostname"
+    { printf '%s\n' "$GUEST_HOSTNAME" >"$_etc/hostname"; } 2>/dev/null || :
+    { render_hosts "$GUEST_HOSTNAME" >"$_etc/hosts"; } 2>/dev/null ||
+        warn "cannot write $_etc/hosts; \"localhost\" will not resolve"
+}
+
+# The host copies a compact image into a sparse file of the size the sandbox asked for; the filesystem
+# inside is only as big as the image. Growing it here, online, is what makes `--disk 4096` mean 4 GiB.
+# FATAL on failure: a sandbox with less disk than it was promised fails later, far from the cause.
+#
+# grow_root [MOUNTINFO [SYS_DEV_BLOCK [DEV_DIR]]] — the optional arguments exist so tests can aim it at fakes.
+grow_root() {
+    _mm=$(root_majmin "${1:-/proc/self/mountinfo}") || fatal "cannot tell which device holds /"
+    _sysblk=${2:-/sys/dev/block}
+    _devdir=${3:-/dev}
+    [ -L "$_sysblk/$_mm" ] || fatal "no block device for $_mm (is virtio-blk built into the kernel?)"
+    _name=$(block_name_from_link "$(readlink "$_sysblk/$_mm")") || fatal "unexpected device link for $_mm"
+    [ -b "$_devdir/$_name" ] || fatal "$_devdir/$_name is not a block device"
+    # resize2fs prints "Nothing to do" and succeeds when the filesystem already fills the disk.
+    resize2fs "$_devdir/$_name" >/dev/null 2>&1 || fatal "resize2fs $_devdir/$_name failed; the sandbox would have less disk than requested"
+}
+
+# prepare_state [STATE_DIR [WORKSPACE_DIR]] — the optional arguments exist so tests can aim it at a scratch directory.
+prepare_state() {
+    mkdir -p "${1:-/var/lib/acf}" || fatal "cannot create ${1:-/var/lib/acf}"
+    chmod 0700 "${1:-/var/lib/acf}"
+    [ -d "${2:-/workspace}" ] || warn "${2:-/workspace} does not exist in this image"
+}
+
+# `lo` exists in every guest but is DOWN until someone raises it. With network=none there is no other
+# interface at all (the host attaches no network device), yet a workload still expects 127.0.0.1 to work:
+# test servers, Jupyter kernels, language servers, browsers talking to their own driver.
+loopback_up() {
+    if command -v ip >/dev/null 2>&1; then
+        ip link set lo up
+    elif command -v ifconfig >/dev/null 2>&1; then
+        ifconfig lo up
+    else
+        return 1
+    fi
+}
+
+apply_clock_floor() {
+    _now=$(date +%s) || return 0
+    _target=$(clock_floor_target "$_now" "$CLOCK_EPOCH_FILE")
+    if [ -n "$_target" ]; then
+        date -u -s "@$_target" >/dev/null || return 1
+    fi
+}
+
+# supervise CMD... — run CMD in the background and wait for it. `wait` also reaps every orphan that is
+# re-parented to PID 1 in the meantime. When CMD ends, init ends (see the failure policy).
+supervise() {
+    "$@" &
+    _pid=$!
+    wait "$_pid"
+    _status=$?
+    fatal "$1 exited with status $_status; ending the guest so the host can see it"
+}
+
+main() {
+    mount_core
+    set_limits
+    harden
+    set_identity
+    grow_root
+    prepare_state
+    loopback_up || warn "cannot bring up loopback; 127.0.0.1 will not work"
+    apply_clock_floor || warn "cannot set the clock; time starts at the epoch"
+    [ -x "$AGENT" ] || fatal "$AGENT is missing or not executable"
+    klog "ready; starting $AGENT"
+    supervise "$AGENT" --allow-shutdown
+}
+
+if [ "${ACF_INIT_SOURCE_ONLY:-}" = "1" ]; then
+    # shellcheck disable=SC2317  # reachable when the file is executed rather than sourced
+    return 0 2>/dev/null || exit 0
+fi
+
+# Everything `main` does reconfigures the machine it runs on: mounts, the hostname, /etc/hosts, the size
+# of the root filesystem. Only a kernel starting this file as PID 1 of a GUEST may let it do that; run by
+# hand on a laptop or a build host (as root, say) it would rename the machine and rewrite its /etc/hosts.
+# (A PID namespace counts: its first process is PID 1 too, which is how the tests exercise the real thing.)
+if [ "$$" -ne 1 ]; then
+    printf 'acf-init: refusing to run: this is the init of a sandbox guest, not a program (pid %s, expected 1)\n' "$$" >&2
+    exit 2
+fi
+
+main

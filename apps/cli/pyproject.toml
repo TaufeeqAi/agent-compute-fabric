@@ -23,7 +23,7 @@ classifiers = [
 # dependency is supply-chain surface. Floors are the newest releases verified on 2026-10-09 and re-verified on 2026-10-17
 # (see docs/DEPENDENCY_PROVENANCE.md); caps are the next incompatible major/minor line.
 dependencies = [
-    "typer>=0.27.3,<0.28",
+    "typer>=0.27.3,<0.30",
     "pydantic>=2.14.1,<3",
     "rich>=15.0.0,<16",  # imported directly (tables, text); typer also depends on it
 ]

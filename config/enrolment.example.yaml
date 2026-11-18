@@ -1,0 +1,47 @@
+# Agent Compute Fabric — enrolment table (schema_version 1).
+#
+# The enrolment table answers: WHO MAY CALL THIS HOST, AND IN WHICH ROLE? A credential that is not
+# listed here has no authority, however valid it is: a certificate that chains to a trusted
+# authority, or a local user who can reach the socket, is authenticated and nothing more.
+#
+#   install -m 0644 -o root -g root config/enrolment.example.yaml /etc/acf/enrolment.yaml
+#
+# The file is a trusted input (root-owned, not writable by group or other, at most 1 MiB, unknown
+# keys refused). The core re-reads it while it runs: a removed entry stops working, on open
+# connections too, within `edge.enrolment_refresh_ms`. If the file cannot be used the previous table
+# stays in force.
+#
+# Roles (a closed set):
+#   observer : host.info and host.metrics only
+#   caller   : every granting, containment and read method, on records that carry its own tags
+#   operator : everything a caller may call, on any record, plus the operator methods
+#              (profile.reload, quarantine.release, host.set_mode, host.acknowledge)
+#
+# A `peer_id` is the name durable records and events carry. It is allocated here, never taken from
+# a request. One credential names one peer; one peer has one role.
+#
+# How a peer proves who it is (exactly one per entry):
+#   certificate_sha256 : network endpoint. Lower-case hex SHA-256 of the DER client certificate:
+#                          openssl x509 -in client.crt -outform DER | sha256sum
+#   spki_sha256        : network endpoint. SHA-256 of the certificate's public key; survives
+#                        re-issuing the certificate for the same key:
+#                          openssl x509 -in client.crt -pubkey -noout | openssl pkey -pubin -outform DER | sha256sum
+#   local_uid          : local endpoint. The uid the kernel reports for the connecting process.
+#   local_gid          : local endpoint. Its primary gid. A uid entry wins over a gid entry.
+
+schema_version: 1
+peers:
+  # The host's own administrator, locally.
+  - peer_id: local-root
+    role: operator
+    match: { local_uid: 0 }
+
+  # A control plane, over mutual TLS.
+  # - peer_id: control-plane-1
+  #   role: caller
+  #   match: { spki_sha256: "0000000000000000000000000000000000000000000000000000000000000000" }
+
+  # A monitoring agent that may read host.info and host.metrics and nothing else.
+  # - peer_id: monitoring
+  #   role: observer
+  #   match: { local_gid: 992 }

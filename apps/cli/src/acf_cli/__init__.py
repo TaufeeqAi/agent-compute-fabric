@@ -1,3 +1,3 @@
-"""acf-local: command-line client for the Agent Compute Fabric Phase 1 host agent."""
+"""acf-local: reference command-line client of the Agent Compute Fabric host agent (protocol acf.host/2)."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

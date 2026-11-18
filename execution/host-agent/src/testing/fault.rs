@@ -1,4 +1,4 @@
-//! Crash-point injection (spec §27.6). A "crash" is modelled by the operation task returning
+//! Crash-point injection (contract T-OP-05, T-REC-02; never in a release build, TI-3). A "crash" is modelled by the operation task returning
 //! [`Crashed`] at a named point *without running any cleanup or commit code that would have
 //! followed* — exactly what process death does. Tests then build a fresh coordinator over the
 //! same on-disk journal and backend world and run recovery.

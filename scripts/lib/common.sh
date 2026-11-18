@@ -159,3 +159,56 @@ require_free_mib() {
 
 # human_mib BYTES: integer MiB, rounded up.
 human_mib() { printf '%d' $((($1 + 1048575) / 1048576)); }
+
+# cargo_test_binary PACKAGE CARGO_ARGS...: build the ONE test target the arguments select (for example
+# `--lib`, or `--test NAME`), without running it, and print the path of its executable. The build
+# runs as the invoking user from the repository root with ${CARGO:-cargo}; cargo's own diagnostics
+# go to stderr. Needs make_workdir. This is how a script runs a test binary somewhere `cargo test`
+# cannot follow it: inside a namespace, or as root.
+cargo_test_binary() {
+    local package=$1 messages exe
+    shift
+    messages="$ACF_WORKDIR/$package.build.json"
+    log "building the tests of $package"
+    (cd "$(repo_root)" && "${CARGO:-cargo}" test --no-run --locked --message-format=json-render-diagnostics -p "$package" "$@") >"$messages" ||
+        die "cargo could not build the tests of $package"
+    exe="$(python3 -I -c '
+import json
+import sys
+
+found = []
+for line in sys.stdin:
+    if not line.startswith("{"):
+        continue
+    try:
+        message = json.loads(line)
+    except ValueError:
+        continue
+    if (
+        message.get("reason") == "compiler-artifact"
+        and message.get("executable")
+        and message.get("profile", {}).get("test")
+    ):
+        found.append(message["executable"])
+if len(found) != 1:
+    sys.exit(f"expected exactly one test executable, cargo reported {len(found)}")
+print(found[0])
+' <"$messages")" || die "cannot tell which test executable cargo built for $package"
+    [[ -x "$exe" ]] || die "cargo reported a test executable that does not exist: $exe"
+    printf '%s\n' "$exe"
+}
+
+# run_test_binary LABEL DIR COMMAND...: run a test binary (COMMAND, with whatever it is wrapped in)
+# from DIR, as cargo runs a test from its package directory, and show what it prints. Fails when
+# the command fails, and when no test ran: a filter that matches nothing must not look like a pass.
+# Needs make_workdir.
+run_test_binary() {
+    local label=$1 dir=$2 logfile status=0
+    shift 2
+    logfile="$(mktemp "$ACF_WORKDIR/run.XXXXXXXX")"
+    log "$label"
+    (cd "$dir" && "$@") 2>&1 | tee "$logfile" || status=$?
+    ((status == 0)) || return "$status"
+    grep -q -E '^test .+ \.\.\. ok$' "$logfile" ||
+        die "$label: no test ran (the filters match nothing, or the test harness changed its output); a run that tests nothing is not a pass"
+}

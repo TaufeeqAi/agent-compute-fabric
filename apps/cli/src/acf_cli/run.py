@@ -1,319 +1,300 @@
-"""``acf-local run`` (the Phase 1 milestone) and ``acf-local exec``.
+"""``acf-local run ...`` — executions: run one in a throwaway sandbox, inspect one, read its output.
 
-    acf-local run --image python --cpu 2 --memory 4096 --network none --command "python experiment.py"
+    acf-local run once --image python --cpu 2 --memory 4096 -- python experiment.py
+    acf-local run inspect run-0123...
+    acf-local run output run-0123... --stream stderr
 
-produces ``run_id``, exit code, stdout, stderr, metrics and artifact references, then tears the
-sandbox down. ``--json`` gives all of it as one JSON document on stdout; without it the guest's
-own stdout/stderr are relayed to this process's stdout/stderr (so the command composes in
-pipelines) and the structured report goes to stderr.
-
-The host does **not** run the command in a shell. ``--command "a b"`` is split POSIX-style into
-``argv``; use ``--shell`` (or ``-- sh -c '...'``) to opt into shell semantics explicitly.
+``run once`` relays the guest's own stdout and stderr to this process's stdout and stderr (so it
+composes in pipelines) and writes the structured report to stderr; ``--json`` gives all of it as
+one document on stdout instead. Execution output is readable only through ``run inspect`` and
+``run output``, by the caller that owns the execution.
 """
 
 from __future__ import annotations
 
-import shlex
+import base64
+import re
 from typing import Annotated, Any
 
 import typer
 
-from acf_cli.client import HostClient, raise_for_status
-from acf_cli.common import JsonOption, client_of, guard, progress_of, state_of
-from acf_cli.errors import AcfCliError, ExitCode, InvalidArgument, OutcomeUnknown
-from acf_cli.models import CommandSpec, ExecParams, ExecRequest, RunLimitsRequest, RunResult
+from acf_cli.client import answer_document, exit_code_for, expect
+from acf_cli.common import (
+    JsonOption,
+    TimeoutOption,
+    client_of,
+    error_document,
+    guard,
+    progress_of,
+    state_of,
+    timeout_of,
+)
+from acf_cli.errors import ExitCode, InvalidArgument
+from acf_cli.execution import (
+    ArgvArg,
+    CommandOpt,
+    CwdOpt,
+    EnvOpt,
+    MaxPidsOpt,
+    MaxStderrOpt,
+    MaxStdoutOpt,
+    PropagateOpt,
+    RawOpt,
+    SecretEnvOpt,
+    ShellOpt,
+    TimeLimitOpt,
+    build_command,
+    relay_output,
+    workload_exit_code,
+)
 from acf_cli.render import (
-    decode_capture,
+    decode_base64,
     print_json,
-    render_cleanup,
     render_error,
-    render_operation_lines,
+    render_note,
+    render_operation,
     render_run_report,
+    shown,
     write_stream,
 )
-from acf_cli.resolve import expect, resolve_sandbox
-from acf_cli.runner import EXEC_MARGIN_S, EXEC_UNBOUNDED_S, Runner, RunReport, RunSpec, cancel_and_settle
-from acf_cli.sandbox import NetworkChoice
-from acf_cli.units import parse_bytes, parse_duration_ms, parse_env, parse_memory_mib
+from acf_cli.requests import RunOutputParams, run_inspect, run_output
+from acf_cli.responses import OperationBody, OutputBody, OutputChunk, RunBody, to_wire
+from acf_cli.runner import STEPS, Runner, RunReport, RunSpec
+from acf_cli.sandbox import (
+    AllowOpt,
+    CpuOpt,
+    DiskOpt,
+    ImageOpt,
+    LifetimeOpt,
+    MemoryOpt,
+    NameOpt,
+    NetworkOpt,
+    create_params,
+)
+from acf_cli.units import format_bytes
+from acf_cli.wire import RUN_ID_PATTERN, NetworkMode, OutputStream
 
-CommandOpt = Annotated[
-    str | None, typer.Option("--command", "-c", help="Command line, split POSIX-style into argv (no shell).")
-]
-ShellOpt = Annotated[
-    bool, typer.Option("--shell", help="Run --command via /bin/sh -c (shell syntax: pipes, globs, &&).")
-]
-ArgvArg = Annotated[
-    list[str] | None,
-    typer.Argument(help="Command and arguments, after `--` (alternative to --command).", show_default=False),
-]
-EnvOpt = Annotated[
-    list[str] | None,
-    typer.Option("--env", "-e", help="KEY=VALUE (repeatable). The name must be on the policy allowlist."),
-]
-CwdOpt = Annotated[
-    str | None, typer.Option("--cwd", help="Working directory inside the guest (must be allowed by policy).")
-]
-TimeoutOpt = Annotated[
-    str | None, typer.Option("--timeout", help="Run time limit: 90, 90s, 1500ms, 2m. Default: the policy default.")
-]
-MaxPidsOpt = Annotated[int | None, typer.Option("--max-pids", min=1, help="Process/thread limit inside the guest.")]
-MaxStdoutOpt = Annotated[str | None, typer.Option("--max-stdout", help="Captured stdout limit: 65536, 64KiB, 1MiB.")]
-MaxStderrOpt = Annotated[str | None, typer.Option("--max-stderr", help="Captured stderr limit.")]
-RawOpt = Annotated[
-    bool,
-    typer.Option(
-        "--raw", help="Relay guest output byte-for-byte even to a terminal (unsanitized: escape sequences take effect)."
-    ),
-]
-PropagateOpt = Annotated[
-    bool,
-    typer.Option(
-        "--propagate-exit-code",
-        help="Exit with the command's own exit status (128+N if killed by signal N) instead of 1.",
-    ),
-]
+app = typer.Typer(
+    help="Executions: run a command in a throwaway sandbox, inspect an execution, read its output.",
+    no_args_is_help=True,
+)
+
+RunArg = Annotated[str, typer.Argument(help="Run id (run-...), as printed with the result of an execution.")]
+_RUN_ID = re.compile(RUN_ID_PATTERN)
 
 
-def build_command(
-    *,
-    command: str | None,
-    shell: bool,
-    argv: list[str] | None,
-    env: list[str] | None,
-    cwd: str | None,
-    timeout: str | None,
-    max_pids: int | None,
-    max_stdout: str | None,
-    max_stderr: str | None,
-) -> CommandSpec:
-    """Assemble the request's :class:`CommandSpec`, rejecting ambiguity before anything is sent."""
-    if command is not None and argv:
-        raise InvalidArgument("give either --command or arguments after `--`, not both")
-    if command is None and not argv:
-        raise InvalidArgument(
-            "nothing to run", hint='use --command "python experiment.py" or put the command after `--`'
-        )
-    if command is not None:
-        if shell:
-            parts = ["/bin/sh", "-c", command]
-        else:
-            try:
-                parts = shlex.split(command)
-            except ValueError as e:
-                raise InvalidArgument(f"cannot parse --command: {e}", hint="balance your quotes, or use --shell") from e
-    else:
-        if shell:
-            raise InvalidArgument("--shell applies to --command, not to an explicit argv")
-        parts = list(argv or [])
-    if not parts:
-        raise InvalidArgument("the command is empty")
-    return CommandSpec(
-        argv=parts,
-        env=parse_env(env or []),
-        cwd=cwd,
-        limits=RunLimitsRequest(
-            timeout_ms=parse_duration_ms(timeout) if timeout else None,
-            max_pids=max_pids,
-            max_stdout_bytes=parse_bytes(max_stdout) if max_stdout else None,
-            max_stderr_bytes=parse_bytes(max_stderr) if max_stderr else None,
-        ),
-    )
+def _run_id(text: str) -> str:
+    if not _RUN_ID.fullmatch(text):
+        raise InvalidArgument(f"{text!r} is not a run id", hint="a run id is `run-` followed by 32 hex digits")
+    return text
 
 
-def exit_code_for(run: RunResult, *, propagate: bool) -> int:
-    """0 on success; otherwise 1, or the workload's own status with ``--propagate-exit-code``."""
-    if run.outcome == "SUCCEEDED":
-        return int(ExitCode.OK)
-    if propagate:
-        if run.exit_code is not None and 0 < run.exit_code < 256:  # noqa: PLR2004
-            return run.exit_code
-        if run.signal is not None:
-            return 128 + run.signal
-    return int(ExitCode.WORKLOAD_FAILED)
-
-
-def relay_output(run: RunResult, *, raw: bool) -> None:
-    write_stream(decode_capture(run.stdout), to_stderr=False, raw=raw)
-    write_stream(decode_capture(run.stderr), to_stderr=True, raw=raw)
-
-
-def error_json(err: AcfCliError | None) -> dict[str, Any] | None:
-    if err is None:
-        return None
-    return {
-        "type": type(err).__name__,
-        "message": err.message,
-        "hint": err.hint,
-        "operation_id": err.operation_id,
-        "exit_code": int(err.exit_code),
-    }
-
-
+# ----------------------------------------------------------------------------- run once
+@app.command("once")
 @guard
-def run_command(
+def once(
     ctx: typer.Context,
-    image: Annotated[str, typer.Option("--image", help="Image alias; must be allowed by the host policy.")],
+    image: ImageOpt,
     command: CommandOpt = None,
     argv: ArgvArg = None,
-    cpu: Annotated[int, typer.Option("--cpu", min=1, max=32, help="vCPUs: 1 or an even number up to 32.")] = 1,
-    memory: Annotated[str, typer.Option("--memory", help="RAM: 4096 (MiB), 512Mi or 4Gi.")] = "512",
-    disk: Annotated[str, typer.Option("--disk", help="Scratch disk: 1024 (MiB), 512Mi or 2Gi.")] = "1024",
-    network: Annotated[
-        NetworkChoice, typer.Option("--network", help="Phase 1 supports only `none`.")
-    ] = NetworkChoice.NONE,
+    cpu: CpuOpt = 1,
+    memory: MemoryOpt = "512",
+    disk: DiskOpt = "1024",
+    network: NetworkOpt = NetworkMode.NONE,
+    allow: AllowOpt = None,
+    lifetime: LifetimeOpt = None,
+    name: NameOpt = None,
     shell: ShellOpt = False,
     env: EnvOpt = None,
+    secret_env: SecretEnvOpt = None,
     cwd: CwdOpt = None,
-    timeout: TimeoutOpt = None,
+    time_limit: TimeLimitOpt = None,
     max_pids: MaxPidsOpt = None,
     max_stdout: MaxStdoutOpt = None,
     max_stderr: MaxStderrOpt = None,
-    name: Annotated[str | None, typer.Option("--name", help="Name the sandbox (useful with --keep).")] = None,
     keep: Annotated[
-        bool, typer.Option("--keep", help="Do not destroy the sandbox afterwards (for snapshots / follow-up exec).")
+        bool, typer.Option("--keep", help="Do not destroy the sandbox afterwards (for snapshots or more commands).")
     ] = False,
+    timeout: TimeoutOption = None,
     raw: RawOpt = False,
     propagate_exit_code: PropagateOpt = False,
     as_json: JsonOption = False,
 ) -> None:
-    """Run a command in a fresh, network-less microVM and report what happened."""
+    """Create a sandbox, start it, run one command in it and destroy it."""
     spec = RunSpec(
-        image=image,
-        vcpus=cpu,
-        memory_mib=parse_memory_mib(memory),
-        disk_mib=parse_memory_mib(disk),
+        create=create_params(
+            image=image, cpu=cpu, memory=memory, disk=disk, network=network, allow=allow, lifetime=lifetime, name=name
+        ),
         command=build_command(
             command=command,
             shell=shell,
             argv=argv,
             env=env,
+            secret_env=secret_env,
             cwd=cwd,
-            timeout=timeout,
+            time_limit=time_limit,
             max_pids=max_pids,
             max_stdout=max_stdout,
             max_stderr=max_stderr,
         ),
-        name=name,
         keep=keep,
+        timeout_s=timeout_of(timeout),
     )
-    _ = network  # validated by the enum; Phase 1 only has `none`
     report = Runner(client_of(ctx), progress_of(ctx)).run(spec)
-    _present_run(report, as_json=as_json, raw=raw, verbose=state_of(ctx).verbose, propagate=propagate_exit_code)
-
-
-def _present_run(report: RunReport, *, as_json: bool, raw: bool, verbose: bool, propagate: bool) -> None:
+    code = run_exit_code(report, propagate=propagate_exit_code)
     if as_json:
-        print_json(
-            {
-                "run": report.run,
-                "sandbox": report.sandbox,
-                "cleanup": report.cleanup,
-                "operations": report.operations,
-                "interrupted": report.interrupted,
-                "unresolved": report.unresolved,
-                "cleanup_failed": report.cleanup_failed,
-                "error": error_json(report.error),
-            }
-        )
+        print_json(run_document(report, code))
     else:
-        if report.run is not None:
-            relay_output(report.run, raw=raw)
-            render_run_report(report.run, verbose=verbose)
-        render_operation_lines(report.operations)
-        render_cleanup(report.cleanup)
-        if report.error is not None:
-            render_error(report.error)
-    if report.error is not None:
-        raise typer.Exit(int(report.error.exit_code))
-    if report.interrupted:
-        raise typer.Exit(int(ExitCode.INTERRUPTED))
-    if report.run is None:
-        # Interrupted-and-unresolved or otherwise without a result: say so; never claim success.
-        render_error(
-            OutcomeUnknown("the run finished without a result", hint="inspect the sandbox and operations listed above")
-        )
-        raise typer.Exit(int(ExitCode.UNKNOWN))
-    code = exit_code_for(report.run, propagate=propagate)
-    if code == 0 and report.cleanup_failed:
-        # The run succeeded but the sandbox it created may still exist: that is a platform failure the
-        # caller must hear about (a leaked VM in a loop is how a host runs out of capacity).
-        code = int(ExitCode.FAILED)
-    if code != 0:
+        _present_run(report, raw=raw, verbose=state_of(ctx).verbose)
+    if code:
         raise typer.Exit(code)
 
 
+def run_exit_code(report: RunReport, *, propagate: bool) -> int:
+    """One exit code for four operations: the first thing that went wrong decides it."""
+    if report.interrupted:
+        return int(ExitCode.INTERRUPTED)
+    if report.error is not None:
+        return int(report.error.exit_code)
+    if report.run is None:
+        return int(ExitCode.UNRESOLVED)
+    code = workload_exit_code(report.run, propagate=propagate)
+    if code == 0 and report.cleanup_failed:
+        # The command succeeded but the sandbox it ran in may still exist: the caller must hear about
+        # that (a leaked sandbox in a loop is how a host runs out of capacity).
+        return int(ExitCode.FAILED)
+    return code
+
+
+def run_document(report: RunReport, exit_code: int) -> dict[str, Any]:
+    """``run once --json``: every step's answer, the execution's result, and what became of the sandbox."""
+    return {
+        "operations": dict(report.operations),
+        "steps": {name: report.steps[name].to_wire() for name in STEPS if name in report.steps},
+        "run": to_wire(report.run) if report.run is not None else None,
+        "sandbox": (
+            {"sandbox_id": report.sandbox[0], "generation": report.sandbox[1]} if report.sandbox is not None else None
+        ),
+        "cleanup": {"state": report.cleanup_state, "detail": report.cleanup},
+        "interrupted": report.interrupted,
+        "error": error_document(report.error)["error"] if report.error is not None else None,
+        "exit_code": exit_code,
+    }
+
+
+def _present_run(report: RunReport, *, raw: bool, verbose: bool) -> None:
+    if report.run is not None:
+        relay_output(report.run, raw=raw)
+        render_run_report(report.run, verbose=verbose)
+    for name in STEPS:
+        operation_id = report.operations.get(name)
+        if operation_id is None:
+            continue
+        outcome = report.steps.get(name)
+        render_note(name, f"{operation_id}  {_step_state(report, name) if outcome is not None else 'not established'}")
+    render_note("cleanup", report.cleanup, alarming=report.cleanup_failed)
+    if report.interrupted:
+        render_note("interrupted", "the steps above are what the host had recorded when it was last asked")
+    if report.error is not None:
+        render_error(report.error)
+
+
+def _step_state(report: RunReport, name: str) -> str:
+    outcome = report.steps[name]
+    if outcome.operation is None:
+        refusal = outcome.refusal
+        return f"REFUSED {shown(refusal.failure_class)}" if refusal is not None else "REFUSED"
+    view = outcome.operation
+    parts = [shown(view.state)]
+    if view.effect is not None:
+        parts.append(f"effect {shown(view.effect)}")
+    if view.cleanup is not None:
+        parts.append(f"cleanup {shown(view.cleanup)}")
+    if view.cancelled_by is not None:
+        parts.append(f"cancelled by {shown(view.cancelled_by)}")
+    return ", ".join(parts)
+
+
+# ----------------------------------------------------------------------------- run inspect
+@app.command("inspect")
 @guard
-def exec_command(
+def inspect(ctx: typer.Context, run_id: RunArg, as_json: JsonOption = False) -> None:
+    """Show the record of an execution: status, metrics, limits, artifacts.
+
+    An execution that has not ended has no result yet; the host answers with its operation instead,
+    and the exit status then states that operation's condition (8 while it is in progress).
+    """
+    answer = client_of(ctx).result(run_inspect(_run_id(run_id)))
+    body = answer.result
+    if isinstance(body, RunBody):
+        if as_json:
+            print_json(answer_document(answer))
+        else:
+            render_run_report(body.data, verbose=state_of(ctx).verbose, to_stderr=False)
+        return
+    view = expect(body, OperationBody).data
+    if as_json:
+        print_json(answer_document(answer))
+    else:
+        render_operation(view, answer.as_of)
+        render_note("note", "this execution has no result to show; the operation above is what the host recorded")
+    code = exit_code_for(view)
+    if code is not ExitCode.OK:
+        raise typer.Exit(int(code))
+
+
+# ----------------------------------------------------------------------------- run output
+@app.command("output")
+@guard
+def output(
     ctx: typer.Context,
-    sandbox: Annotated[str, typer.Argument(help="Sandbox id or name (must be READY or COMPLETED).")],
-    argv: ArgvArg = None,
-    command: CommandOpt = None,
-    shell: ShellOpt = False,
-    env: EnvOpt = None,
-    cwd: CwdOpt = None,
-    timeout: TimeoutOpt = None,
-    max_pids: MaxPidsOpt = None,
-    max_stdout: MaxStdoutOpt = None,
-    max_stderr: MaxStderrOpt = None,
+    run_id: RunArg,
+    stream: Annotated[OutputStream, typer.Option("--stream", help="Which stream to read.")] = OutputStream.STDOUT,
+    offset: Annotated[int, typer.Option("--offset", min=0, help="Byte offset into the stored output.")] = 0,
+    max_bytes: Annotated[
+        int | None,
+        typer.Option(
+            "--max-bytes", min=1, help="Read at most this many bytes. Default: to the end.", show_default=False
+        ),
+    ] = None,
     raw: RawOpt = False,
-    propagate_exit_code: PropagateOpt = False,
     as_json: JsonOption = False,
 ) -> None:
-    """Run a command in an existing sandbox:  acf-local exec NAME -- python train.py"""
-    spec = build_command(
-        command=command,
-        shell=shell,
-        argv=argv,
-        env=env,
-        cwd=cwd,
-        timeout=timeout,
-        max_pids=max_pids,
-        max_stdout=max_stdout,
-        max_stderr=max_stderr,
-    )
+    """Write the stored output of one stream of an execution to stdout.
+
+    The host returns output in slices; this command asks for them in turn until the end of the
+    stream or --max-bytes. With --json the slices are joined into one `output` result.
+    """
     client = client_of(ctx)
-    view = resolve_sandbox(client, sandbox)
-    timeout_ms = spec.limits.timeout_ms
-    wait_s = timeout_ms / 1000 + EXEC_MARGIN_S if timeout_ms is not None else EXEC_UNBOUNDED_S
-    request = ExecRequest(
-        params=ExecParams(sandbox_id=view.sandbox_id, expected_generation=view.generation, command=spec)
-    )
-    holder: dict[str, str] = {}
-    try:
-        env_out = client.mutate(
-            request, io_timeout_s=wait_s, resolve_deadline_s=wait_s, on_operation=lambda op: holder.update(exec=op)
-        )
-    except KeyboardInterrupt:
-        _report_interrupted_exec(ctx, client, holder.get("exec"), raw=raw, as_json=as_json)
-        raise typer.Exit(int(ExitCode.INTERRUPTED)) from None
-    run = expect(raise_for_status(env_out), RunResult)
+    run = _run_id(run_id)
+    data = bytearray()
+    position = offset
+    while True:
+        want = max_bytes - len(data) if max_bytes is not None else None
+        answer = client.result(run_output(RunOutputParams(run_id=run, stream=stream, offset=position, max_bytes=want)))
+        chunk = expect(answer.result, OutputBody).data
+        piece = decode_base64(chunk.data_b64)
+        data += piece
+        position += len(piece)
+        if chunk.eof or not piece or (max_bytes is not None and len(data) >= max_bytes):
+            break
     if as_json:
-        print_json({"run": run})
-    else:
-        relay_output(run, raw=raw)
-        render_run_report(run, verbose=state_of(ctx).verbose)
-    code = exit_code_for(run, propagate=propagate_exit_code)
-    if code != 0:
-        raise typer.Exit(code)
-
-
-def _report_interrupted_exec(
-    ctx: typer.Context, client: HostClient, op_id: str | None, *, raw: bool, as_json: bool
-) -> None:
-    """Ctrl-C during ``exec``: cancel, learn how it ended, and say so — never leave the operator guessing."""
-    if op_id is None:
+        document = answer_document(answer)
+        document["result"]["data"] = _joined(chunk, offset, bytes(data))
+        print_json(document)
         return
-    settled = cancel_and_settle(client, op_id)
-    if as_json:
-        print_json({"run": settled.run, "interrupted": True, "operation_id": op_id, "resolved": settled.resolved})
-    elif settled.run is not None:
-        relay_output(settled.run, raw=raw)
-        render_run_report(settled.run, verbose=state_of(ctx).verbose)
-    if not settled.resolved:
-        render_error(
-            OutcomeUnknown(
-                "interrupted, and the host did not confirm how the run ended",
-                hint=f"observe it, do NOT re-run it: acf-local operation get {op_id}",
-                operation_id=op_id,
-            )
-        )
+    write_stream(bytes(data), to_stderr=False, raw=raw)
+    render_note(
+        f"{shown(chunk.stream)} of {chunk.run_id}",
+        f"bytes {offset}-{position} of {format_bytes(chunk.stored_bytes)} stored "
+        f"({format_bytes(chunk.produced_bytes)} produced; {shown(chunk.completeness)})"
+        + ("" if chunk.eof else "; more follows: continue with --offset " + str(position)),
+    )
+
+
+def _joined(last: OutputChunk, offset: int, data: bytes) -> dict[str, Any]:
+    """Several slices as the one slice they add up to."""
+    document = to_wire(last)
+    document["offset"] = offset
+    document["data_b64"] = base64.b64encode(data).decode("ascii")
+    return document

@@ -1,4 +1,4 @@
-# The KVM-only half of the Phase 1 acceptance gate: boots real Firecracker microVMs and attacks them.
+# The KVM-only half of the acceptance gate: boots real Firecracker microVMs and attacks them.
 #
 # It runs on a SELF-HOSTED runner that you control and have labelled [self-hosted, linux, x64, kvm]:
 # the job needs /dev/kvm, root, Docker (to build the guest image), a cgroup v2 host and a guest kernel.
@@ -6,9 +6,10 @@
 # Trigger it by hand; it is not part of ci.yml because a machine that can run it is a scarce resource.
 #
 # What it exercises, in order, is exactly the operator path in docs/OPERATIONS.md:
-#   install Firecracker (pinned) -> install the host agent + units -> build and install a guest image
-#   -> start acf-host.service -> `make integration`
-# so a green run also proves the install scripts and the systemd units on a real machine.
+#   install Firecracker (pinned) -> install the host agent, its identities, trusted files and units
+#   -> pin the two installed binaries in the host configuration
+#   -> build and install a guest image -> start acf-cgroup, acf-lifetime and acf-host -> `make integration`
+# so a green run also proves the install scripts and the three systemd units on a real machine.
 name: integration
 
 on:
@@ -53,23 +54,38 @@ jobs:
           persist-credentials: false
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.13.1"
+          version: "0.13.9"
           enable-cache: true
       - name: Build the production host agent (purity-checked) and the static guest agent
         run: |
           set -euo pipefail
           make release
           make guest-agent
+      # The installer's stdout is exactly the two lines that pin the installed binaries; they are kept
+      # for the step that writes them into the host configuration.
       - name: Install Firecracker and the jailer (pinned release)
         run: |
           set -euo pipefail
           args=()
           if [ -n "$FIRECRACKER_SHA256" ]; then args=(--sha256 "$FIRECRACKER_SHA256"); fi
-          sudo scripts/install-firecracker.sh "${args[@]}"
-      - name: Install the host agent, its configuration, policy and systemd units
+          sudo scripts/install-firecracker.sh "${args[@]}" | tee "$RUNNER_TEMP/firecracker-digests.yaml"
+      # Creates the edge user, the directories, the three trusted files (with the edge's ids written into
+      # host.yaml) and the three units. It starts nothing.
+      - name: Install the host agent, its identities, trusted files and systemd units
         run: sudo scripts/host-setup.sh install --acf-host target/release/acf-host
+      # The host runs the VMM and the jailer only if their bytes hash to the digests in host.yaml, and it
+      # creates no sandbox while they are unset. The shipped file carries both keys commented out.
+      - name: Pin the installed binaries in the host configuration
+        run: |
+          set -euo pipefail
+          for key in firecracker_sha256 jailer_sha256; do
+            digest="$(sed -n "s/^ *${key}: \"\([0-9a-f]\{64\}\)\"$/\1/p" "$RUNNER_TEMP/firecracker-digests.yaml")"
+            [ "${#digest}" -eq 64 ] || { echo "the installer did not print ${key}" >&2; exit 1; }
+            sudo sed -i "s|^  # ${key}: .*$|  ${key}: \"${digest}\"|" /etc/acf/host.yaml
+            sudo grep -q "^  ${key}: \"${digest}\"$" /etc/acf/host.yaml || { echo "/etc/acf/host.yaml has no line to carry ${key}" >&2; exit 1; }
+          done
       - name: Build and install the python guest image
         env:
           TMPDIR: ${{ runner.temp }}
@@ -78,23 +94,36 @@ jobs:
           args=()
           if [ "$ALLOW_UNPINNED" = "true" ]; then args=(--allow-unpinned); fi
           sudo --preserve-env=TMPDIR scripts/build-image.sh --image python --kernel "$KERNEL_PATH" --install "${args[@]}"
+      # In the order the units themselves require: control groups, the lifetime enforcer, then the core.
+      # acf-host.service is "started" only once the core listens on its socket, that is after recovery.
       - name: Start the host agent and print the preflight report
         run: |
           set -euo pipefail
           sudo systemctl daemon-reload
-          sudo systemctl enable --now acf-host.service
-          sudo /opt/acf/bin/acf-host doctor
+          sudo systemctl enable --now acf-cgroup.service acf-lifetime.service acf-host.service
+          sudo /opt/acf/bin/acf-host doctor --config /etc/acf/host.yaml
+      # The entry-conditions test writes what it found to ACF_ENTRY_RECORD: the record the contract asks for.
       - name: Integration and isolation tests
-        run: sudo --preserve-env=HOME env "PATH=$PATH" make integration
-      - name: Collect the host agent journal
+        env:
+          ACF_ENTRY_RECORD: ${{ runner.temp }}/acf-entry-record.json
+        run: sudo --preserve-env=HOME,ACF_ENTRY_RECORD env "PATH=$PATH" make integration
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
-        run: sudo journalctl -u acf-host.service -u acf-cgroup.service --no-pager | tee acf-host.journal.txt >/dev/null || true
+        with:
+          name: acf-entry-record
+          path: ${{ runner.temp }}/acf-entry-record.json
+          if-no-files-found: warn
+      - name: Collect the journals of the three units
+        if: always()
+        run: sudo journalctl -u acf-host.service -u acf-lifetime.service -u acf-cgroup.service --no-pager | tee acf-host.journal.txt >/dev/null || true
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: acf-host-journal
           path: acf-host.journal.txt
           if-no-files-found: warn
-      - name: Stop the host agent
+      # Only the core is stopped. The lifetime enforcer is left running on purpose: if a test left a sandbox
+      # behind, the enforcer is what still ends its runtime at its expiry.
+      - name: Stop the core
         if: always()
         run: sudo systemctl stop acf-host.service || true

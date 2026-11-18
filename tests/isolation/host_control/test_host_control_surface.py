@@ -1,72 +1,63 @@
-"""Isolation, host control surface: who may steer the host agent, and what the guest can reach of it
-(contract §16, §17.2, §17.3, §27.5, §27.9; SEC-001 to SEC-004, SEC-008 to SEC-010, SEC-014).
+"""Isolation, the host's control surface: who may give the host orders, and what a guest can reach of it.
 
-Two directions, tested separately because they fail separately.
+INWARD (``control_plane``; evidence level L2/L3): a peer has authority only through an enrolment entry, acts only
+within its role and its owner scope, and loses a connection when its entry is removed. These are the catalog
+entries T-AUTH-01, T-AUTH-02, T-AUTH-03, T-AUTH-05 and T-AUTH-07, through the reference client and the raw wire,
+over the local endpoint and over mutual TLS.
 
-INWARD: who may give the host orders (``control_plane``: these also run, in CI, against the in-memory host loaded
-with the shipped configuration and policy)
-    The kernel, not the request, says who a caller is (SO_PEERCRED). A local process that cannot open the socket
-    cannot connect; one that can is still refused by identity; the policy the host enforces is the file on disk and
-    every run records its digest; a request the policy does not grant is refused before anything exists and is not
-    a durable operation; the same operation id is idempotent for the same request and a conflict for another one;
-    a peer speaking another protocol is refused rather than guessed at. The "other process" is a real client run
-    as another uid (needs root), talking the wire protocol directly: the CLI is not the thing under test.
-
-OUTWARD: what the guest can reach, and what the host-side confinement really is (a real microVM, white-box on the
-host through ``/proc`` and cgroupfs, because the kernel is the only witness that cannot be talked into agreeing)
-    The VMM runs as an unprivileged per-VM uid, jailed (chroot, PID, mount and empty network namespaces), under
-    seccomp, in its own cgroup with the limits the contract promises; nothing of ACF listens on a network port;
-    the state directory and the VMM's sockets are closed to other local users; the VMM holds no descriptor for the
-    host's own state; and from inside the guest there is no path to the host agent, the Firecracker API, the host's
-    vsock services or any device that is a control channel. The policy file's integrity is enforced at reload and a
-    policy edit never changes a run that was already admitted.
-
-Probes that run in the guest are small Python programs (``python -c``); each prints one JSON document.
+OUTWARD (a production host, as root; evidence level L4): T-SEC-02. What the processes of the host listen on or
+hold open is compared with the contract's closed inventory of control surfaces, by reading the kernel's tables,
+and a guest then tries every surface from the inside, in both network modes. The checks of the VMM's own
+confinement that this inventory rests on are here too.
 """
 
 from __future__ import annotations
 
-import hashlib
+import json
 import os
-import re
+import socket
 import stat
-import uuid
-from collections.abc import Iterator
-from contextlib import contextmanager
+import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from acf_driver import (
-    EXIT_OK,
-    EXIT_REFUSED,
+    SHIPPED_ENROLMENT,
     AcfLocal,
-    new_operation_id,
-    operation_ids,
-    raw_call,
-    wait_for,
+    api_description,
+    probe_as_uid,
+    resources,
 )
-from acf_integration import HostEnv, HostUnit
+from acf_driver.netlab import GUEST_TCP_PROBE
+from acf_integration import HostEnv, HostUnit, SystemdUnit, edited_copy, private_host, require_root, vmm_of
 from acf_proc import (
-    CGROUP_ROOT,
-    cgroup_dir,
-    cgroup_value,
+    cgroup_pids,
+    children_of,
+    command_line,
+    confinement,
+    file_identities,
     host_path,
-    ids,
     inet_sockets,
+    inet_sockets_in_namespace_of,
     interfaces_in_namespace_of,
-    namespace,
-    proc_status,
-    thread_statuses,
     unix_socket_paths,
 )
 
 pytestmark = [pytest.mark.isolation, pytest.mark.usefixtures("clean_host")]
 
-UNPRIVILEGED = 65534  # "nobody": a local account that is neither root nor in any group the host agent trusts
-NO_CAPABILITIES = "0000000000000000"
-RESOURCES = {"vcpus": 1, "memory_mib": 256, "disk_mib": 1024, "network": "none"}
-HOST_CID = 2
+UNPRIVILEGED = 65534  # "nobody": a local account that is neither root nor enrolled
+GHOST_SANDBOX = "sbx-" + "0" * 32
+GHOST_SNAPSHOT = {"snapshot_id": "snp-" + "0" * 32, "snapshot_generation": 1}
+GHOST_OPERATION = "op-" + "0" * 32
+GHOST_RUN = "run-" + "0" * 32
+ROLES = ("observer", "caller", "operator")
+TCP_LISTEN = "0A"
+RELAY_PORT = 15001
+RESOLVER_PORT = 53
+#: The port the guest agent listens on inside the guest, and the host's address in that address family.
+GUEST_AGENT_PORT = 5252
 
 # What the guest may legitimately open read-write under /dev. Anything else is a way out or a way to attack the guest.
 # `vsock` is the guest agent's own channel; the workload's use of it is attacked in the tests below.
@@ -109,7 +100,8 @@ print(json.dumps({'vsock': vsock, 'unix': unix, 'sockets': sorted(sockets)}))
 """
 
 GUEST_SELF_AGENT = """
-import errno, fcntl, json, socket, struct
+import errno, fcntl, json, socket, struct, sys
+port = int(sys.argv[1])
 def local_cid():
     try:
         with open('/dev/vsock', 'rb') as device:
@@ -126,7 +118,7 @@ for label, cid in (('loopback_cid', getattr(socket, 'VMADDR_CID_LOCAL', 1)), ('o
     s = socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM)
     s.settimeout(3)
     try:
-        s.connect((cid, 5252))  # the guest agent's own port
+        s.connect((cid, port))
     except OSError as e:
         result[label] = 'blocked:' + errno.errorcode.get(e.errno or 0, type(e).__name__)
         continue
@@ -161,226 +153,373 @@ print(json.dumps({'accessible': accessible, 'dangerous': dangerous}))
 """
 
 
+def _valid_params(acf: AcfLocal) -> dict[str, dict[str, Any] | None]:
+    """For every method, parameters that pass the schema: the role check comes after it."""
+    ghost = {"sandbox_id": GHOST_SANDBOX, "expected_generation": 1}
+    return {
+        "sandbox.create": {"image": acf.image, "resources": resources()},
+        "sandbox.start": ghost,
+        "exec.run": {**ghost, "command": {"argv": ["true"]}},
+        "snapshot.create": ghost,
+        "snapshot.restore": {"snapshot": GHOST_SNAPSHOT, "target": {"kind": "new"}},
+        "sandbox.stop": ghost,
+        "sandbox.destroy": ghost,
+        "snapshot.delete": {"snapshot": GHOST_SNAPSHOT},
+        "operation.cancel": {"operation_id": GHOST_OPERATION},
+        "sandbox.inspect": {"sandbox": GHOST_SANDBOX},
+        "sandbox.list": None,
+        "snapshot.list": None,
+        "operation.get": {"operation_id": GHOST_OPERATION},
+        "operation.list": None,
+        "run.inspect": {"run_id": GHOST_RUN},
+        "run.output": {"run_id": GHOST_RUN, "stream": "stdout"},
+        "host.info": None,
+        "host.metrics": None,
+        "profile.reload": None,
+        "quarantine.release": {"sandbox_id": GHOST_SANDBOX, "generation": 1, "mode": "DECLARE_ABSENT"},
+        "host.set_mode": {"mode": "SERVING"},
+        "host.acknowledge": {"condition": "store_regression"},
+    }
+
+
 # ====================================================================================== INWARD: who may give orders
 @pytest.mark.control_plane
-def test_a_local_process_without_access_to_the_socket_cannot_even_connect(acf: AcfLocal) -> None:
-    _needs_root()
-    assert acf.socket is not None
-    for method in ("host_info", "sandbox_list"):
-        answer = raw_call(acf.socket, method, user=UNPRIVILEGED)
-        assert answer.connect == "PermissionError:13", f"uid {UNPRIVILEGED} must not be able to connect: {answer}"
-        assert answer.frames == []
-
-
-@pytest.mark.control_plane
-def test_a_local_process_that_reaches_the_socket_is_still_refused_by_the_hosts_own_identity_check(
-    acf: AcfLocal,
-) -> None:
-    """Layer two: the file permissions are loosened for the duration of the test so that only the host's check stands."""
-    _needs_root()
-    assert acf.socket is not None
-    before = int(acf.metrics()["counters"].get("auth_denied", 0))
-    create = {"image": acf.image, "resources": RESOURCES}
-    with _reachable_by_everyone(acf.socket):
-        answers = {
-            "sandbox_create": raw_call(
-                acf.socket, "sandbox_create", create, operation_id=new_operation_id(), user=UNPRIVILEGED
-            ),
-            "host_info": raw_call(acf.socket, "host_info", user=UNPRIVILEGED),
-            "policy_reload": raw_call(acf.socket, "policy_reload", user=UNPRIVILEGED),
-        }
-    for method, answer in answers.items():
-        assert answer.connected, f"{method}: the test must reach the host for this to mean anything: {answer}"
-        assert answer.status == "REJECTED", f"{method}: {answer.frames}"
-        assert answer.error is not None
-        assert answer.error["class"] == "AUTHORIZATION", f"{method}: {answer.error}"
-        assert answer.error["side_effect"] == "none"
-        assert f"uid {UNPRIVILEGED}" in answer.error["message"]
-        assert answer.reply["result"] is None, f"{method}: a refused caller must receive no data"
-    assert acf.sandbox_list() == [], "a refused caller created something"
-    assert acf.host_info()["live_sandboxes"] == 0
-    assert int(acf.metrics()["counters"]["auth_denied"]) == before + len(answers), "every refusal must be counted"
-
-
-@pytest.mark.control_plane
-def test_the_policy_in_force_is_the_file_on_disk_and_every_run_records_its_digest(
+def test_t_auth_01_a_chain_valid_but_unenrolled_peer_is_refused_before_any_request_is_read(
     acf: AcfLocal, host_env: HostEnv
 ) -> None:
-    digest = hashlib.sha256(host_env.policy_path.read_bytes()).hexdigest()
-    policy = acf.host_info()["policy"]
-    assert policy["digest"] == digest, "the host must be running the policy file it says it loaded"
-    assert policy["name"]
-    assert policy["version"]
-    run = acf.run(["true"]).run
-    assert run["policy_id"]["digest"] == digest, "a run must record the policy it was admitted under"
+    """T-AUTH-01 (L2): a chain-valid but unenrolled peer -> ``AUTHENTICATION_FAILED``, closed before any request
+    is read."""
+    stranger = host_env.test_host().identity("stranger")
+    wire = acf.wire
+    with wire.nothing_recorded("a connection of an unenrolled peer"):
+        with stranger.connect() as connection:
+            unasked = connection.read(timeout=10)
+            assert unasked is not None, "the host closed without saying why"
+            refusal = unasked.refused()
+            assert (refusal.failure_class, refusal.retry) == ("AUTHENTICATION_FAILED", "NEVER")
+            assert unasked.as_of is None, "a peer without authority learns nothing about the host's state"
+            assert unasked.request_id is None, "the refusal answers no request: none was read"
+            assert connection.peer_closed(within=10), "the connection of an unenrolled peer must be closed"
+        through_client = host_env.peer(acf, "stranger").json("host", "info").answer()
+    assert through_client.refused().failure_class == "AUTHENTICATION_FAILED"
 
 
 @pytest.mark.control_plane
-@pytest.mark.parametrize(
-    ("options", "message"),
-    [
-        pytest.param(["--env", "LD_PRELOAD=/tmp/x.so"], "is not on the policy allowlist", id="env-ld-preload"),
-        pytest.param(["--env", "PYTHONPATH=/tmp"], "is not on the policy allowlist", id="env-pythonpath"),
-        pytest.param(["--cwd", "/etc"], "outside the permitted directories", id="cwd-outside-the-prefixes"),
-        pytest.param(["--cwd", "../x"], "outside the permitted directories", id="cwd-relative"),
-        pytest.param(["--timeout", "2h"], "exceeds the policy ceiling", id="timeout-above-the-ceiling"),
-    ],
-)
-def test_a_command_the_policy_does_not_grant_is_refused_before_anything_exists(
-    acf: AcfLocal, options: list[str], message: str
+def test_t_auth_01_an_unknown_local_caller_is_refused_before_any_request_is_read(
+    acf: AcfLocal, host_env: HostEnv, tmp_path: Path
 ) -> None:
-    box = acf.boot("deny")
-    assert box.name is not None
-    before = acf.sandbox_inspect(box.name)
-    refused = acf.call("exec", box.name, *options, "--json", "--", "true")
-    assert refused.returncode == EXIT_REFUSED, refused.describe()
-    assert message in refused.stderr, refused.describe()
+    """T-AUTH-01 (L2): an unknown local caller -> ``AUTHENTICATION_FAILED``, closed before any request is read.
 
-    after = acf.sandbox_inspect(box.name)
-    assert (after.state, after.generation, after.get("last_run")) == (
-        before.state,
-        before.generation,
-        before.get("last_run"),
-    ), "a refused command must not change the sandbox"
-    named = operation_ids(refused.stderr)
-    assert named, "the refusal should name the operation id it was sent under"
-    for operation in named:
-        gone = acf.operation_get(operation)
-        assert gone.returncode == EXIT_REFUSED, f"a refused request must not be a durable operation: {gone.describe()}"
+    The host is started with the shipped enrolment example, edited only so that the one local user it enrols is not
+    the user running this test: reaching the socket is not authority.
+    """
+    table = edited_copy(
+        SHIPPED_ENROLMENT, tmp_path / "enrolment.yaml", {"local_uid: 0": f"local_uid: {os.geteuid() + 1}"}
+    )
+    with private_host(host_env, acf, enrolment=table) as private:
+        with private.host.connect() as connection:
+            unasked = connection.read(timeout=10)
+            assert unasked is not None, "the host closed without saying why"
+            assert unasked.refused().failure_class == "AUTHENTICATION_FAILED"
+            assert (unasked.as_of, unasked.request_id) == (None, None)
+            assert connection.peer_closed(within=10)
+        done = private.acf.json("sandbox", "create", "--image", acf.image)
+        assert done.refusal().failure_class == "AUTHENTICATION_FAILED"
+        assert not any(private.host.state_root.glob("sandboxes/*")), "an unenrolled local caller created something"
 
 
 @pytest.mark.control_plane
-def test_a_create_the_policy_does_not_grant_is_refused_before_anything_exists(acf: AcfLocal) -> None:
-    assert acf.socket is not None
-    operation = new_operation_id()
-    unlisted = raw_call(
-        acf.socket,
-        "sandbox_create",
-        {"image": "no-such-image", "resources": RESOURCES},
-        operation_id=operation,
-    )
-    assert unlisted.status == "REJECTED"
-    assert unlisted.error is not None
-    assert unlisted.error["class"] == "AUTHORIZATION"
-    assert unlisted.error["side_effect"] == "none"
-    assert "not permitted by policy" in unlisted.error["message"]
-    assert acf.operation_get(operation).returncode == EXIT_REFUSED, "a refusal must not leave an operation record"
-
-    too_big = raw_call(
-        acf.socket,
-        "sandbox_create",
-        {"image": acf.image, "resources": {**RESOURCES, "vcpus": 8}},
-        operation_id=new_operation_id(),
-    )
-    assert too_big.status == "REJECTED"
-    assert too_big.error is not None
-    assert too_big.error["class"] == "ADMISSION_REJECTED", "above a ceiling is an admission refusal, never a clamp"
-    assert acf.sandbox_list() == []
+def test_the_local_endpoint_is_closed_to_other_local_users(acf: AcfLocal, host_env: HostEnv) -> None:
+    require_root(host_env, "connecting to the local endpoint as another user")
+    mine = probe_as_uid(host_env.socket, os.geteuid(), {"probe": "not a request"})
+    assert mine.connected, "control: the probe itself cannot connect, so a refusal below would prove nothing"
+    other = probe_as_uid(host_env.socket, UNPRIVILEGED, {"probe": "not a request"})
+    assert not other.connected, f"uid {UNPRIVILEGED} connected to the host's local endpoint"
+    assert other.connect == "PermissionError", other
+    assert stat.S_IMODE(host_env.socket.stat().st_mode) & 0o007 == 0, "the local endpoint is open to everyone"
 
 
 @pytest.mark.control_plane
-def test_an_operation_id_is_idempotent_for_one_request_and_a_conflict_for_any_other(acf: AcfLocal) -> None:
-    assert acf.socket is not None
-    params = {"image": acf.image, "resources": RESOURCES}
-    operation = new_operation_id()
-    first = raw_call(acf.socket, "sandbox_create", params, operation_id=operation)
-    assert first.status == "SUCCEEDED", first.frames
-    sandbox_id = first.reply["result"]["data"]["sandbox_id"]
-
-    again = raw_call(acf.socket, "sandbox_create", params, operation_id=operation)
-    assert again.status == "SUCCEEDED", again.frames
-    assert again.reply["result"]["data"]["sandbox_id"] == sandbox_id, "a replay must return the original result"
-    assert [s.sandbox_id for s in acf.sandbox_list()] == [sandbox_id], "a replay must not create a second sandbox"
-
-    different = raw_call(
-        acf.socket,
-        "sandbox_create",
-        {**params, "resources": {**RESOURCES, "vcpus": 2}},
-        operation_id=operation,
-    )
-    assert different.status == "CONFLICT", different.frames
-    assert different.error is not None
-    assert different.error["class"] == "STATE_CONFLICT"
-    assert "already used for a different request" in different.error["message"]
-    assert [s.sandbox_id for s in acf.sandbox_list()] == [sandbox_id], "a conflicting request must change nothing"
-    assert acf.operation_get(operation).returncode == EXIT_OK, "the original operation stays on record"
+def test_the_published_roles_are_the_roles_of_the_contract() -> None:
+    """§9.2: an observer may call ``host.info`` and ``host.metrics``; a caller every granting, containment and
+    read method; an operator all of that and the operator methods."""
+    for method in api_description().methods:
+        if method.name in {"host.info", "host.metrics"}:
+            expected: tuple[str, ...] = ROLES
+        elif method.method_class == "operator":
+            expected = ("operator",)
+        else:
+            expected = ("caller", "operator")
+        assert tuple(method.roles) == expected, method.name
 
 
 @pytest.mark.control_plane
-def test_a_peer_speaking_another_protocol_version_is_refused_not_guessed_at(acf: AcfLocal) -> None:
-    assert acf.socket is not None
-    other = raw_call(acf.socket, "host_info", protocol="acf.host/2")
-    assert other.status == "REJECTED"
-    assert other.error is not None
-    assert other.error["class"] == "SCHEMA_MISMATCH"
-    assert "acf.host/1" in other.error["message"], "the refusal must say which version the host does speak"
-    assert raw_call(acf.socket, "host_info").status == "SUCCEEDED", "a refused peer must not harm the host"
+@pytest.mark.parametrize("role", ROLES)
+def test_t_auth_02_every_method_is_allowed_for_a_role_exactly_as_the_contract_says(
+    acf: AcfLocal, host_env: HostEnv, role: str
+) -> None:
+    """T-AUTH-02 (L2): every method x every role -> allowed exactly as §9.2. A method outside the peer's role is
+    refused with ``AUTHORIZATION_DENIED`` and records nothing."""
+    peer = host_env.peer(acf, role).wire
+    params = _valid_params(acf)
+    methods = api_description().methods
+    assert {method.name for method in methods} == set(params), "this test must cover every published method"
+    for method in methods:
+        allowed = role in method.roles
+        if allowed:
+            answer = peer.call(method.name, params[method.name])
+            classes = (answer.refusal.failure_class,) if answer.refusal is not None else ()
+            assert not set(classes) & {"AUTHORIZATION_DENIED", "AUTHENTICATION_FAILED"}, (role, method.name, answer)
+            continue
+        with acf.wire.nothing_recorded(f"`{method.name}` called by a {role}"):
+            refusal = peer.call(method.name, params[method.name]).refused()
+        assert (refusal.failure_class, refusal.retry) == ("AUTHORIZATION_DENIED", "NEVER"), (role, method.name)
 
 
-# =============================================================== OUTWARD, host side: what confines the VMM (real host)
-def test_the_vmm_runs_unprivileged_in_its_own_jail_and_without_a_network(acf: AcfLocal) -> None:
-    low, size = _uid_range()
-    boxes = [acf.boot("jail-a"), acf.boot("jail-b")]
-    seen: list[int] = []
-    for box in boxes:
-        assert box.vmm_identity is not None
-        pid = box.vmm_identity[0]
-        status = proc_status(pid)
-        uid, gid = ids(status, "Uid"), ids(status, "Gid")
-        assert len(set(uid)) == 1, f"real, effective, saved and filesystem uid of the VMM must agree: {uid}"
-        assert low <= uid[0] < low + size, f"the VMM must run as a per-VM uid in [{low}, {low + size}): {uid}"
-        assert gid == uid, f"the per-VM gid must equal its uid: uid {uid}, gid {gid}"
-        assert status["CapEff"] == NO_CAPABILITIES
-        assert status["CapPrm"] == NO_CAPABILITIES
-        assert status["NoNewPrivs"] == "1"
-        filtered = {t["Name"]: t["Seccomp"] for t in thread_statuses(pid).values() if t["Name"].startswith("fc_")}
-        assert filtered, f"no fc_* thread: is pid {pid} really Firecracker? threads: {thread_statuses(pid)}"
-        assert {n: s for n, s in filtered.items() if s != "2"} == {}, (
-            f"every Firecracker thread needs seccomp: {filtered}"
+@pytest.mark.control_plane
+def test_t_auth_03_another_owner_scope_sees_not_found_and_an_operator_succeeds(
+    acf: AcfLocal, host_env: HostEnv
+) -> None:
+    """T-AUTH-03 (L2): a different owner scope -> ``NOT_FOUND`` on reads and mutations, so that the existence of a
+    record is not revealed; an operator succeeds."""
+    owner = host_env.peer(acf, "caller", scope="it-scope-a")
+    outsider = host_env.peer(acf, "caller", scope="it-scope-b")
+    box = owner.wire.ready(acf.name("owned"))
+    ran = owner.wire.run(box, ["true"])
+    assert ran.run_id is not None
+    assert box.owner == ("tls-caller", "it-scope-a")
+    target = {"sandbox_id": box.sandbox_id, "expected_generation": box.generation}
+
+    with acf.wire.nothing_recorded("a request across owner scopes"):
+        refusals = [
+            outsider.refused("sandbox", "inspect", box.sandbox_id),
+            outsider.refused("sandbox", "inspect", str(box.name)),
+            outsider.refused("operation", "get", ran.operation_id),
+            outsider.refused("run", "inspect", ran.run_id),
+            outsider.wire.call("run.output", {"run_id": ran.run_id, "stream": "stdout"}).refused(),
+            outsider.wire.call("exec.run", {**target, "command": {"argv": ["true"]}}).refused(),
+            outsider.wire.call("sandbox.stop", target).refused(),
+            outsider.wire.call("sandbox.destroy", target).refused(),
+            outsider.wire.call("operation.cancel", {"operation_id": ran.operation_id}).refused(),
+        ]
+    assert [(r.failure_class, r.retry) for r in refusals] == [("NOT_FOUND", "NEVER")] * len(refusals), refusals
+    assert outsider.ok("sandbox", "list").sandboxes().items == []
+    assert ran.operation_id not in {op.operation_id for op in outsider.wire.operations()}
+    assert owner.wire.refresh(box).state == "COMPLETED", "a request from another scope reached the sandbox"
+
+    operator = host_env.peer(acf, "operator", scope="it-scope-of-the-operator")
+    assert operator.inspect(box.sandbox_id).owner == ("tls-caller", "it-scope-a"), "an operator reads any record"
+    assert operator.ok("operation", "get", ran.operation_id).accepted().run_id == ran.run_id
+    destroyed = operator.ok("sandbox", "destroy", box.sandbox_id, "--yes").succeeded().sandbox_result()
+    assert destroyed.state == "DESTROYED", "an operator acts on any record"
+
+
+@pytest.mark.control_plane
+def test_t_auth_05_a_removed_enrolment_entry_makes_the_open_connection_unusable_within_the_bound(
+    acf: AcfLocal, host_env: HostEnv
+) -> None:
+    """T-AUTH-05 (L2): an enrolment entry is removed -> the open connection is unusable within the bound
+    (``edge.enrolment_refresh_ms``)."""
+    bound = host_env.config.integer("edge.enrolment_refresh_ms") / 1000
+    with private_host(host_env, acf, tls=True) as private:
+        caller, operator = private.host.identity("caller"), private.host.identity("operator")
+        table = private.host.enrolment_path
+        with caller.connect() as connection:
+            assert connection.request("sandbox.list").answer == "RESULT", "control: the caller is enrolled"
+            kept = [line for line in table.read_text(encoding="utf-8").splitlines() if "tls-caller" not in line]
+            table.write_text("\n".join(kept) + "\n", encoding="utf-8")
+            removed = time.monotonic()
+
+            unasked = connection.read(timeout=bound + 5)
+            took = time.monotonic() - removed
+            assert unasked is not None, "the connection was closed without a reason"
+            assert unasked.refused().failure_class == "AUTHENTICATION_FAILED"
+            assert took <= bound + 1, f"the removed peer kept its connection for {took:.1f}s; the bound is {bound:.0f}s"
+            assert connection.peer_closed(within=10)
+
+        with caller.connect() as again:
+            refused = again.read(timeout=10)
+            assert refused is not None
+            assert refused.refused().failure_class == "AUTHENTICATION_FAILED", "a new connection of the removed peer"
+        with operator.connect() as other:
+            assert other.request("host.info").answer == "RESULT", "the other entries are untouched"
+
+
+@pytest.mark.control_plane
+def test_t_auth_07_a_profile_reload_is_a_recorded_operator_operation_that_changes_no_earlier_run(
+    acf: AcfLocal, host_env: HostEnv
+) -> None:
+    """T-AUTH-07 (L2): a profile reload does not change an operation that was admitted before it; reload is a
+    recorded operator operation; an invalid profile is refused."""
+    ceiling = host_env.profile.integer("limits.max_pids")
+    with private_host(host_env, acf) as private:
+        client, wire, profile = private.acf, private.acf.wire, private.host.profile_path
+        original = profile.read_text(encoding="utf-8")
+        assert original.count(f"max_pids: {ceiling}") == 1
+        box = wire.ready(acf.name("before"))
+        earlier = wire.run(box, ["true"], limits={"max_pids": ceiling}).run_result()
+        old_digest = wire.info().profile_digest
+        assert earlier.profile_digest == old_digest, "a run records the profile it was admitted under"
+
+        profile.write_text(original.replace(f"max_pids: {ceiling}", f"max_pids: {ceiling // 2}"), encoding="utf-8")
+        assert wire.info().profile_digest == old_digest, "an edited file is not in force until it is reloaded"
+        reloaded = client.ok("profile", "reload").succeeded()
+        assert (reloaded.operation_type, reloaded.owner[0]) == ("profile.reload", "local-operator")
+        new_digest = wire.info().profile_digest
+        assert new_digest not in {old_digest, ""}
+        assert reloaded.host_change().profile_digest == new_digest
+        assert wire.info().ceilings["max_pids"] == ceiling // 2
+
+        assert client.ok("run", "inspect", earlier.run_id).run().profile_digest == old_digest, "the earlier run changed"
+        over = client.refused("sandbox", "exec", box.sandbox_id, "--max-pids", str(ceiling), "--", "true")
+        assert over.failure_class == "SAFETY_CONTROL_DENIED", "the new ceiling binds the next request"
+        later = client.execute(box.sandbox_id, ["true"]).run
+        assert later.profile_digest == new_digest
+
+        for broken, why in (
+            (original.replace(f"max_pids: {ceiling}", "max_pids: 0"), "a ceiling of zero"),
+            (original + "\nunknown_section: {}\n", "a field the host does not know"),
+        ):
+            profile.write_text(broken, encoding="utf-8")
+            with wire.nothing_recorded("a reload of an invalid profile"):
+                refusal = client.refused("profile", "reload")
+            assert refusal.failure_class == "INTEGRITY_FAILURE", why
+            assert wire.info().profile_digest == new_digest, f"{why} replaced the profile in force"
+
+        profile.write_text(original, encoding="utf-8")
+        profile.chmod(0o666)
+        writable = client.refused("profile", "reload")
+        assert writable.failure_class == "INTEGRITY_FAILURE", "a profile others can write is not a trusted input"
+        profile.chmod(0o644)
+        assert client.ok("profile", "reload").succeeded().host_change().profile_digest == old_digest
+
+
+# ====================================================================== OUTWARD: what the host opens (L4, as root)
+def _kernel_form(address: str, port: int) -> str:
+    """An IPv4 address and port as ``/proc/net/{tcp,udp}`` print them."""
+    return f"{socket.inet_aton(address)[::-1].hex().upper()}:{port:04X}"
+
+
+def _gateway(host_env: HostEnv) -> str:
+    """The host's address on a sandbox's segment: the first address of ``network.guest_segment``."""
+    network = host_env.config.text("network.guest_segment").split("/")[0]
+    return socket.inet_ntoa((int.from_bytes(socket.inet_aton(network), "big") + 1).to_bytes(4, "big"))
+
+
+def _edge_of(core: int) -> int:
+    edges = [pid for pid in children_of(core) if "edge" in command_line(pid)]
+    assert len(edges) == 1, f"expected exactly one edge process under the core (pid {core}), found {edges}"
+    return edges[0]
+
+
+def test_t_sec_02_what_the_host_opens_is_the_inventory_and_a_guest_reaches_none_of_it(
+    acf: AcfLocal, host_env: HostEnv, host_unit: HostUnit
+) -> None:
+    """T-SEC-02: "what the release artifact listens on or opens equals the inventory; a guest probe reaches none of
+    it, in every network mode".
+
+    On the real host, as root, with one sandbox in each network mode running: the sockets of every process of the
+    host (the core, its edge, the lifetime enforcer, both VMMs, the guest-traffic process) are read from the
+    kernel's tables and compared with the contract's closed inventory: the local endpoint and (only if configured)
+    the network endpoint in the edge; the VMM's control socket and the guest channel inside the jail; the resolver
+    and the relay of the allowlist sandbox, inside its namespace; nothing else, and no listener for connections a
+    guest initiates. Then each guest tries the surfaces from the inside. Pass: the tables hold exactly the
+    inventory, and no guest connects to, or gets an answer from, any of it.
+    """
+    require_root(host_env, "reading the socket tables and descriptors of every process of the host")
+    closed = acf.boot("no-network")
+    open_ = acf.boot("allowlist", allow=["198.51.100.10:8443"])
+    core = host_unit.main_pid()
+    edge = _edge_of(core)
+    enforcer = SystemdUnit(host_env.lifetime_unit).main_pid()
+    vmms = {box.sandbox_id: vmm_of(box)[0] for box in (closed, open_)}
+    traffic = cgroup_pids(host_env.traffic_cgroup_dir(open_))
+    assert len(traffic) == 1, f"expected one guest-traffic process for the allowlist sandbox, found {traffic}"
+    assert cgroup_pids(host_env.traffic_cgroup_dir(closed)) == [], "a sandbox with no network has a traffic process"
+
+    # --- the edge: the two ingress endpoints, and nothing else
+    assert str(host_env.socket) in unix_socket_paths(edge), "control: the edge does not hold the local endpoint"
+    listening = sorted(str(s) for s in inet_sockets(edge) if s.table.startswith("tcp") and s.state == TCP_LISTEN)
+    if host_env.config.has("edge.tls.listen"):
+        address, _, port = host_env.config.text("edge.tls.listen").rpartition(":")
+        assert listening == [f"tcp {_kernel_form(address, int(port))} state {TCP_LISTEN}"], listening
+    else:
+        assert listening == [], f"no network endpoint is configured, yet the edge listens on {listening}"
+    assert [s for s in inet_sockets(edge) if not s.table.startswith("tcp")] == [], "the edge holds a UDP or raw socket"
+
+    # --- the core and the lifetime enforcer: no network socket at all, and no endpoint of their own
+    for name, pid in (("core", core), ("lifetime enforcer", enforcer)):
+        assert [str(s) for s in inet_sockets(pid)] == [], f"the {name} holds a network socket"
+    own = sorted({path for path in unix_socket_paths(core) if path.startswith(("/", "@"))} - {str(host_env.socket)})
+    assert own == [], f"the core holds an endpoint that is not in the inventory: {own}"
+    assert [path for path in unix_socket_paths(enforcer) if path.startswith(("/", "@"))] == []
+
+    # --- each VMM: its control socket and the guest channel, inside its jail; no network socket
+    for box in (closed, open_):
+        pid = vmms[box.sandbox_id]
+        jail = host_env.jail_root(box)
+        assert [str(s) for s in inet_sockets(pid)] == [], "a VMM holds a network socket"
+        bound = sorted(str(host_path(pid, path)) for path in unix_socket_paths(pid) if path.startswith("/"))
+        assert bound == sorted(str(jail / name) for name in ("api.sock", "v.sock")), bound
+        initiated_by_guest = sorted(path.name for path in jail.glob("v.sock_*"))
+        assert initiated_by_guest == [], f"a listener for guest-initiated connections exists: {initiated_by_guest}"
+    assert interfaces_in_namespace_of(vmms[closed.sandbox_id]) == ["lo"], "mode `none`: the namespace must be empty"
+
+    # --- the guest-traffic process: the resolver and the relay, in the sandbox's namespace, and nothing else
+    gateway = _gateway(host_env)
+    inside = sorted(str(s) for s in inet_sockets_in_namespace_of(traffic[0], vmms[open_.sandbox_id]))
+    assert inside == sorted(
+        [
+            f"tcp {_kernel_form(gateway, RELAY_PORT)} state {TCP_LISTEN}",
+            f"udp {_kernel_form(gateway, RESOLVER_PORT)} state 07",
+        ]
+    ), inside
+    outside = [str(s) for s in inet_sockets(traffic[0]) if s.state == TCP_LISTEN]
+    assert outside == [], f"the guest-traffic process listens in the host's own namespace: {outside}"
+
+    # --- from the inside, in both network modes
+    for box in (closed, open_):
+        seen = acf.python(
+            box.sandbox_id, GUEST_REACH_THE_HOST, str(host_env.socket), options=["--time-limit", "180s"]
+        ).stdout_json()
+        assert "CONNECTED" not in seen["vsock"].values(), (
+            f"the guest connected to a service on the host: {seen['vsock']}"
         )
-        assert len(status["NSpid"].split()) >= 2, "the VMM must live in a PID namespace of its own"
-        assert Path(f"/proc/{pid}/root").readlink() != Path("/"), "the VMM must be chrooted"
-        for kind in ("net", "pid", "mnt"):
-            assert namespace(pid, kind) != namespace(os.getpid(), kind), f"the VMM shares our {kind} namespace"
-        assert interfaces_in_namespace_of(pid) == ["lo"], "its network namespace must hold loopback and nothing else"
-        seen.append(uid[0])
-    assert seen[0] != seen[1], "two VMs must never share a uid"
+        assert set(seen["unix"].values()) == {"ENOENT"}, (
+            f"a host socket exists in the guest's filesystem: {seen['unix']}"
+        )
+        named_like_ours = [path for path in seen["sockets"] if "host-agent" in path or "firecracker" in path]
+        assert named_like_ours == [], f"a control socket appears in the guest's filesystem: {named_like_ours}"
+    targets = [{"address": gateway, "port": port} for port in (RELAY_PORT, 22, 80, 443, 8443)]
+    answers = acf.python(open_.sandbox_id, GUEST_TCP_PROBE, json.dumps(targets), options=["--time-limit", "120s"])
+    received = {
+        f"{t['address']}:{t['port']}": r["received"] for t, r in zip(targets, answers.stdout_json(), strict=True)
+    }
+    assert set(received.values()) == {""}, f"something on the host's side of the segment answered the guest: {received}"
 
 
-def test_the_vmm_is_confined_by_its_own_cgroup(acf: AcfLocal, host_env: HostEnv) -> None:
-    first, second = acf.boot("cg-a", cpu=2, memory="512"), acf.boot("cg-b", cpu=2, memory="512")
-    assert first.vmm_identity is not None
-    assert second.vmm_identity is not None
-    one, other = cgroup_dir(first.vmm_identity[0]), cgroup_dir(second.vmm_identity[0])
-    assert one != other, "two VMs must not share a cgroup"
-    for directory in (one, other):
-        assert directory != CGROUP_ROOT
-        expected = {
-            "memory.max": str((512 + host_env.vmm_overhead_mib) * 1024 * 1024),
-            "memory.swap.max": "0",
-            "memory.oom.group": "1",
-            "pids.max": str(2 + 32),
-            "cpu.max": f"{2 * 100_000 + 25_000} 100000",
-        }
-        assert {name: cgroup_value(directory, name) for name in expected} == expected, directory
-
-
-def test_no_acf_process_listens_on_a_network_port(acf: AcfLocal, host_unit: HostUnit) -> None:
-    box = acf.boot("ports")
-    assert box.vmm_identity is not None
-    host_pid, vmm_pid = host_unit.main_pid(), box.vmm_identity[0]
-    assert acf.socket is not None
-    assert acf.socket in unix_socket_paths(host_pid), (
-        "the probe must see the host agent's control socket, or it would also see 'nothing' on a broken reader"
+def test_the_vmm_runs_unprivileged_in_its_own_jail_and_shares_no_identity(acf: AcfLocal, host_env: HostEnv) -> None:
+    require_root(host_env, "reading the status of the VMM processes")
+    uid_range = (
+        host_env.config.integer("firecracker.uid_range_start"),
+        host_env.config.integer("firecracker.uid_range_size"),
     )
-    found = {"acf-host": [str(s) for s in inet_sockets(host_pid)], "vmm": [str(s) for s in inet_sockets(vmm_pid)]}
-    assert found == {"acf-host": [], "vmm": []}, f"ACF must not open a TCP/UDP/raw socket anywhere: {found}"
+    boxes = [acf.boot("jail-a"), acf.boot("jail-b")]
+    uids: list[int] = []
+    for box in boxes:
+        pid = vmm_of(box)[0]
+        facts = confinement(pid, compared_with=os.getpid())
+        assert facts.violations(uid_range=uid_range) == [], f"the VMM of {box.sandbox_id} is not confined: {facts}"
+        assert facts.root == host_env.jail_root(box), "the VMM's root directory is not its generation's jail"
+        assert pid in cgroup_pids(host_env.cgroup_dir(box)), "the VMM is not in its generation's control group"
+        uids.append(facts.uids[0])
+    assert uids[0] != uids[1], "two VMs must never share a user id"
 
 
 def test_the_state_directory_is_closed_to_other_users(acf: AcfLocal, host_env: HostEnv) -> None:
+    require_root(host_env, "walking the host's state directory")
     box = acf.boot("modes")
-    assert box.name is not None
-    acf.snapshot_create(acf.name("modes-snap"), box.name)  # so that a snapshot directory exists too
+    acf.wire.snapshot(box, acf.name("modes"))  # so that a snapshot directory exists too
     root = host_env.state_root
     assert (root.stat().st_uid, stat.S_IMODE(root.stat().st_mode)) == (0, 0o700), f"{root} must be 0700 root-owned"
 
@@ -390,92 +529,66 @@ def test_the_state_directory_is_closed_to_other_users(acf: AcfLocal, host_env: H
         if here.name == "images":  # operator-installed inputs; the host only reads them
             dirs[:] = []
             continue
-        if here.name == "jail":  # the VMM's own chroot: its modes are the jailer's, and the tests above check it
+        if here.name == "jail":  # the VMM's own root: its modes are the jailer's, and the test above checks it
             dirs[:] = []
         mode = stat.S_IMODE(here.stat().st_mode)
         if mode & 0o077:
             loose.append(f"{here} {mode:04o}")
     assert loose == [], "directories the host keeps must be closed to group and others:\n  " + "\n  ".join(loose)
-
-    for private in (root / "state" / "journal.wal", root / "state" / "host-agent.lock"):
-        if private.exists():
-            assert stat.S_IMODE(private.stat().st_mode) & 0o077 == 0, f"{private} must be 0600"
-    control = Path(acf.socket or "")
-    assert stat.S_ISSOCK(control.stat().st_mode)
-    assert control.stat().st_mode & 0o007 == 0, "the control socket must not be open to everyone"
+    snapshots = sorted((root / "snapshots").glob("*/*/*"))
+    assert snapshots, "control: no snapshot file was found to check"
+    readable = [str(path) for path in snapshots if stat.S_IMODE(path.stat().st_mode) & 0o077]
+    assert readable == [], f"snapshot data holds guest memory and must be readable by the core only: {readable}"
 
 
-def test_the_vmms_sockets_are_unreachable_to_other_local_users(acf: AcfLocal) -> None:
-    _needs_root()
+def test_the_vmms_sockets_are_unreachable_to_other_local_users(acf: AcfLocal, host_env: HostEnv) -> None:
+    require_root(host_env, "connecting to a VMM's sockets as another user")
     box = acf.boot("sockets")
-    assert box.vmm_identity is not None
-    pid = box.vmm_identity[0]
-    inside = [p for p in unix_socket_paths(pid) if p.startswith("/")]
-    assert inside, f"the VMM must bind its API socket; saw {unix_socket_paths(pid)}"
-    verdict = {
-        str(host_path(pid, p)): raw_call(str(host_path(pid, p)), "host_info", user=UNPRIVILEGED, patience=3).connect
-        for p in inside
-    }
-    assert set(verdict.values()) == {"PermissionError:13"}, f"another local user could reach a VMM socket: {verdict}"
+    pid = vmm_of(box)[0]
+    inside = [path for path in unix_socket_paths(pid) if path.startswith("/")]
+    assert inside, f"control: the VMM binds no socket that could be tried; saw {unix_socket_paths(pid)}"
+    verdict = {str(host_path(pid, path)): probe_as_uid(host_path(pid, path), UNPRIVILEGED).connect for path in inside}
+    assert set(verdict.values()) == {"PermissionError"}, f"another local user could reach a VMM socket: {verdict}"
 
 
-def test_the_vmm_holds_no_descriptor_for_the_hosts_own_state(acf: AcfLocal, host_env: HostEnv) -> None:
+def test_the_vmm_holds_no_file_of_the_hosts_own_state(acf: AcfLocal, host_env: HostEnv) -> None:
+    require_root(host_env, "reading the descriptors of the VMM")
     box = acf.boot("inherit")
-    assert box.vmm_identity is not None
-    pid = box.vmm_identity[0]
-    config = Path(os.environ.get("ACF_HOST_CONFIG", "/etc/acf/host.yaml"))
-    secrets = [
-        host_env.state_root,
-        host_env.state_root / "state",
-        host_env.state_root / "state" / "journal.wal",
-        host_env.state_root / "state" / "host-agent.lock",
-        host_env.state_root / "images",
-        host_env.state_root / "snapshots",
-        host_env.state_root / "artifacts",
-        host_env.policy_path,
-        config,
+    pid = vmm_of(box)[0]
+    state = host_env.state_root
+    private = [
+        state,
+        state / "state",
+        state / "state" / "journal.wal",
+        state / "state" / "host-agent.lock",
+        state / "images",
+        state / "snapshots",
+        host_env.profile.path,
+        host_env.config.path,
+        Path(host_env.config.text("paths.enrolment_path")),
     ]
-    forbidden = {(p.stat().st_dev, p.stat().st_ino): str(p) for p in secrets if p.exists()}
-    assert forbidden, "the probe found none of the host's files to look for: wrong ACF_STATE_ROOT?"
-    leaked: list[str] = []
-    for fd in sorted((Path("/proc") / str(pid) / "fd").iterdir(), key=lambda p: int(p.name)):
-        try:
-            seen = fd.stat()
-        except OSError:
-            continue  # a socket or pipe has no path to stat, or the descriptor closed meanwhile
-        found = forbidden.get((seen.st_dev, seen.st_ino))
-        if found:
-            leaked.append(f"fd {fd.name} -> {found}")
-    assert leaked == [], f"the VMM inherited descriptors for the host's own state: {leaked}"
+    forbidden = {(p.stat().st_dev, p.stat().st_ino): str(p) for p in private if p.exists()}
+    assert len(forbidden) >= 5, f"control: the probe found too few of the host's files to look for: {forbidden}"
+    held = file_identities(pid)
+    leaked = sorted(f"{held[identity]} -> {path}" for identity, path in forbidden.items() if identity in held)
+    assert leaked == [], f"the VMM holds files of the host's own state: {leaked}"
 
 
-# ====================================================================== OUTWARD, guest side: what the guest can reach
-def test_the_guest_cannot_reach_the_host_agent_the_vmm_api_or_the_hosts_vsock_services(acf: AcfLocal) -> None:
-    box = acf.boot("reach")
-    assert box.name is not None
-    assert acf.socket is not None
-    seen = acf.python(box.name, GUEST_REACH_THE_HOST, acf.socket, timeout="180s").stdout_json()
-    assert "CONNECTED" not in seen["vsock"].values(), f"the guest connected to a service on the host: {seen['vsock']}"
-    assert set(seen["unix"].values()) == {"ENOENT"}, (
-        f"the host's sockets must not exist in the guest's filesystem: {seen['unix']}"
-    )
-    named_like_ours = [p for p in seen["sockets"] if "host-agent" in p or "firecracker" in p]
-    assert named_like_ours == [], f"a control socket appears in the guest's filesystem: {named_like_ours}"
-
-
+# ====================================================================== OUTWARD, guest side (L4)
 def test_the_guest_agent_obeys_only_the_host(acf: AcfLocal) -> None:
-    """The agent accepts a connection only from the host's vsock CID; the workload, inside the guest, is not the host."""
+    """The host initiates every connection of the guest protocol, and the guest agent accepts connections only
+    from the host: the workload, inside the guest, is not the host."""
     box = acf.boot("agent-peer")
-    assert box.name is not None
-    seen = acf.python(box.name, GUEST_SELF_AGENT, timeout="120s").stdout_json()
+    seen = acf.python(
+        box.sandbox_id, GUEST_SELF_AGENT, str(GUEST_AGENT_PORT), options=["--time-limit", "120s"]
+    ).stdout_json()
     assert "SERVED" not in seen.values(), f"the guest agent served a request from inside the guest: {seen}"
-    assert acf.sh(box.name, "echo alive").stdout == "alive\n"
+    assert acf.sh(box.sandbox_id, "echo alive").stdout_text == "alive\n"
 
 
 def test_the_guest_has_no_device_that_is_a_control_channel(acf: AcfLocal) -> None:
     box = acf.boot("devices")
-    assert box.name is not None
-    seen = acf.python(box.name, GUEST_DEVICES).stdout_json()
+    seen = acf.python(box.sandbox_id, GUEST_DEVICES).stdout_json()
     assert seen["dangerous"] == [], (
         f"the workload can open a device that reaches the host or the disk: {seen['dangerous']}"
     )
@@ -484,119 +597,3 @@ def test_the_guest_has_no_device_that_is_a_control_channel(acf: AcfLocal) -> Non
         f"device nodes the workload can read and write beyond {sorted(HARMLESS_DEVICES)}: {unexpected}. If one is "
         "harmless, add it to HARMLESS_DEVICES with the reason; if not, the image must not ship it."
     )
-
-
-# ============================================================ the policy file: integrity and immutability (real host)
-def test_a_policy_file_that_fails_its_integrity_check_is_never_loaded(acf: AcfLocal, host_env: HostEnv) -> None:
-    _needs_root()
-    path = host_env.policy_path
-    original = path.stat()
-    parked = path.with_name(path.name + ".acf-test-parked")
-    digest = acf.host_info()["policy"]["digest"]
-
-    def refused(fragment: str) -> None:
-        reload = acf.call("host", "reload-policy", "--json")
-        assert reload.returncode != EXIT_OK, f"a policy that fails its integrity check was loaded: {reload.describe()}"
-        assert fragment in reload.stderr, reload.describe()
-        assert acf.host_info()["policy"]["digest"] == digest, "a refused reload must leave the old policy in force"
-
-    try:
-        os.chmod(path, stat.S_IMODE(original.st_mode) | 0o022)
-        refused("writable")
-        os.chmod(path, stat.S_IMODE(original.st_mode))
-
-        os.chown(path, UNPRIVILEGED, UNPRIVILEGED)
-        refused("not trusted")
-        os.chown(path, original.st_uid, original.st_gid)
-
-        path.rename(parked)
-        path.symlink_to(parked)
-        refused("safely")
-        path.unlink()
-        parked.rename(path)
-
-        assert acf.call("host", "reload-policy", "--json").returncode == EXIT_OK, "the untouched file must load again"
-    finally:
-        if path.is_symlink():
-            path.unlink()
-        if parked.exists():
-            parked.rename(path)
-        os.chown(path, original.st_uid, original.st_gid)
-        os.chmod(path, stat.S_IMODE(original.st_mode))
-
-
-def test_a_policy_edit_never_changes_a_run_that_was_already_admitted(acf: AcfLocal, host_env: HostEnv) -> None:
-    path = host_env.policy_path
-    original = path.read_bytes()
-    admitted_under = hashlib.sha256(original).hexdigest()
-    box = acf.boot("policy-edit")
-    assert box.name is not None
-    running = acf.spawn_exec(box.name, "sleep 8; echo finished", shell=True)
-    try:
-        wait_for(
-            "the command to be running",
-            lambda: True if acf.sandbox_inspect(box.name or "").state == "RUNNING" else None,
-            timeout=60,
-        )
-        edited = original + f"\n# edited while a run was in flight: {uuid.uuid4().hex}\n".encode()
-        path.write_bytes(edited)  # same inode, same owner and mode: only the content changes
-        reloaded = acf.call("host", "reload-policy", "--json").require_exit(EXIT_OK).json()
-        now = hashlib.sha256(edited).hexdigest()
-        assert reloaded["policy"]["digest"] == now, (
-            "an administrator's reload must switch the policy for NEW operations"
-        )
-        done = running.wait(120)
-        later = acf.sh(box.name, "true")
-    finally:
-        running.kill()
-        path.write_bytes(original)
-        acf.call(
-            "host", "reload-policy", "--json"
-        )  # best effort: leave the machine on the policy it was installed with
-    assert done.returncode == EXIT_OK, done.describe()
-    assert done.json()["run"]["policy_id"]["digest"] == admitted_under, (
-        "the run in flight must keep the policy it was admitted under"
-    )
-    assert later["policy_id"]["digest"] == now, "an operation admitted after the reload must use the new policy"
-    assert admitted_under != now
-
-
-# ------------------------------------------------------------------------------------------------------- helpers
-def _needs_root() -> None:
-    """These tests run a client as another uid. Unprivileged they skip, unless ``ACF_REQUIRE_ROOT=1`` (CI) makes that a failure."""
-    if os.geteuid() == 0:
-        return
-    if os.environ.get("ACF_REQUIRE_ROOT") == "1":
-        pytest.fail("ACF_REQUIRE_ROOT=1, but this process is not root: run it with sudo", pytrace=False)
-    pytest.skip("this test runs a client as another uid, which needs root")
-
-
-@contextmanager
-def _reachable_by_everyone(socket_path: str) -> Iterator[None]:
-    """Let any local user ``connect()`` to the socket for a moment, so the host's own identity check is what is tested.
-
-    The socket (read and write for others) and every directory above it that others cannot search are loosened, and
-    restored exactly in ``finally``.
-    """
-    path = Path(socket_path)
-    saved: list[tuple[Path, int]] = []
-    for target in (path, *path.parents):
-        mode = stat.S_IMODE(target.stat().st_mode)
-        needed = 0o006 if target == path else 0o001
-        if mode & needed != needed:
-            saved.append((target, mode))
-            target.chmod(mode | needed)
-    try:
-        yield
-    finally:
-        for target, mode in reversed(saved):
-            target.chmod(mode)
-
-
-def _uid_range() -> tuple[int, int]:
-    """(first uid, how many) of the per-VM uid range, from the host's config (shipped defaults when unreadable)."""
-    config = Path(os.environ.get("ACF_HOST_CONFIG", "/etc/acf/host.yaml"))
-    text = config.read_text() if config.is_file() else ""
-    start = re.search(r"^\s*uid_range_start:\s*(\d+)", text, re.MULTILINE)
-    size = re.search(r"^\s*uid_range_size:\s*(\d+)", text, re.MULTILINE)
-    return (int(start.group(1)) if start else 100_000, int(size.group(1)) if size else 4096)

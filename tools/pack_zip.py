@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pack the source tree into a reproducible ZIP (this is what ``make dist`` runs).
 
-    pack_zip.py --root . --out dist/agent-compute-fabric-phase1.zip --prefix agent-compute-fabric-phase1
+    pack_zip.py --root . --out dist/NAME.zip --prefix NAME   # make dist: NAME=agent-compute-fabric-execution-plane
     pack_zip.py --root . --out dist/x.zip --prefix x --list     # review what would be packed; write nothing
 
 Reproducible means: the same files produce the same bytes, whoever builds them and whenever.
@@ -17,7 +17,8 @@ The compressed bytes also depend on the zlib that deflates them: two machines wi
 different (equally valid) archives with identical contents. Compare the manifests, not the archives, across machines.
 
 What is left out mirrors ``.gitignore`` (a test keeps the two in step): build output (``target/``, ``dist/``),
-caches, virtualenvs, bytecode, coverage data, logs, editor files and ``.env`` files (``.env.example`` is kept).
+the planning material under ``artifacts/``, caches, virtualenvs, bytecode, coverage data, logs, editor files and
+``.env`` files (``.env.example`` is kept).
 
 What is refused (exit status 1, nothing written): a symlink, a FIFO/socket/device, a file larger than
 ``--max-file-bytes`` (this is a *source* archive: a stray binary should fail loudly, not ship), a file name that is not
@@ -69,6 +70,7 @@ ANY_DEPTH_DIRS = frozenset(
         ".venv",
         ".vscode",
         "__pycache__",
+        "artifacts",
         "htmlcov",
         "node_modules",
         "venv",

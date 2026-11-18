@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Turn a source ZIP into markdown: one page per file, the complete directory tree, and an optional single bundle.
 
-    zip_to_markdown.py agent-compute-fabric-phase1.zip --out phase1-markdown
-    zip_to_markdown.py agent-compute-fabric-phase1.zip --out phase1-markdown --bundle phase1-markdown/BUNDLE.md
+    zip_to_markdown.py dist/source.zip --out dist/markdown
+    zip_to_markdown.py dist/source.zip --out dist/markdown --bundle dist/markdown/BUNDLE.md
 
 Output (everything is derived from the archive; there are no timestamps, so the same archive gives the same export):
 

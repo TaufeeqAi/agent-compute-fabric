@@ -1,0 +1,3025 @@
+{
+ "protocol": "acf.host/2",
+ "source": "acf-host-fake",
+ "exchanges": [
+  {
+   "request": {
+    "protocol": "acf.host/2",
+    "request_id": "req-9fcf2225a1d842af",
+    "owner_scope": "default",
+    "method": "host.info"
+   },
+   "response": {
+    "protocol": "acf.host/2",
+    "request_id": "req-9fcf2225a1d842af",
+    "answer": "RESULT",
+    "result": {
+     "type": "host_info",
+     "data": {
+      "version": "0.2.0",
+      "host_id": "test-host",
+      "protocols": [
+       "acf.host/2"
+      ],
+      "features": [
+       "allowlist_network",
+       "change_cursor",
+       "host_modes",
+       "operation_list",
+       "quarantine_release",
+       "scope_tags"
+      ],
+      "mode": "SERVING",
+      "containment_reasons": [],
+      "read_only_reason": null,
+      "lineage": "f57761aa7af3e691a551af84647e9d53",
+      "activation_epoch": 1,
+      "instance_id": "inst-01a1ed3a84ce7611ba310a66e779a6cc",
+      "backend": {
+       "name": "fake",
+       "version": "v0.0.0",
+       "security_profile_id": "fake-profile",
+       "profile": {
+        "fake": true
+       }
+      },
+      "capabilities": {
+       "backend": "fake",
+       "pause_resume": true,
+       "snapshot": true,
+       "restore": true,
+       "guest_exec": true,
+       "network_modes": [
+        "none",
+        "allowlist"
+       ],
+       "max_vcpus": 32,
+       "secret_injection": true,
+       "incremental_output": false,
+       "restore_reseeds_entropy": false,
+       "runtime_depends_on_snapshot": false,
+       "runtime_depends_on_image": false,
+       "per_runtime_overhead_mib": 64,
+       "identifier_slots": 4096,
+       "stop_grace_ms": 100
+      },
+      "profile": {
+       "name": "test",
+       "version": "1.0.0",
+       "digest": "fa8b2ddf9b2da66ffd38752017225124ea71a200061e7196800fbd36239314da"
+      },
+      "parameters": {
+       "acceptance_horizon_ms": 300000,
+       "clock_skew_tolerance_ms": 30000,
+       "operation_retention_ms": 86400000,
+       "change_retention_ms": 3600000,
+       "output_retention_ms": 86400000,
+       "wait_max_ms": 30000,
+       "max_request_bytes": 1048576,
+       "ceilings": {
+        "max_vcpus": 4,
+        "max_memory_mib": 2048,
+        "max_disk_mib": 4096,
+        "max_runtime_ms": 60000,
+        "max_pids": 512,
+        "max_stdout_bytes": 1048576,
+        "max_stderr_bytes": 1048576,
+        "max_argv_items": 16,
+        "max_argv_bytes": 4096,
+        "max_env_entries": 8,
+        "max_lifetime_secs": 7200,
+        "max_allowlist_entries": 4
+       },
+       "sandbox_lifetime_default_secs": 3600,
+       "sandbox_lifetime_max_secs": 7200,
+       "allowlist_max_entries": 4
+      },
+      "store_integrity": "Clean",
+      "live_sandboxes": 0,
+      "snapshots": 0,
+      "quarantined": 0,
+      "operations_in_flight": 0
+     }
+    },
+    "as_of": {
+     "lineage": "f57761aa7af3e691a551af84647e9d53",
+     "sequence": 2
+    }
+   }
+  },
+  {
+   "request": {
+    "protocol": "acf.host/2",
+    "request_id": "req-be7cd1a63dd04552",
+    "owner_scope": "default",
+    "method": "host.metrics"
+   },
+   "response": {
+    "protocol": "acf.host/2",
+    "request_id": "req-be7cd1a63dd04552",
+    "answer": "RESULT",
+    "result": {
+     "type": "metrics",
+     "data": {
+      "counters": {
+       "recovery_runs": 1
+      },
+      "gauges": {
+       "failed_generations_holding_leases": 0,
+       "host_mode": 1,
+       "live_sandboxes": 0,
+       "ms_since_last_complete_sweep": -1,
+       "oldest_open_operation_age_ms": 0,
+       "oldest_quarantine_age_ms": 0,
+       "operations_in_flight": 0,
+       "operations_open": 0,
+       "quarantined_generations": 0,
+       "snapshots": 0,
+       "store_bytes": 1213,
+       "store_reserve_bytes": 65536,
+       "store_reserve_released": 0,
+       "unmanaged_resources": 0,
+       "unmanaged_resources_seen": 0
+      }
+     }
+    },
+    "as_of": {
+     "lineage": "f57761aa7af3e691a551af84647e9d53",
+     "sequence": 2
+    }
+   }
+  },
+  {
+   "request": {
+    "protocol": "acf.host/2",
+    "request_id": "req-4c9cf56e9ef340de",
+    "operation_id": "op-820d49132ad04930a7817b7139788dd2",
+    "issued_at": "2026-11-18T05:56:38.016Z",
+    "owner_scope": "default",
+    "wait_ms": 20000,
+    "method": "sandbox.create",
+    "params": {
+     "name": "box",
+     "image": "python",
+     "resources": {
+      "vcpus": 1,
+      "memory_mib": 128,
+      "disk_mib": 64,
+      "network": {
+       "mode": "allowlist",
+       "entries": [
+        {
+         "destination": {
+          "name": "pypi.org"
+         },
+         "ports": [
+          {
+           "from": 443,
+           "to": 443
+          }
+         ]
+        },
+        {
+         "destination": {
+          "network": "198.51.100.0/24"
+         },
+         "ports": [
+          {
+           "from": 5432,
+           "to": 5433
+          }
+         ]
+        }
+       ]
+      }
+     }
+    }
+   },
+   "response": {
+    "protocol": "acf.host/2",
+    "request_id": "req-4c9cf56e9ef340de",
+    "answer": "OPERATION",
+    "operation": {
+     "operation_id": "op-820d49132ad04930a7817b7139788dd2",
+     "operation_type": "sandbox.create",
+     "state": "SUCCEEDED",
+     "effect": "APPLIED",
+     "cleanup": null,
+     "cancelled_by": null,
+     "issuer": "PEER",
+     "tags": {
+      "peer_id": "local-operator",
+      "owner_scope": "default"
+     },
+     "on_behalf_of": null,
+     "target": "sbx-01a1ed3a860171ccbd4032013572274a",
+     "step": "provision",
+     "failure": null,
+     "result": {
+      "type": "sandbox",
+      "data": {
+       "sandbox_id": "sbx-01a1ed3a860171ccbd4032013572274a",
+       "generation": 1,
+       "name": "box",
+       "state": "PROVISIONING",
+       "resources": {
+        "vcpus": 1,
+        "memory_mib": 128,
+        "disk_mib": 64,
+        "network": {
+         "mode": "allowlist",
+         "entries": [
+          {
+           "destination": {
+            "name": "pypi.org"
+           },
+           "ports": [
+            {
+             "from": 443,
+             "to": 443
+            }
+           ]
+          },
+          {
+           "destination": {
+            "network": "198.51.100.0/24"
+           },
+           "ports": [
+            {
+             "from": 5432,
+             "to": 5433
+            }
+           ]
+          }
+         ]
+        }
+       },
+       "image": {
+        "image_id": "sha256:b4211774fb7673c7a5a223be986dbaf473839a915b9505990cf910978949f0ae",
+        "alias": "python",
+        "architecture": "x86_64",
+        "kernel_identity": "sha256:6923dd1bc0460082c5d55a831908c24a282860b7f1cd6c2b79cf1bc8857c639c",
+        "rootfs_identity": "sha256:3c47ef972d531d524daa15fa33dd885dd23de6221bbd10a29eb42ecfcf2ef422",
+        "manifest_version": 1,
+        "provenance_reference": "test"
+       },
+       "tags": {
+        "peer_id": "local-operator",
+        "owner_scope": "default"
+       },
+       "expires_at": "2026-11-18T06:56:38.017Z",
+       "process": null,
+       "security_profile_id": "fake-profile",
+       "last_run": null,
+       "source_snapshot": null,
+       "failure": null,
+       "quarantined": null,
+       "secret_bearing": false,
+       "notes": [],
+       "updated": "2026-11-18T05:56:38.018Z",
+       "revision": 7
+      }
+     },
+     "run_id": null,
+     "sandbox": [
+      "sbx-01a1ed3a860171ccbd4032013572274a",
+      1
+     ],
+     "snapshot": null,
+     "profile_id": {
+      "name": "test",
+      "version": "1.0.0",
+      "digest": "fa8b2ddf9b2da66ffd38752017225124ea71a200061e7196800fbd36239314da"
+     },
+     "activation_epoch": 1,
+     "issued_at": "2026-11-18T05:56:38.016Z",
+     "created": "2026-11-18T05:56:38.017Z",
+     "updated": "2026-11-18T05:56:38.018Z",
+     "revision": 7
+    },
+    "as_of": {
+     "lineage": "f57761aa7af3e691a551af84647e9d53",
+     "sequence": 7
+    }
+   }
+  },
+  {
+   "request": {
+    "protocol": "acf.host/2",
+    "request_id": "req-63061d421ea947fc",
+    "owner_scope": "default",
+    "method": "sandbox.inspect",
+    "params": {
+     "sandbox": "box"
+    }
+   },
+   "response": {
+    "protocol": "acf.host/2",
+    "request_id": "req-63061d421ea947fc",
+    "answer": "RESULT",
+    "result": {
+     "type": "sandbox",
+     "data": {
+      "sandbox_id": "sbx-01a1ed3a860171ccbd4032013572274a",
+      "generation": 1,
+      "name": "box",
+      "state": "PROVISIONING",
+      "resources": {
+       "vcpus": 1,
+       "memory_mib": 128,
+       "disk_mib": 64,
+       "network": {
+        "mode": "allowlist",
+        "entries": [
+         {
+          "destination": {
+           "name": "pypi.org"
+          },
+          "ports": [
+           {
+            "from": 443,
+            "to": 443
+           }
+          ]
+         },
+         {
+          "destination": {
+           "network": "198.51.100.0/24"
+          },
+          "ports": [
+           {
+            "from": 5432,
+            "to": 5433
+           }
+          ]
+         }
+        ]
+       }
+      },
+      "image": {
+       "image_id": "sha256:b4211774fb7673c7a5a223be986dbaf473839a915b9505990cf910978949f0ae",
+       "alias": "python",
+       "architecture": "x86_64",
+       "kernel_identity": "sha256:6923dd1bc0460082c5d55a831908c24a282860b7f1cd6c2b79cf1bc8857c639c",
+       "rootfs_identity": "sha256:3c47ef972d531d524daa15fa33dd885dd23de6221bbd10a29eb42ecfcf2ef422",
+       "manifest_version": 1,
+       "provenance_reference": "test"
+      },
+      "tags": {
+       "peer_id": "local-operator",
+       "owner_scope": "default"
+      },
+      "expires_at": "2026-11-18T06:56:38.017Z",
+      "process": null,
+      "security_profile_id": "fake-profile",
+      "last_run": null,
+      "source_snapshot": null,
+      "failure": null,
+      "quarantined": null,
+      "secret_bearing": false,
+      "notes": [],
+      "updated": "2026-11-18T05:56:38.018Z",
+      "revision": 7
+     }
+    },
+    "as_of": {
+     "lineage": "f57761aa7af3e691a551af84647e9d53",
+     "sequence": 7
+    }
+   }
+  },
+  {
+   "request": {
+    "protocol": "acf.host/2",
+    "request_id": "req-5ffb3bf385f447ba",
+    "operation_id": "op-fc5ee2ca26ec45a1960f95aab7a4ccca",
+    "issued_at": "2026-11-18T05:56:38.250Z",
+    "owner_scope": "default",
+    "wait_ms": 20000,
+    "method": "sandbox.start",
+    "params": {
+     "sandbox_id": "sbx-01a1ed3a860171ccbd4032013572274a",
+     "expected_generation": 1
+    }
+   },
+   "response": {
+    "protocol": "acf.host/2",
+    "request_id": "req-5ffb3bf385f447ba",
+    "answer": "OPERATION",
+    "operation": {
+     "operation_id": "op-fc5ee2ca26ec45a1960f95aab7a4ccca",
+     "operation_type": "sandbox.start",
+     "state": "SUCCEEDED",
+     "effect": "APPLIED",
+     "cleanup": null,
+     "cancelled_by": null,
+     "issuer": "PEER",
+     "tags": {
+      "peer_id": "local-operator",
+      "owner_scope": "default"
+     },
+     "on_behalf_of": null,
+     "target": "sbx-01a1ed3a860171ccbd4032013572274a",
+     "step": "launch",
+     "failure": null,
+     "result": {
+      "type": "sandbox",
+      "data": {
+       "sandbox_id": "sbx-01a1ed3a860171ccbd4032013572274a",
+       "generation": 1,
+       "name": "box",
+       "state": "READY",
+       "resources": {
+        "vcpus": 1,
+        "memory_mib": 128,
+        "disk_mib": 64,
+        "network": {
+         "mode": "allowlist",
+         "entries": [
+          {
+           "destination": {
+            "name": "pypi.org"
+           },
+           "ports": [
+            {
+             "from": 443,
+             "to": 443
+            }
+           ]
+          },
+          {
+           "destination": {
+            "network": "198.51.100.0/24"
+           },
+           "ports": [
+            {
+             "from": 5432,
+             "to": 5433
+            }
+           ]
+          }
+         ]
+        }
+       },
+       "image": {
+        "image_id": "sha256:b4211774fb7673c7a5a223be986dbaf473839a915b9505990cf910978949f0ae",
+        "alias": "python",
+        "architecture": "x86_64",
+        "kernel_identity": "sha256:6923dd1bc0460082c5d55a831908c24a282860b7f1cd6c2b79cf1bc8857c639c",
+        "rootfs_identity": "sha256:3c47ef972d531d524daa15fa33dd885dd23de6221bbd10a29eb42ecfcf2ef422",
+        "manifest_version": 1,
+        "provenance_reference": "test"
+       },
+       "tags": {
+        "peer_id": "local-operator",
+        "owner_scope": "default"
+       },
+       "expires_at": "2026-11-18T06:56:38.017Z",
+       "process": {
+        "pid": 40000,
+        "start_time_ticks": 280000,
+        "boot_id": "a7496fb7-4900-4ad9-a7fb-3cf7123e9923"
+       },
+       "security_profile_id": "fake-profile",
+       "last_run": null,
+       "source_snapshot": null,
+       "failure": null,
+       "quarantined": null,
+       "secret_bearing": false,
+       "notes": [],
+       "updated": "2026-11-18T05:56:38.252Z",
+       "revision": 11
+      }
+     },
+     "run_id": null,
+     "sandbox": [
+      "sbx-01a1ed3a860171ccbd4032013572274a",
+      1
+     ],
+     "snapshot": null,
+     "profile_id": {
+      "name": "test",
+      "version": "1.0.0",
+      "digest": "fa8b2ddf9b2da66ffd38752017225124ea71a200061e7196800fbd36239314da"
+     },
+     "activation_epoch": 1,
+     "issued_at": "2026-11-18T05:56:38.250Z",
+     "created": "2026-11-18T05:56:38.251Z",
+     "updated": "2026-11-18T05:56:38.252Z",
+     "revision": 11
+    },
+    "as_of": {
+     "lineage": "f57761aa7af3e691a551af84647e9d53",
+     "sequence": 11
+    }
+   }
+  },
+  {
+   "request": {
+    "protocol": "acf.host/2",
+    "request_id": "req-6136aadeb3344ae4",
+    "operation_id": "op-532b710449314b1dbf81a66246a7faa3",
+    "issued_at": "2026-11-18T05:56:38.253Z",
+    "owner_scope": "default",
+    "wait_ms": 20000,
+    "method": "exec.run",
+    "params": {
+     "sandbox_id": "sbx-01a1ed3a860171ccbd4032013572274a",
+     "expected_generation": 1,
+     "command": {
+      "argv": [
+       "python",
+       "-c",
+       "print(1)"
+      ],
+      "env": {
+       "LANG": "C.UTF-8"
+      },
+      "secret_env": {},
+      "limits": {}
+     }
+    }
+   },
+   "response": {
+    "protocol": "acf.host/2",
+    "request_id": "req-6136aadeb3344ae4",
+    "answer": "OPERATION",
+    "operation": {
+     "operation_id": "op-532b710449314b1dbf81a66246a7faa3",
+     "operation_type": "exec.run",
+     "state": "SUCCEEDED",
+     "effect": "APPLIED",
+     "cleanup": null,
+     "cancelled_by": null,
+     "issuer": "PEER",
+     "tags": {
+      "peer_id": "local-operator",
+      "owner_scope": "default"
+     },
+     "on_behalf_of": null,
+     "target": "sbx-01a1ed3a860171ccbd4032013572274a",
+     "step": "exec",
+     "failure": null,
+     "result": {
+      "type": "run",
+      "data": {
+       "run_id": "run-01a1ed3a86ee7385a99d07f7a518fca5",
+       "operation_id": "op-532b710449314b1dbf81a66246a7faa3",
+       "sandbox_id": "sbx-01a1ed3a860171ccbd4032013572274a",
+       "generation": 1,
+       "status": "EXITED",
+       "exit_code": 0,
+       "signal": null,
+       "stdout": {
+        "status": "COMPLETE",
+        "total_bytes": 19,
+        "kept_bytes": 19,
+        "data_b64": "cHl0aG9uIC1jIHByaW50KDEpCg==",
+        "artifact": {
+         "artifact_id": "art-01a1ed3a86ee7385a99d07f8642e2803",
+         "kind": "stdout",
+         "logical_name": "stdout",
+         "schema_version": 1,
+         "content_digest": "sha256:a9acca83931b3d335c46a3a42f7b791027a5e3145afdd773e92a787e1c5ef30d",
+         "byte_size": 19,
+         "source_operation_id": "op-532b710449314b1dbf81a66246a7faa3",
+         "sandbox_id": "sbx-01a1ed3a860171ccbd4032013572274a",
+         "run_id": "run-01a1ed3a86ee7385a99d07f7a518fca5"
+        }
+       },
+       "stderr": {
+        "status": "COMPLETE",
+        "total_bytes": 0,
+        "kept_bytes": 0,
+        "data_b64": "",
+        "artifact": null
+       },
+       "guest_duration_ms": 1,
+       "guest_containment": "guest cgroup v2 pids.max + cgroup.kill",
+       "host_backstop_fired": false,
+       "runtime_ended": false,
+       "metrics": {
+        "wall_ms": 1,
+        "cpu_usage_usec": null,
+        "memory_peak_bytes": null
+       },
+       "evidence_status": "COMPLETE",
+       "resource_evidence": [
+        {
+         "resource": "guest_pids",
+         "configured": 256,
+         "effective": 256,
+         "observed_peak": null,
+         "violated": false,
+         "action_taken": "none",
+         "mechanism": "guest cgroup v2 pids.max + cgroup.kill"
+        },
+        {
+         "resource": "runtime_ms",
+         "configured": 60000,
+         "effective": 60000,
+         "observed_peak": 1,
+         "violated": false,
+         "action_taken": "none",
+         "mechanism": "guest deadline + host backstop (monotonic)"
+        },
+        {
+         "resource": "stdout_bytes",
+         "configured": 1048576,
+         "effective": 1048576,
+         "observed_peak": 19,
+         "violated": false,
+         "action_taken": "none",
+         "mechanism": "guest capture cap, re-enforced by host"
+        },
+        {
+         "resource": "stderr_bytes",
+         "configured": 1048576,
+         "effective": 1048576,
+         "observed_peak": 0,
+         "violated": false,
+         "action_taken": "none",
+         "mechanism": "guest capture cap, re-enforced by host"
+        }
+       ],
+       "artifacts": [
+        {
+         "artifact_id": "art-01a1ed3a86ee7385a99d07f8642e2803",
+         "kind": "stdout",
+         "logical_name": "stdout",
+         "schema_version": 1,
+         "content_digest": "sha256:a9acca83931b3d335c46a3a42f7b791027a5e3145afdd773e92a787e1c5ef30d",
+         "byte_size": 19,
+         "source_operation_id": "op-532b710449314b1dbf81a66246a7faa3",
+         "sandbox_id": "sbx-01a1ed3a860171ccbd4032013572274a",
+         "run_id": "run-01a1ed3a86ee7385a99d07f7a518fca5"
+        }
+       ],
+       "profile_id": {
+        "name": "test",
+        "version": "1.0.0",
+        "digest": "fa8b2ddf9b2da66ffd38752017225124ea71a200061e7196800fbd36239314da"
+       },
+       "image_id": "sha256:b4211774fb7673c7a5a223be986dbaf473839a915b9505990cf910978949f0ae",
+       "note": null
+      }
+     },
+     "run_id": "run-01a1ed3a86ee7385a99d07f7a518fca5",
+     "sandbox": [
+      "sbx-01a1ed3a860171ccbd4032013572274a",
+      1
+     ],
+     "snapshot": null,
+     "profile_id": {
+      "name": "test",
+      "version": "1.0.0",
+      "digest": "fa8b2ddf9b2da66ffd38752017225124ea71a200061e7196800fbd36239314da"
+     },
+     "activation_epoch": 1,
+     "issued_at": "2026-11-18T05:56:38.253Z",
+     "created": "2026-11-18T05:56:38.254Z",
+     "updated": "2026-11-18T05:56:38.254Z",
+     "revision": 14
+    },
+    "as_of": {
+     "lineage": "f57761aa7af3e691a551af84647e9d53",
+     "sequence": 14
+    }
+   }
+  },
+  {
+   "request": {
+    "protocol": "acf.host/2",
+    "request_id": "req-909eb31f509c4d78",
+    "owner_scope": "default",
+    "method": "run.inspect",
+    "params": {
+     "run_id": "run-01a1ed3a86ee7385a99d07f7a518fca5"
+    }
+   },
+   "response": {
+    "protocol": "acf.host/2",
+    "request_id": "req-909eb31f509c4d78",
+    "answer": "RESULT",
+    "result": {
+     "type": "run",
+     "data": {
+      "run_id": "run-01a1ed3a86ee7385a99d07f7a518fca5",
+      "operation_id": "op-532b710449314b1dbf81a66246a7faa3",
+      "sandbox_id": "sbx-01a1ed3a860171ccbd4032013572274a",
+      "generation": 1,
+      "status": "EXITED",
+      "exit_code": 0,
+      "signal": null,
+      "stdout": {
+       "status": "COMPLETE",
+       "total_bytes": 19,
+       "kept_bytes": 19,
+       "data_b64": "cHl0aG9uIC1jIHByaW50KDEpCg==",
+       "artifact": {
+        "artifact_id": "art-01a1ed3a86ee7385a99d07f8642e2803",
+        "kind": "stdout",
+        "logical_name": "stdout",
+        "schema_version": 1,
+        "content_digest": "sha256:a9acca83931b3d335c46a3a42f7b791027a5e3145afdd773e92a787e1c5ef30d",
+        "byte_size": 19,
+        "source_operation_id": "op-532b710449314b1dbf81a66246a7faa3",
+        "sandbox_id": "sbx-01a1ed3a860171ccbd4032013572274a",
+        "run_id": "run-01a1ed3a86ee7385a99d07f7a518fca5"
+       }
+      },
+      "stderr": {
+       "status": "COMPLETE",
+       "total_bytes": 0,
+       "kept_bytes": 0,
+       "data_b64": "",
+       "artifact": null
+      },
+      "guest_duration_ms": 1,
+      "guest_containment": "guest cgroup v2 pids.max + cgroup.kill",
+      "host_backstop_fired": false,
+      "runtime_ended": false,
+      "metrics": {
+       "wall_ms": 1,
+       "cpu_usage_usec": null,
+       "memory_peak_bytes": null
+      },
+      "evidence_status": "COMPLETE",
+      "resource_evidence": [
+       {
+        "resource": "guest_pids",
+        "configured": 256,
+        "effective": 256,
+        "observed_peak": null,
+        "violated": false,
+        "action_taken": "none",
+        "mechanism": "guest cgroup v2 pids.max + cgroup.kill"
+       },
+       {
+        "resource": "runtime_ms",
+        "configured": 60000,
+        "effective": 60000,
+        "observed_peak": 1,
+        "violated": false,
+        "action_taken": "none",
+        "mechanism": "guest deadline + host backstop (monotonic)"
+       },
+       {
+        "resource": "stdout_bytes",
+        "configured": 1048576,
+        "effective": 1048576,
+        "observed_peak": 19,
+        "violated": false,
+        "action_taken": "none",
+        "mechanism": "guest capture cap, re-enforced by host"
+       },
+       {
+        "resource": "stderr_bytes",
+        "configured": 1048576,
+        "effective": 1048576,
+        "observed_peak": 0,
+        "violated": false,
+        "action_taken": "none",
+        "mechanism": "guest capture cap, re-enforced by host"
+       }
+      ],
+      "artifacts": [
+       {
+        "artifact_id": "art-01a1ed3a86ee7385a99d07f8642e2803",
+        "kind": "stdout",
+        "logical_name": "stdout",
+        "schema_version": 1,
+        "content_digest": "sha256:a9acca83931b3d335c46a3a42f7b791027a5e3145afdd773e92a787e1c5ef30d",
+        "byte_size": 19,
+        "source_operation_id": "op-532b710449314b1dbf81a66246a7faa3",
+        "sandbox_id": "sbx-01a1ed3a860171ccbd4032013572274a",
+        "run_id": "run-01a1ed3a86ee7385a99d07f7a518fca5"
+       }
+      ],
+      "profile_id": {
+       "name": "test",
+       "version": "1.0.0",
+       "digest": "fa8b2ddf9b2da66ffd38752017225124ea71a200061e7196800fbd36239314da"
+      },
+      "image_id": "sha256:b4211774fb7673c7a5a223be986dbaf473839a915b9505990cf910978949f0ae",
+      "note": null
+     }
+    },
+    "as_of": {
+     "lineage": "f57761aa7af3e691a551af84647e9d53",
+     "sequence": 14
+    }
+   }
+  },
+  {
+   "request": {
+    "protocol": "acf.host/2",
+    "request_id": "req-88656488137e4bd3",
+    "owner_scope": "default",
+    "method": "run.output",
+    "params": {
+     "run_id": "run-01a1ed3a86ee7385a99d07f7a518fca5",
+     "stream": "stdout",
+     "offset": 0,
+     "max_bytes": 4
+    }
+   },
+   "response": {
+    "protocol": "acf.host/2",
+    "request_id": "req-88656488137e4bd3",
+    "answer": "RESULT",
+    "result": {
+     "type": "output",
+     "data": {
+      "run_id": "run-01a1ed3a86ee7385a99d07f7a518fca5",
+      "stream": "stdout",
+      "offset": 0,
+      "data_b64": "cHl0aA==",
+      "stored_bytes": 19,
+      "produced_bytes": 19,
+      "completeness": "COMPLETE",
+      "eof": false
+     }
+    },
+    "as_of": {
+     "lineage": "f57761aa7af3e691a551af84647e9d53",
+     "sequence": 14
+    }
+   }
+  },
+  {
+   "request": {
+    "protocol": "acf.host/2",
+    "request_id": "req-7404713f1d28423b",
+    "operation_id": "op-80fc711cafe741e38ac970030b054bd5",
+    "issued_at": "2026-11-18T05:56:38.259Z",
+    "owner_scope": "default",
+    "wait_ms": 20000,
+    "method": "snapshot.create",
+    "params": {
+     "sandbox_id": "sbx-01a1ed3a860171ccbd4032013572274a",
+     "expected_generation": 1,
+     "name": "base"
+    }
+   },
+   "response": {
+    "protocol": "acf.host/2",
+    "request_id": "req-7404713f1d28423b",
+    "answer": "OPERATION",
+    "operation": {
+     "operation_id": "op-80fc711cafe741e38ac970030b054bd5",
+     "operation_type": "snapshot.create",
+     "state": "SUCCEEDED",
+     "effect": "APPLIED",
+     "cleanup": null,
+     "cancelled_by": null,
+     "issuer": "PEER",
+     "tags": {
+      "peer_id": "local-operator",
+      "owner_scope": "default"
+     },
+     "on_behalf_of": null,
+     "target": "snp-01a1ed3a86f477b8b963dc75dd7da126",
+     "step": "snapshot",
+     "failure": null,
+     "result": {
+      "type": "snapshot",
+      "data": {
+       "snapshot": {
+        "snapshot_id": "snp-01a1ed3a86f477b8b963dc75dd7da126",
+        "snapshot_generation": 1
+       },
+       "name": "base",
+       "state": "READY",
+       "tags": {
+        "peer_id": "local-operator",
+        "owner_scope": "default"
+       },
+       "size_bytes": 6902,
+       "source_sandbox": [
+        "sbx-01a1ed3a860171ccbd4032013572274a",
+        1
+       ],
+       "manifest_digest": "sha256:0f7f69e80d1f30c8acf0dd1eafce90aa44abd23f8f56b4365aad3a9518c09cef",
+       "restore_count": 0,
+       "secret_refs": [],
+       "incompatible": [],
+       "created": "2026-11-18T05:56:38.260Z",
+       "failure": null,
+       "revision": 20
+      }
+     },
+     "run_id": null,
+     "sandbox": [
+      "sbx-01a1ed3a860171ccbd4032013572274a",
+      1
+     ],
+     "snapshot": {
+      "snapshot_id": "snp-01a1ed3a86f477b8b963dc75dd7da126",
+      "snapshot_generation": 1
+     },
+     "profile_id": {
+      "name": "test",
+      "version": "1.0.0",
+      "digest": "fa8b2ddf9b2da66ffd38752017225124ea71a200061e7196800fbd36239314da"
+     },
+     "activation_epoch": 1,
+     "issued_at": "2026-11-18T05:56:38.259Z",
+     "created": "2026-11-18T05:56:38.260Z",
+     "updated": "2026-11-18T05:56:40.306Z",
+     "revision": 20
+    },
+    "as_of": {
+     "lineage": "f57761aa7af3e691a551af84647e9d53",
+     "sequence": 20
+    }
+   }
+  },
+  {
+   "request": {
+    "protocol": "acf.host/2",
+    "request_id": "req-e769587835c34da1",
+    "owner_scope": "default",
+    "method": "snapshot.list"
+   },
+   "response": {
+    "protocol": "acf.host/2",
+    "request_id": "req-e769587835c34da1",
+    "answer": "RESULT",
+    "result": {
+     "type": "snapshots",
+     "data": {
+      "items": [
+       {
+        "snapshot": {
+         "snapshot_id": "snp-01a1ed3a86f477b8b963dc75dd7da126",
+         "snapshot_generation": 1
+        },
+        "name": "base",
+        "state": "READY",
+        "tags": {
+         "peer_id": "local-operator",
+         "owner_scope": "default"
+        },
+        "size_bytes": 6902,
+        "source_sandbox": [
+         "sbx-01a1ed3a860171ccbd4032013572274a",
+         1
+        ],
+        "manifest_digest": "sha256:0f7f69e80d1f30c8acf0dd1eafce90aa44abd23f8f56b4365aad3a9518c09cef",
+        "restore_count": 0,
+        "secret_refs": [],
+        "incompatible": [],
+        "created": "2026-11-18T05:56:38.260Z",
+        "failure": null,
+        "revision": 20
+       }
+      ],
+      "more": false,
+      "next": {
+       "lineage": "f57761aa7af3e691a551af84647e9d53",
+       "sequence": 20
+      }
+     }
+    },
+    "as_of": {
+     "lineage": "f57761aa7af3e691a551af84647e9d53",
+     "sequence": 20
+    }
+   }
+  },
+  {
+   "request": {
+    "protocol": "acf.host/2",
+    "request_id": "req-78f871ec28dc49f8",
+    "operation_id": "op-33a07d026477478b96ba2b6813e288ea",
+    "issued_at": "2026-11-18T05:56:40.323Z",
+    "owner_scope": "default",
+    "wait_ms": 20000,
+    "method": "snapshot.restore",
+    "params": {
+     "snapshot": {
+      "snapshot_id": "snp-01a1ed3a86f477b8b963dc75dd7da126",
+      "snapshot_generation": 1
+     },
+     "target": {
+      "kind": "existing",
+      "sandbox_id": "sbx-01a1ed3a860171ccbd4032013572274a",
+      "expected_generation": 1
+     }
+    }
+   },
+   "response": {
+    "protocol": "acf.host/2",
+    "request_id": "req-78f871ec28dc49f8",
+    "answer": "OPERATION",
+    "operation": {
+     "operation_id": "op-33a07d026477478b96ba2b6813e288ea",
+     "operation_type": "snapshot.restore",
+     "state": "SUCCEEDED",
+     "effect": "APPLIED",
+     "cleanup": null,
+     "cancelled_by": null,
+     "issuer": "PEER",
+     "tags": {
+      "peer_id": "local-operator",
+      "owner_scope": "default"
+     },
+     "on_behalf_of": null,
+     "target": "snp-01a1ed3a86f477b8b963dc75dd7da126",
+     "step": "retire_old",
+     "failure": null,
+     "result": {
+      "type": "sandbox",
+      "data": {
+       "sandbox_id": "sbx-01a1ed3a860171ccbd4032013572274a",
+       "generation": 2,
+       "name": "box",
+       "state": "READY",
+       "resources": {
+        "vcpus": 1,
+        "memory_mib": 128,
+        "disk_mib": 64,
+        "network": {
+         "mode": "allowlist",
+         "entries": [
+          {
+           "destination": {
+            "name": "pypi.org"
+           },
+           "ports": [
+            {
+             "from": 443,
+             "to": 443
+            }
+           ]
+          },
+          {
+           "destination": {
+            "network": "198.51.100.0/24"
+           },
+           "ports": [
+            {
+             "from": 5432,
+             "to": 5433
+            }
+           ]
+          }
+         ]
+        }
+       },
+       "image": {
+        "image_id": "sha256:b4211774fb7673c7a5a223be986dbaf473839a915b9505990cf910978949f0ae",
+        "alias": "python",
+        "architecture": "x86_64",
+        "kernel_identity": "sha256:6923dd1bc0460082c5d55a831908c24a282860b7f1cd6c2b79cf1bc8857c639c",
+        "rootfs_identity": "sha256:3c47ef972d531d524daa15fa33dd885dd23de6221bbd10a29eb42ecfcf2ef422",
+        "manifest_version": 1,
+        "provenance_reference": "test"
+       },
+       "tags": {
+        "peer_id": "local-operator",
+        "owner_scope": "default"
+       },
+       "expires_at": "2026-11-18T06:56:38.017Z",
+       "process": {
+        "pid": 40001,
+        "start_time_ticks": 280007,
+        "boot_id": "a7496fb7-4900-4ad9-a7fb-3cf7123e9923"
+       },
+       "security_profile_id": "fake-profile",
+       "last_run": null,
+       "source_snapshot": {
+        "snapshot_id": "snp-01a1ed3a86f477b8b963dc75dd7da126",
+        "snapshot_generation": 1
+       },
+       "failure": null,
+       "quarantined": null,
+       "secret_bearing": false,
+       "notes": [
+        "restore verified: guest state digest 6c5888e0d4b3…",
+        "guest entropy reseeded by the restore: false"
+       ],
+       "updated": "2026-11-18T05:56:40.325Z",
+       "revision": 26
+      }
+     },
+     "run_id": null,
+     "sandbox": [
+      "sbx-01a1ed3a860171ccbd4032013572274a",
+      1
+     ],
+     "snapshot": {
+      "snapshot_id": "snp-01a1ed3a86f477b8b963dc75dd7da126",
+      "snapshot_generation": 1
+     },
+     "profile_id": {
+      "name": "test",
+      "version": "1.0.0",
+      "digest": "fa8b2ddf9b2da66ffd38752017225124ea71a200061e7196800fbd36239314da"
+     },
+     "activation_epoch": 1,
+     "issued_at": "2026-11-18T05:56:40.323Z",
+     "created": "2026-11-18T05:56:40.323Z",
+     "updated": "2026-11-18T05:56:40.326Z",
+     "revision": 27
+    },
+    "as_of": {
+     "lineage": "f57761aa7af3e691a551af84647e9d53",
+     "sequence": 27
+    }
+   }
+  },
+  {
+   "request": {
+    "protocol": "acf.host/2",
+    "request_id": "req-c7a3b76e79a143e7",
+    "operation_id": "op-30c7f81475d34724b9a8dffd05db224a",
+    "issued_at": "2026-11-18T05:56:40.327Z",
+    "owner_scope": "default",
+    "wait_ms": 20000,
+    "method": "snapshot.restore",
+    "params": {
+     "snapshot": {
+      "snapshot_id": "snp-01a1ed3a86f477b8b963dc75dd7da126",
+      "snapshot_generation": 1
+     },
+     "target": {
+      "kind": "new",
+      "name": "copy"
+     }
+    }
+   },
+   "response": {
+    "protocol": "acf.host/2",
+    "request_id": "req-c7a3b76e79a143e7",
+    "answer": "OPERATION",
+    "operation": {
+     "operation_id": "op-30c7f81475d34724b9a8dffd05db224a",
+     "operation_type": "snapshot.restore",
+     "state": "SUCCEEDED",
+     "effect": "APPLIED",
+     "cleanup": null,
+     "cancelled_by": null,
+     "issuer": "PEER",
+     "tags": {
+      "peer_id": "local-operator",
+      "owner_scope": "default"
+     },
+     "on_behalf_of": null,
+     "target": "snp-01a1ed3a86f477b8b963dc75dd7da126",
+     "step": "retire_old",
+     "failure": null,
+     "result": {
+      "type": "sandbox",
+      "data": {
+       "sandbox_id": "sbx-01a1ed3a8f087710b59fdbca9d045007",
+       "generation": 1,
+       "name": "copy",
+       "state": "READY",
+       "resources": {
+        "vcpus": 1,
+        "memory_mib": 128,
+        "disk_mib": 64,
+        "network": {
+         "mode": "allowlist",
+         "entries": [
+          {
+           "destination": {
+            "name": "pypi.org"
+           },
+           "ports": [
+            {
+             "from": 443,
+             "to": 443
+            }
+           ]
+          },
+          {
+           "destination": {
+            "network": "198.51.100.0/24"
+           },
+           "ports": [
+            {
+             "from": 5432,
+             "to": 5433
+            }
+           ]
+          }
+         ]
+        }
+       },
+       "image": {
+        "image_id": "sha256:b4211774fb7673c7a5a223be986dbaf473839a915b9505990cf910978949f0ae",
+        "alias": "python",
+        "architecture": "x86_64",
+        "kernel_identity": "sha256:6923dd1bc0460082c5d55a831908c24a282860b7f1cd6c2b79cf1bc8857c639c",
+        "rootfs_identity": "sha256:3c47ef972d531d524daa15fa33dd885dd23de6221bbd10a29eb42ecfcf2ef422",
+        "manifest_version": 1,
+        "provenance_reference": "test"
+       },
+       "tags": {
+        "peer_id": "local-operator",
+        "owner_scope": "default"
+       },
+       "expires_at": "2026-11-18T06:56:40.328Z",
+       "process": {
+        "pid": 40002,
+        "start_time_ticks": 280014,
+        "boot_id": "a7496fb7-4900-4ad9-a7fb-3cf7123e9923"
+       },
+       "security_profile_id": "fake-profile",
+       "last_run": null,
+       "source_snapshot": {
+        "snapshot_id": "snp-01a1ed3a86f477b8b963dc75dd7da126",
+        "snapshot_generation": 1
+       },
+       "failure": null,
+       "quarantined": null,
+       "secret_bearing": false,
+       "notes": [
+        "restore verified: guest state digest 6c5888e0d4b3…",
+        "guest entropy reseeded by the restore: false",
+        "This snapshot has been restored more than once. The VMM only guarantees guest-level uniqueness (random state, generated ids, tokens) for the first restore of a snapshot; treat secrets derived before the snapshot as shared across restores."
+       ],
+       "updated": "2026-11-18T05:56:40.330Z",
+       "revision": 33
+      }
+     },
+     "run_id": null,
+     "sandbox": [
+      "sbx-01a1ed3a8f087710b59fdbca9d045007",
+      1
+     ],
+     "snapshot": {
+      "snapshot_id": "snp-01a1ed3a86f477b8b963dc75dd7da126",
+      "snapshot_generation": 1
+     },
+     "profile_id": {
+      "name": "test",
+      "version": "1.0.0",
+      "digest": "fa8b2ddf9b2da66ffd38752017225124ea71a200061e7196800fbd36239314da"
+     },
+     "activation_epoch": 1,
+     "issued_at": "2026-11-18T05:56:40.327Z",
+     "created": "2026-11-18T05:56:40.328Z",
+     "updated": "2026-11-18T05:56:40.330Z",
+     "revision": 34
+    },
+    "as_of": {
+     "lineage": "f57761aa7af3e691a551af84647e9d53",
+     "sequence": 34
+    }
+   }
+  },
+  {
+   "request": {
+    "protocol": "acf.host/2",
+    "request_id": "req-40ada17d839a4a77",
+    "operation_id": "op-4b4104e413b043d7a072f78e6229988a",
+    "issued_at": "2026-11-18T05:56:40.331Z",
+    "owner_scope": "default",
+    "wait_ms": 20000,
+    "method": "exec.run",
+    "params": {
+     "sandbox_id": "sbx-01a1ed3a8f087710b59fdbca9d045007",
+     "expected_generation": 1,
+     "command": {
+      "argv": [
+       "true"
+      ],
+      "env": {},
+      "secret_env": {
+       "PATH": {
+        "ref": "not-provisioned"
+       }
+      },
+      "limits": {}
+     }
+    }
+   },
+   "response": {
+    "protocol": "acf.host/2",
+    "request_id": "req-40ada17d839a4a77",
+    "answer": "OPERATION",
+    "operation": {
+     "operation_id": "op-4b4104e413b043d7a072f78e6229988a",
+     "operation_type": "exec.run",
+     "state": "FAILED",
+     "effect": "NOT_APPLIED",
+     "cleanup": "COMPLETE",
+     "cancelled_by": null,
+     "issuer": "PEER",
+     "tags": {
+      "peer_id": "local-operator",
+      "owner_scope": "default"
+     },
+     "on_behalf_of": null,
+     "target": "sbx-01a1ed3a8f087710b59fdbca9d045007",
+     "step": "resolve_secrets",
+     "failure": {
+      "class": "DEPENDENCY_UNAVAILABLE",
+      "message": "a secret reference did not resolve: the secret reference does not resolve on this host",
+      "side_effect": "NONE"
+     },
+     "result": null,
+     "run_id": "run-01a1ed3a8f0c704a8411bd519d17c4d5",
+     "sandbox": [
+      "sbx-01a1ed3a8f087710b59fdbca9d045007",
+      1
+     ],
+     "snapshot": null,
+     "profile_id": {
+      "name": "test",
+      "version": "1.0.0",
+      "digest": "fa8b2ddf9b2da66ffd38752017225124ea71a200061e7196800fbd36239314da"
+     },
+     "activation_epoch": 1,
+     "issued_at": "2026-11-18T05:56:40.331Z",
+     "created": "2026-11-18T05:56:40.332Z",
+     "updated": "2026-11-18T05:56:40.333Z",
+     "revision": 37
+    },
+    "as_of": {
+     "lineage": "f57761aa7af3e691a551af84647e9d53",
+     "sequence": 37
+    }
+   }
+  },
+  {
+   "request": {
+    "protocol": "acf.host/2",
+    "request_id": "req-dc57a6c9daa3407f",
+    "owner_scope": "default",
+    "method": "operation.get",
+    "params": {
+     "operation_id": "op-532b710449314b1dbf81a66246a7faa3"
+    }
+   },
+   "response": {
+    "protocol": "acf.host/2",
+    "request_id": "req-dc57a6c9daa3407f",
+    "answer": "RESULT",
+    "result": {
+     "type": "operation",
+     "data": {
+      "operation_id": "op-532b710449314b1dbf81a66246a7faa3",
+      "operation_type": "exec.run",
+      "state": "SUCCEEDED",
+      "effect": "APPLIED",
+      "cleanup": null,
+      "cancelled_by": null,
+      "issuer": "PEER",
+      "tags": {
+       "peer_id": "local-operator",
+       "owner_scope": "default"
+      },
+      "on_behalf_of": null,
+      "target": "sbx-01a1ed3a860171ccbd4032013572274a",
+      "step": "exec",
+      "failure": null,
+      "result": {
+       "type": "run",
+       "data": {
+        "run_id": "run-01a1ed3a86ee7385a99d07f7a518fca5",
+        "operation_id": "op-532b710449314b1dbf81a66246a7faa3",
+        "sandbox_id": "sbx-01a1ed3a860171ccbd4032013572274a",
+        "generation": 1,
+        "status": "EXITED",
+        "exit_code": 0,
+        "signal": null,
+        "stdout": {
+         "status": "COMPLETE",
+         "total_bytes": 19,
+         "kept_bytes": 19,
+         "data_b64": "cHl0aG9uIC1jIHByaW50KDEpCg==",
+         "artifact": {
+          "artifact_id": "art-01a1ed3a86ee7385a99d07f8642e2803",
+          "kind": "stdout",
+          "logical_name": "stdout",
+          "schema_version": 1,
+          "content_digest": "sha256:a9acca83931b3d335c46a3a42f7b791027a5e3145afdd773e92a787e1c5ef30d",
+          "byte_size": 19,
+          "source_operation_id": "op-532b710449314b1dbf81a66246a7faa3",
+          "sandbox_id": "sbx-01a1ed3a860171ccbd4032013572274a",
+          "run_id": "run-01a1ed3a86ee7385a99d07f7a518fca5"
+         }
+        },
+        "stderr": {
+         "status": "COMPLETE",
+         "total_bytes": 0,
+         "kept_bytes": 0,
+         "data_b64": "",
+         "artifact": null
+        },
+        "guest_duration_ms": 1,
+        "guest_containment": "guest cgroup v2 pids.max + cgroup.kill",
+        "host_backstop_fired": false,
+        "runtime_ended": false,
+        "metrics": {
+         "wall_ms": 1,
+         "cpu_usage_usec": null,
+         "memory_peak_bytes": null
+        },
+        "evidence_status": "COMPLETE",
+        "resource_evidence": [
+         {
+          "resource": "guest_pids",
+          "configured": 256,
+          "effective": 256,
+          "observed_peak": null,
+          "violated": false,
+          "action_taken": "none",
+          "mechanism": "guest cgroup v2 pids.max + cgroup.kill"
+         },
+         {
+          "resource": "runtime_ms",
+          "configured": 60000,
+          "effective": 60000,
+          "observed_peak": 1,
+          "violated": false,
+          "action_taken": "none",
+          "mechanism": "guest deadline + host backstop (monotonic)"
+         },
+         {
+          "resource": "stdout_bytes",
+          "configured": 1048576,
+          "effective": 1048576,
+          "observed_peak": 19,
+          "violated": false,
+          "action_taken": "none",
+          "mechanism": "guest capture cap, re-enforced by host"
+         },
+         {
+          "resource": "stderr_bytes",
+          "configured": 1048576,
+          "effective": 1048576,
+          "observed_peak": 0,
+          "violated": false,
+          "action_taken": "none",
+          "mechanism": "guest capture cap, re-enforced by host"
+         }
+        ],
+        "artifacts": [
+         {
+          "artifact_id": "art-01a1ed3a86ee7385a99d07f8642e2803",
+          "kind": "stdout",
+          "logical_name": "stdout",
+          "schema_version": 1,
+          "content_digest": "sha256:a9acca83931b3d335c46a3a42f7b791027a5e3145afdd773e92a787e1c5ef30d",
+          "byte_size": 19,
+          "source_operation_id": "op-532b710449314b1dbf81a66246a7faa3",
+          "sandbox_id": "sbx-01a1ed3a860171ccbd4032013572274a",
+          "run_id": "run-01a1ed3a86ee7385a99d07f7a518fca5"
+         }
+        ],
+        "profile_id": {
+         "name": "test",
+         "version": "1.0.0",
+         "digest": "fa8b2ddf9b2da66ffd38752017225124ea71a200061e7196800fbd36239314da"
+        },
+        "image_id": "sha256:b4211774fb7673c7a5a223be986dbaf473839a915b9505990cf910978949f0ae",
+        "note": null
+       }
+      },
+      "run_id": "run-01a1ed3a86ee7385a99d07f7a518fca5",
+      "sandbox": [
+       "sbx-01a1ed3a860171ccbd4032013572274a",
+       1
+      ],
+      "snapshot": null,
+      "profile_id": {
+       "name": "test",
+       "version": "1.0.0",
+       "digest": "fa8b2ddf9b2da66ffd38752017225124ea71a200061e7196800fbd36239314da"
+      },
+      "activation_epoch": 1,
+      "issued_at": "2026-11-18T05:56:38.253Z",
+      "created": "2026-11-18T05:56:38.254Z",
+      "updated": "2026-11-18T05:56:38.254Z",
+      "revision": 14
+     }
+    },
+    "as_of": {
+     "lineage": "f57761aa7af3e691a551af84647e9d53",
+     "sequence": 37
+    }
+   }
+  },
+  {
+   "request": {
+    "protocol": "acf.host/2",
+    "request_id": "req-f047089d744744f7",
+    "owner_scope": "default",
+    "method": "sandbox.list",
+    "params": {
+     "limit": 1
+    }
+   },
+   "response": {
+    "protocol": "acf.host/2",
+    "request_id": "req-f047089d744744f7",
+    "answer": "RESULT",
+    "result": {
+     "type": "sandboxes",
+     "data": {
+      "items": [
+       {
+        "sandbox_id": "sbx-01a1ed3a860171ccbd4032013572274a",
+        "generation": 2,
+        "name": "box",
+        "state": "READY",
+        "resources": {
+         "vcpus": 1,
+         "memory_mib": 128,
+         "disk_mib": 64,
+         "network": {
+          "mode": "allowlist",
+          "entries": [
+           {
+            "destination": {
+             "name": "pypi.org"
+            },
+            "ports": [
+             {
+              "from": 443,
+              "to": 443
+             }
+            ]
+           },
+           {
+            "destination": {
+             "network": "198.51.100.0/24"
+            },
+            "ports": [
+             {
+              "from": 5432,
+              "to": 5433
+             }
+            ]
+           }
+          ]
+         }
+        },
+        "image": {
+         "image_id": "sha256:b4211774fb7673c7a5a223be986dbaf473839a915b9505990cf910978949f0ae",
+         "alias": "python",
+         "architecture": "x86_64",
+         "kernel_identity": "sha256:6923dd1bc0460082c5d55a831908c24a282860b7f1cd6c2b79cf1bc8857c639c",
+         "rootfs_identity": "sha256:3c47ef972d531d524daa15fa33dd885dd23de6221bbd10a29eb42ecfcf2ef422",
+         "manifest_version": 1,
+         "provenance_reference": "test"
+        },
+        "tags": {
+         "peer_id": "local-operator",
+         "owner_scope": "default"
+        },
+        "expires_at": "2026-11-18T06:56:38.017Z",
+        "process": {
+         "pid": 40001,
+         "start_time_ticks": 280007,
+         "boot_id": "a7496fb7-4900-4ad9-a7fb-3cf7123e9923"
+        },
+        "security_profile_id": "fake-profile",
+        "last_run": null,
+        "source_snapshot": {
+         "snapshot_id": "snp-01a1ed3a86f477b8b963dc75dd7da126",
+         "snapshot_generation": 1
+        },
+        "failure": null,
+        "quarantined": null,
+        "secret_bearing": false,
+        "notes": [],
+        "updated": "2026-11-18T05:56:40.325Z",
+        "revision": 26
+       }
+      ],
+      "more": true,
+      "next": {
+       "lineage": "f57761aa7af3e691a551af84647e9d53",
+       "sequence": 26
+      }
+     }
+    },
+    "as_of": {
+     "lineage": "f57761aa7af3e691a551af84647e9d53",
+     "sequence": 37
+    }
+   }
+  },
+  {
+   "request": {
+    "protocol": "acf.host/2",
+    "request_id": "req-26148e86e435461f",
+    "owner_scope": "default",
+    "method": "operation.list",
+    "params": {
+     "limit": 2
+    }
+   },
+   "response": {
+    "protocol": "acf.host/2",
+    "request_id": "req-26148e86e435461f",
+    "answer": "RESULT",
+    "result": {
+     "type": "operations",
+     "data": {
+      "items": [
+       {
+        "operation_id": "op-820d49132ad04930a7817b7139788dd2",
+        "operation_type": "sandbox.create",
+        "state": "SUCCEEDED",
+        "effect": "APPLIED",
+        "cleanup": null,
+        "cancelled_by": null,
+        "issuer": "PEER",
+        "tags": {
+         "peer_id": "local-operator",
+         "owner_scope": "default"
+        },
+        "on_behalf_of": null,
+        "target": "sbx-01a1ed3a860171ccbd4032013572274a",
+        "step": "provision",
+        "failure": null,
+        "result": {
+         "type": "sandbox",
+         "data": {
+          "sandbox_id": "sbx-01a1ed3a860171ccbd4032013572274a",
+          "generation": 2,
+          "name": "box",
+          "state": "READY",
+          "resources": {
+           "vcpus": 1,
+           "memory_mib": 128,
+           "disk_mib": 64,
+           "network": {
+            "mode": "allowlist",
+            "entries": [
+             {
+              "destination": {
+               "name": "pypi.org"
+              },
+              "ports": [
+               {
+                "from": 443,
+                "to": 443
+               }
+              ]
+             },
+             {
+              "destination": {
+               "network": "198.51.100.0/24"
+              },
+              "ports": [
+               {
+                "from": 5432,
+                "to": 5433
+               }
+              ]
+             }
+            ]
+           }
+          },
+          "image": {
+           "image_id": "sha256:b4211774fb7673c7a5a223be986dbaf473839a915b9505990cf910978949f0ae",
+           "alias": "python",
+           "architecture": "x86_64",
+           "kernel_identity": "sha256:6923dd1bc0460082c5d55a831908c24a282860b7f1cd6c2b79cf1bc8857c639c",
+           "rootfs_identity": "sha256:3c47ef972d531d524daa15fa33dd885dd23de6221bbd10a29eb42ecfcf2ef422",
+           "manifest_version": 1,
+           "provenance_reference": "test"
+          },
+          "tags": {
+           "peer_id": "local-operator",
+           "owner_scope": "default"
+          },
+          "expires_at": "2026-11-18T06:56:38.017Z",
+          "process": {
+           "pid": 40001,
+           "start_time_ticks": 280007,
+           "boot_id": "a7496fb7-4900-4ad9-a7fb-3cf7123e9923"
+          },
+          "security_profile_id": "fake-profile",
+          "last_run": null,
+          "source_snapshot": {
+           "snapshot_id": "snp-01a1ed3a86f477b8b963dc75dd7da126",
+           "snapshot_generation": 1
+          },
+          "failure": null,
+          "quarantined": null,
+          "secret_bearing": false,
+          "notes": [],
+          "updated": "2026-11-18T05:56:40.325Z",
+          "revision": 26
+         }
+        },
+        "run_id": null,
+        "sandbox": [
+         "sbx-01a1ed3a860171ccbd4032013572274a",
+         1
+        ],
+        "snapshot": null,
+        "profile_id": {
+         "name": "test",
+         "version": "1.0.0",
+         "digest": "fa8b2ddf9b2da66ffd38752017225124ea71a200061e7196800fbd36239314da"
+        },
+        "activation_epoch": 1,
+        "issued_at": "2026-11-18T05:56:38.016Z",
+        "created": "2026-11-18T05:56:38.017Z",
+        "updated": "2026-11-18T05:56:38.018Z",
+        "revision": 7
+       },
+       {
+        "operation_id": "op-fc5ee2ca26ec45a1960f95aab7a4ccca",
+        "operation_type": "sandbox.start",
+        "state": "SUCCEEDED",
+        "effect": "APPLIED",
+        "cleanup": null,
+        "cancelled_by": null,
+        "issuer": "PEER",
+        "tags": {
+         "peer_id": "local-operator",
+         "owner_scope": "default"
+        },
+        "on_behalf_of": null,
+        "target": "sbx-01a1ed3a860171ccbd4032013572274a",
+        "step": "launch",
+        "failure": null,
+        "result": {
+         "type": "sandbox",
+         "data": {
+          "sandbox_id": "sbx-01a1ed3a860171ccbd4032013572274a",
+          "generation": 2,
+          "name": "box",
+          "state": "READY",
+          "resources": {
+           "vcpus": 1,
+           "memory_mib": 128,
+           "disk_mib": 64,
+           "network": {
+            "mode": "allowlist",
+            "entries": [
+             {
+              "destination": {
+               "name": "pypi.org"
+              },
+              "ports": [
+               {
+                "from": 443,
+                "to": 443
+               }
+              ]
+             },
+             {
+              "destination": {
+               "network": "198.51.100.0/24"
+              },
+              "ports": [
+               {
+                "from": 5432,
+                "to": 5433
+               }
+              ]
+             }
+            ]
+           }
+          },
+          "image": {
+           "image_id": "sha256:b4211774fb7673c7a5a223be986dbaf473839a915b9505990cf910978949f0ae",
+           "alias": "python",
+           "architecture": "x86_64",
+           "kernel_identity": "sha256:6923dd1bc0460082c5d55a831908c24a282860b7f1cd6c2b79cf1bc8857c639c",
+           "rootfs_identity": "sha256:3c47ef972d531d524daa15fa33dd885dd23de6221bbd10a29eb42ecfcf2ef422",
+           "manifest_version": 1,
+           "provenance_reference": "test"
+          },
+          "tags": {
+           "peer_id": "local-operator",
+           "owner_scope": "default"
+          },
+          "expires_at": "2026-11-18T06:56:38.017Z",
+          "process": {
+           "pid": 40001,
+           "start_time_ticks": 280007,
+           "boot_id": "a7496fb7-4900-4ad9-a7fb-3cf7123e9923"
+          },
+          "security_profile_id": "fake-profile",
+          "last_run": null,
+          "source_snapshot": {
+           "snapshot_id": "snp-01a1ed3a86f477b8b963dc75dd7da126",
+           "snapshot_generation": 1
+          },
+          "failure": null,
+          "quarantined": null,
+          "secret_bearing": false,
+          "notes": [],
+          "updated": "2026-11-18T05:56:40.325Z",
+          "revision": 26
+         }
+        },
+        "run_id": null,
+        "sandbox": [
+         "sbx-01a1ed3a860171ccbd4032013572274a",
+         1
+        ],
+        "snapshot": null,
+        "profile_id": {
+         "name": "test",
+         "version": "1.0.0",
+         "digest": "fa8b2ddf9b2da66ffd38752017225124ea71a200061e7196800fbd36239314da"
+        },
+        "activation_epoch": 1,
+        "issued_at": "2026-11-18T05:56:38.250Z",
+        "created": "2026-11-18T05:56:38.251Z",
+        "updated": "2026-11-18T05:56:38.252Z",
+        "revision": 11
+       }
+      ],
+      "more": true,
+      "next": {
+       "lineage": "f57761aa7af3e691a551af84647e9d53",
+       "sequence": 11
+      }
+     }
+    },
+    "as_of": {
+     "lineage": "f57761aa7af3e691a551af84647e9d53",
+     "sequence": 37
+    }
+   }
+  },
+  {
+   "request": {
+    "protocol": "acf.host/2",
+    "request_id": "req-5b016e7a334e4670",
+    "operation_id": "op-21da9dd54aba4ca088eb25e969cee7c2",
+    "issued_at": "2026-11-18T05:56:40.338Z",
+    "owner_scope": "default",
+    "wait_ms": 20000,
+    "method": "operation.cancel",
+    "params": {
+     "operation_id": "op-532b710449314b1dbf81a66246a7faa3"
+    }
+   },
+   "response": {
+    "protocol": "acf.host/2",
+    "request_id": "req-5b016e7a334e4670",
+    "answer": "OPERATION",
+    "operation": {
+     "operation_id": "op-21da9dd54aba4ca088eb25e969cee7c2",
+     "operation_type": "operation.cancel",
+     "state": "SUCCEEDED",
+     "effect": "APPLIED",
+     "cleanup": null,
+     "cancelled_by": null,
+     "issuer": "PEER",
+     "tags": {
+      "peer_id": "local-operator",
+      "owner_scope": "default"
+     },
+     "on_behalf_of": null,
+     "target": "op-532b710449314b1dbf81a66246a7faa3",
+     "step": "cancel",
+     "failure": null,
+     "result": {
+      "type": "host",
+      "data": {
+       "mode": null,
+       "profile": null,
+       "note": "the execution ended Succeeded"
+      }
+     },
+     "run_id": "run-01a1ed3a86ee7385a99d07f7a518fca5",
+     "sandbox": null,
+     "snapshot": null,
+     "profile_id": {
+      "name": "test",
+      "version": "1.0.0",
+      "digest": "fa8b2ddf9b2da66ffd38752017225124ea71a200061e7196800fbd36239314da"
+     },
+     "activation_epoch": 1,
+     "issued_at": "2026-11-18T05:56:40.338Z",
+     "created": "2026-11-18T05:56:40.339Z",
+     "updated": "2026-11-18T05:56:40.339Z",
+     "revision": 40
+    },
+    "as_of": {
+     "lineage": "f57761aa7af3e691a551af84647e9d53",
+     "sequence": 40
+    }
+   }
+  },
+  {
+   "request": {
+    "protocol": "acf.host/2",
+    "request_id": "req-e830f4e551eb4186",
+    "owner_scope": "default",
+    "method": "sandbox.inspect",
+    "params": {
+     "sandbox": "no-such-sandbox"
+    }
+   },
+   "response": {
+    "protocol": "acf.host/2",
+    "request_id": "req-e830f4e551eb4186",
+    "answer": "REFUSED",
+    "refusal": {
+     "class": "NOT_FOUND",
+     "retry": "NEVER",
+     "message": "no such sandbox"
+    },
+    "as_of": {
+     "lineage": "f57761aa7af3e691a551af84647e9d53",
+     "sequence": 40
+    }
+   }
+  },
+  {
+   "request": {
+    "protocol": "acf.host/2",
+    "request_id": "req-dd6d842941ba4b07",
+    "operation_id": "op-63fa8fa6935d49939281c3f22da68f73",
+    "issued_at": "2026-11-18T05:56:40.341Z",
+    "owner_scope": "default",
+    "wait_ms": 20000,
+    "method": "sandbox.start",
+    "params": {
+     "sandbox_id": "sbx-01a1ed3a860171ccbd4032013572274a",
+     "expected_generation": 2
+    }
+   },
+   "response": {
+    "protocol": "acf.host/2",
+    "request_id": "req-dd6d842941ba4b07",
+    "answer": "REFUSED",
+    "refusal": {
+     "class": "STATE_CONFLICT",
+     "retry": "AFTER_CHANGE",
+     "message": "sandbox is Ready; only a freshly provisioned sandbox can be started"
+    },
+    "as_of": {
+     "lineage": "f57761aa7af3e691a551af84647e9d53",
+     "sequence": 40
+    }
+   }
+  },
+  {
+   "request": {
+    "protocol": "acf.host/2",
+    "request_id": "req-85d44323333940cc",
+    "operation_id": "op-4d15e034032147cf8de8ca703a59667e",
+    "issued_at": "2026-11-18T05:56:40.342Z",
+    "owner_scope": "default",
+    "wait_ms": 20000,
+    "method": "sandbox.start",
+    "params": {
+     "sandbox_id": "sbx-01a1ed3a860171ccbd4032013572274a",
+     "expected_generation": 1
+    }
+   },
+   "response": {
+    "protocol": "acf.host/2",
+    "request_id": "req-85d44323333940cc",
+    "answer": "REFUSED",
+    "refusal": {
+     "class": "REVISION_CONFLICT",
+     "retry": "AFTER_CHANGE",
+     "message": "sandbox sbx-01a1ed3a860171ccbd4032013572274a is at generation 2, not 1 (stale token)"
+    },
+    "as_of": {
+     "lineage": "f57761aa7af3e691a551af84647e9d53",
+     "sequence": 40
+    }
+   }
+  },
+  {
+   "request": {
+    "protocol": "acf.host/2",
+    "request_id": "req-7120293a80dc4610",
+    "operation_id": "op-b376b28f298b483bbcf2fb1d1a2e3c14",
+    "issued_at": "2026-11-18T05:56:40.343Z",
+    "owner_scope": "default",
+    "wait_ms": 20000,
+    "method": "sandbox.create",
+    "params": {
+     "image": "not-installed",
+     "resources": {
+      "vcpus": 1,
+      "memory_mib": 128,
+      "disk_mib": 64,
+      "network": {
+       "mode": "none"
+      }
+     }
+    }
+   },
+   "response": {
+    "protocol": "acf.host/2",
+    "request_id": "req-7120293a80dc4610",
+    "answer": "REFUSED",
+    "refusal": {
+     "class": "SAFETY_CONTROL_DENIED",
+     "retry": "AFTER_CHANGE",
+     "message": "image alias `not-installed` is not permitted by the safety profile"
+    },
+    "as_of": {
+     "lineage": "f57761aa7af3e691a551af84647e9d53",
+     "sequence": 40
+    }
+   }
+  },
+  {
+   "request": {
+    "protocol": "acf.host/2",
+    "request_id": "req-f931173149e14726",
+    "operation_id": "op-4f5a96e951cc4fd095c307f2dfe41182",
+    "issued_at": "2026-11-18T05:56:40.344Z",
+    "owner_scope": "default",
+    "wait_ms": 20000,
+    "method": "host.acknowledge",
+    "params": {
+     "condition": "store_regression"
+    }
+   },
+   "response": {
+    "protocol": "acf.host/2",
+    "request_id": "req-f931173149e14726",
+    "answer": "REFUSED",
+    "refusal": {
+     "class": "STATE_CONFLICT",
+     "retry": "AFTER_CHANGE",
+     "message": "there is no store regression to acknowledge"
+    },
+    "as_of": {
+     "lineage": "f57761aa7af3e691a551af84647e9d53",
+     "sequence": 40
+    }
+   }
+  },
+  {
+   "request": {
+    "protocol": "acf.host/2",
+    "request_id": "req-13c4f5a8cc8a44be",
+    "operation_id": "op-8f2e659c5af24a508be1a2cc020a58ec",
+    "issued_at": "2026-11-18T05:56:40.345Z",
+    "owner_scope": "default",
+    "wait_ms": 20000,
+    "method": "quarantine.release",
+    "params": {
+     "sandbox_id": "sbx-01a1ed3a860171ccbd4032013572274a",
+     "generation": 2,
+     "mode": "DECLARE_ABSENT"
+    }
+   },
+   "response": {
+    "protocol": "acf.host/2",
+    "request_id": "req-13c4f5a8cc8a44be",
+    "answer": "REFUSED",
+    "refusal": {
+     "class": "STATE_CONFLICT",
+     "retry": "AFTER_CHANGE",
+     "message": "the generation is not quarantined; use `sandbox.destroy`"
+    },
+    "as_of": {
+     "lineage": "f57761aa7af3e691a551af84647e9d53",
+     "sequence": 40
+    }
+   }
+  },
+  {
+   "request": {
+    "protocol": "acf.host/2",
+    "request_id": "req-34c2b13a024044e2",
+    "operation_id": "op-2d91a14935494a93bfbe28078b3417d4",
+    "retry": true,
+    "issued_at": "2026-11-18T05:56:40.346Z",
+    "owner_scope": "default",
+    "method": "sandbox.stop",
+    "params": {
+     "sandbox_id": "sbx-01a1ed3a860171ccbd4032013572274a",
+     "expected_generation": 1
+    }
+   },
+   "response": {
+    "protocol": "acf.host/2",
+    "request_id": "req-34c2b13a024044e2",
+    "answer": "REFUSED",
+    "refusal": {
+     "class": "NOT_FOUND",
+     "retry": "NEVER",
+     "message": "operation op-2d91a14935494a93bfbe28078b3417d4 is not known to this host; a retry is never treated as a new request"
+    },
+    "as_of": {
+     "lineage": "f57761aa7af3e691a551af84647e9d53",
+     "sequence": 40
+    }
+   }
+  },
+  {
+   "request": {
+    "protocol": "acf.host/2",
+    "request_id": "req-6902dd525b144644",
+    "operation_id": "op-96aa34ec74c44a38b6489bc3b92f0b3c",
+    "issued_at": "2026-11-18T05:56:40.346Z",
+    "owner_scope": "default",
+    "wait_ms": 20000,
+    "method": "host.set_mode",
+    "params": {
+     "mode": "DRAINING"
+    }
+   },
+   "response": {
+    "protocol": "acf.host/2",
+    "request_id": "req-6902dd525b144644",
+    "answer": "OPERATION",
+    "operation": {
+     "operation_id": "op-96aa34ec74c44a38b6489bc3b92f0b3c",
+     "operation_type": "host.set_mode",
+     "state": "SUCCEEDED",
+     "effect": "APPLIED",
+     "cleanup": null,
+     "cancelled_by": null,
+     "issuer": "PEER",
+     "tags": {
+      "peer_id": "local-operator",
+      "owner_scope": "default"
+     },
+     "on_behalf_of": null,
+     "target": "host",
+     "step": "set_mode",
+     "failure": null,
+     "result": {
+      "type": "host",
+      "data": {
+       "mode": "DRAINING",
+       "profile": null,
+       "note": null
+      }
+     },
+     "run_id": null,
+     "sandbox": null,
+     "snapshot": null,
+     "profile_id": {
+      "name": "test",
+      "version": "1.0.0",
+      "digest": "fa8b2ddf9b2da66ffd38752017225124ea71a200061e7196800fbd36239314da"
+     },
+     "activation_epoch": 1,
+     "issued_at": "2026-11-18T05:56:40.346Z",
+     "created": "2026-11-18T05:56:40.347Z",
+     "updated": "2026-11-18T05:56:40.347Z",
+     "revision": 43
+    },
+    "as_of": {
+     "lineage": "f57761aa7af3e691a551af84647e9d53",
+     "sequence": 43
+    }
+   }
+  },
+  {
+   "request": {
+    "protocol": "acf.host/2",
+    "request_id": "req-d9d20373dd484050",
+    "operation_id": "op-0c6463ab8ea749fba8fdb018f9b2668f",
+    "issued_at": "2026-11-18T05:56:40.348Z",
+    "owner_scope": "default",
+    "wait_ms": 20000,
+    "method": "sandbox.create",
+    "params": {
+     "image": "python",
+     "resources": {
+      "vcpus": 1,
+      "memory_mib": 128,
+      "disk_mib": 64,
+      "network": {
+       "mode": "none"
+      }
+     }
+    }
+   },
+   "response": {
+    "protocol": "acf.host/2",
+    "request_id": "req-d9d20373dd484050",
+    "answer": "REFUSED",
+    "refusal": {
+     "class": "HOST_NOT_SERVING",
+     "retry": "SAME_REQUEST_LATER",
+     "message": "the host is Draining and does not serve `sandbox.create` (Granting class). "
+    },
+    "as_of": {
+     "lineage": "f57761aa7af3e691a551af84647e9d53",
+     "sequence": 43
+    }
+   }
+  },
+  {
+   "request": {
+    "protocol": "acf.host/2",
+    "request_id": "req-67f975038bc74434",
+    "operation_id": "op-752a0a5548de44f0ba69e8f7e20bfefe",
+    "issued_at": "2026-11-18T05:56:40.349Z",
+    "owner_scope": "default",
+    "wait_ms": 20000,
+    "method": "host.set_mode",
+    "params": {
+     "mode": "SERVING"
+    }
+   },
+   "response": {
+    "protocol": "acf.host/2",
+    "request_id": "req-67f975038bc74434",
+    "answer": "OPERATION",
+    "operation": {
+     "operation_id": "op-752a0a5548de44f0ba69e8f7e20bfefe",
+     "operation_type": "host.set_mode",
+     "state": "SUCCEEDED",
+     "effect": "APPLIED",
+     "cleanup": null,
+     "cancelled_by": null,
+     "issuer": "PEER",
+     "tags": {
+      "peer_id": "local-operator",
+      "owner_scope": "default"
+     },
+     "on_behalf_of": null,
+     "target": "host",
+     "step": "set_mode",
+     "failure": null,
+     "result": {
+      "type": "host",
+      "data": {
+       "mode": "SERVING",
+       "profile": null,
+       "note": null
+      }
+     },
+     "run_id": null,
+     "sandbox": null,
+     "snapshot": null,
+     "profile_id": {
+      "name": "test",
+      "version": "1.0.0",
+      "digest": "fa8b2ddf9b2da66ffd38752017225124ea71a200061e7196800fbd36239314da"
+     },
+     "activation_epoch": 1,
+     "issued_at": "2026-11-18T05:56:40.349Z",
+     "created": "2026-11-18T05:56:40.349Z",
+     "updated": "2026-11-18T05:56:40.349Z",
+     "revision": 46
+    },
+    "as_of": {
+     "lineage": "f57761aa7af3e691a551af84647e9d53",
+     "sequence": 46
+    }
+   }
+  },
+  {
+   "request": {
+    "protocol": "acf.host/2",
+    "request_id": "req-3888016accdc4ea4",
+    "operation_id": "op-aefbc7d2efe24c249329679c05226a40",
+    "issued_at": "2026-11-18T05:56:40.350Z",
+    "owner_scope": "default",
+    "wait_ms": 20000,
+    "method": "profile.reload"
+   },
+   "response": {
+    "protocol": "acf.host/2",
+    "request_id": "req-3888016accdc4ea4",
+    "answer": "OPERATION",
+    "operation": {
+     "operation_id": "op-aefbc7d2efe24c249329679c05226a40",
+     "operation_type": "profile.reload",
+     "state": "SUCCEEDED",
+     "effect": "APPLIED",
+     "cleanup": null,
+     "cancelled_by": null,
+     "issuer": "PEER",
+     "tags": {
+      "peer_id": "local-operator",
+      "owner_scope": "default"
+     },
+     "on_behalf_of": null,
+     "target": "host",
+     "step": "install_profile",
+     "failure": null,
+     "result": {
+      "type": "host",
+      "data": {
+       "mode": null,
+       "profile": {
+        "name": "test",
+        "version": "1.0.0",
+        "digest": "fa8b2ddf9b2da66ffd38752017225124ea71a200061e7196800fbd36239314da"
+       },
+       "note": null
+      }
+     },
+     "run_id": null,
+     "sandbox": null,
+     "snapshot": null,
+     "profile_id": {
+      "name": "test",
+      "version": "1.0.0",
+      "digest": "fa8b2ddf9b2da66ffd38752017225124ea71a200061e7196800fbd36239314da"
+     },
+     "activation_epoch": 1,
+     "issued_at": "2026-11-18T05:56:40.350Z",
+     "created": "2026-11-18T05:56:40.351Z",
+     "updated": "2026-11-18T05:56:40.351Z",
+     "revision": 49
+    },
+    "as_of": {
+     "lineage": "f57761aa7af3e691a551af84647e9d53",
+     "sequence": 49
+    }
+   }
+  },
+  {
+   "request": {
+    "protocol": "acf.host/2",
+    "request_id": "req-e0ec026daca74aa0",
+    "operation_id": "op-ea2a4946455d461099ca972c750aac4a",
+    "issued_at": "2026-11-18T05:56:40.352Z",
+    "owner_scope": "default",
+    "wait_ms": 20000,
+    "method": "sandbox.stop",
+    "params": {
+     "sandbox_id": "sbx-01a1ed3a8f087710b59fdbca9d045007",
+     "expected_generation": 1
+    }
+   },
+   "response": {
+    "protocol": "acf.host/2",
+    "request_id": "req-e0ec026daca74aa0",
+    "answer": "OPERATION",
+    "operation": {
+     "operation_id": "op-ea2a4946455d461099ca972c750aac4a",
+     "operation_type": "sandbox.stop",
+     "state": "SUCCEEDED",
+     "effect": "APPLIED",
+     "cleanup": null,
+     "cancelled_by": null,
+     "issuer": "PEER",
+     "tags": {
+      "peer_id": "local-operator",
+      "owner_scope": "default"
+     },
+     "on_behalf_of": null,
+     "target": "sbx-01a1ed3a8f087710b59fdbca9d045007",
+     "step": "stop_runtime",
+     "failure": null,
+     "result": {
+      "type": "sandbox",
+      "data": {
+       "sandbox_id": "sbx-01a1ed3a8f087710b59fdbca9d045007",
+       "generation": 1,
+       "name": "copy",
+       "state": "STOPPED",
+       "resources": {
+        "vcpus": 1,
+        "memory_mib": 128,
+        "disk_mib": 64,
+        "network": {
+         "mode": "allowlist",
+         "entries": [
+          {
+           "destination": {
+            "name": "pypi.org"
+           },
+           "ports": [
+            {
+             "from": 443,
+             "to": 443
+            }
+           ]
+          },
+          {
+           "destination": {
+            "network": "198.51.100.0/24"
+           },
+           "ports": [
+            {
+             "from": 5432,
+             "to": 5433
+            }
+           ]
+          }
+         ]
+        }
+       },
+       "image": {
+        "image_id": "sha256:b4211774fb7673c7a5a223be986dbaf473839a915b9505990cf910978949f0ae",
+        "alias": "python",
+        "architecture": "x86_64",
+        "kernel_identity": "sha256:6923dd1bc0460082c5d55a831908c24a282860b7f1cd6c2b79cf1bc8857c639c",
+        "rootfs_identity": "sha256:3c47ef972d531d524daa15fa33dd885dd23de6221bbd10a29eb42ecfcf2ef422",
+        "manifest_version": 1,
+        "provenance_reference": "test"
+       },
+       "tags": {
+        "peer_id": "local-operator",
+        "owner_scope": "default"
+       },
+       "expires_at": "2026-11-18T06:56:40.328Z",
+       "process": null,
+       "security_profile_id": "fake-profile",
+       "last_run": "run-01a1ed3a8f0c704a8411bd519d17c4d5",
+       "source_snapshot": {
+        "snapshot_id": "snp-01a1ed3a86f477b8b963dc75dd7da126",
+        "snapshot_generation": 1
+       },
+       "failure": null,
+       "quarantined": null,
+       "secret_bearing": false,
+       "notes": [],
+       "updated": "2026-11-18T05:56:40.353Z",
+       "revision": 52
+      }
+     },
+     "run_id": null,
+     "sandbox": [
+      "sbx-01a1ed3a8f087710b59fdbca9d045007",
+      1
+     ],
+     "snapshot": null,
+     "profile_id": {
+      "name": "test",
+      "version": "1.0.0",
+      "digest": "fa8b2ddf9b2da66ffd38752017225124ea71a200061e7196800fbd36239314da"
+     },
+     "activation_epoch": 1,
+     "issued_at": "2026-11-18T05:56:40.352Z",
+     "created": "2026-11-18T05:56:40.352Z",
+     "updated": "2026-11-18T05:56:40.353Z",
+     "revision": 52
+    },
+    "as_of": {
+     "lineage": "f57761aa7af3e691a551af84647e9d53",
+     "sequence": 52
+    }
+   }
+  },
+  {
+   "request": {
+    "protocol": "acf.host/2",
+    "request_id": "req-3fcbfa01a7b64404",
+    "operation_id": "op-6e7d7e2ec59946e5a01d7b124cb44237",
+    "issued_at": "2026-11-18T05:56:40.354Z",
+    "owner_scope": "default",
+    "wait_ms": 20000,
+    "method": "sandbox.destroy",
+    "params": {
+     "sandbox_id": "sbx-01a1ed3a8f087710b59fdbca9d045007",
+     "expected_generation": 1
+    }
+   },
+   "response": {
+    "protocol": "acf.host/2",
+    "request_id": "req-3fcbfa01a7b64404",
+    "answer": "OPERATION",
+    "operation": {
+     "operation_id": "op-6e7d7e2ec59946e5a01d7b124cb44237",
+     "operation_type": "sandbox.destroy",
+     "state": "SUCCEEDED",
+     "effect": "APPLIED",
+     "cleanup": null,
+     "cancelled_by": null,
+     "issuer": "PEER",
+     "tags": {
+      "peer_id": "local-operator",
+      "owner_scope": "default"
+     },
+     "on_behalf_of": null,
+     "target": "sbx-01a1ed3a8f087710b59fdbca9d045007",
+     "step": "retire",
+     "failure": null,
+     "result": {
+      "type": "sandbox",
+      "data": {
+       "sandbox_id": "sbx-01a1ed3a8f087710b59fdbca9d045007",
+       "generation": 1,
+       "name": "copy",
+       "state": "DESTROYED",
+       "resources": {
+        "vcpus": 1,
+        "memory_mib": 128,
+        "disk_mib": 64,
+        "network": {
+         "mode": "allowlist",
+         "entries": [
+          {
+           "destination": {
+            "name": "pypi.org"
+           },
+           "ports": [
+            {
+             "from": 443,
+             "to": 443
+            }
+           ]
+          },
+          {
+           "destination": {
+            "network": "198.51.100.0/24"
+           },
+           "ports": [
+            {
+             "from": 5432,
+             "to": 5433
+            }
+           ]
+          }
+         ]
+        }
+       },
+       "image": {
+        "image_id": "sha256:b4211774fb7673c7a5a223be986dbaf473839a915b9505990cf910978949f0ae",
+        "alias": "python",
+        "architecture": "x86_64",
+        "kernel_identity": "sha256:6923dd1bc0460082c5d55a831908c24a282860b7f1cd6c2b79cf1bc8857c639c",
+        "rootfs_identity": "sha256:3c47ef972d531d524daa15fa33dd885dd23de6221bbd10a29eb42ecfcf2ef422",
+        "manifest_version": 1,
+        "provenance_reference": "test"
+       },
+       "tags": {
+        "peer_id": "local-operator",
+        "owner_scope": "default"
+       },
+       "expires_at": "2026-11-18T06:56:40.328Z",
+       "process": null,
+       "security_profile_id": "fake-profile",
+       "last_run": "run-01a1ed3a8f0c704a8411bd519d17c4d5",
+       "source_snapshot": {
+        "snapshot_id": "snp-01a1ed3a86f477b8b963dc75dd7da126",
+        "snapshot_generation": 1
+       },
+       "failure": null,
+       "quarantined": null,
+       "secret_bearing": false,
+       "notes": [],
+       "updated": "2026-11-18T05:56:40.354Z",
+       "revision": 55
+      }
+     },
+     "run_id": null,
+     "sandbox": [
+      "sbx-01a1ed3a8f087710b59fdbca9d045007",
+      1
+     ],
+     "snapshot": null,
+     "profile_id": {
+      "name": "test",
+      "version": "1.0.0",
+      "digest": "fa8b2ddf9b2da66ffd38752017225124ea71a200061e7196800fbd36239314da"
+     },
+     "activation_epoch": 1,
+     "issued_at": "2026-11-18T05:56:40.354Z",
+     "created": "2026-11-18T05:56:40.354Z",
+     "updated": "2026-11-18T05:56:40.354Z",
+     "revision": 55
+    },
+    "as_of": {
+     "lineage": "f57761aa7af3e691a551af84647e9d53",
+     "sequence": 55
+    }
+   }
+  },
+  {
+   "request": {
+    "protocol": "acf.host/2",
+    "request_id": "req-62f511dd84b643a4",
+    "operation_id": "op-71b58cae1c75400aa25b58563d019177",
+    "issued_at": "2026-11-18T05:56:40.356Z",
+    "owner_scope": "default",
+    "wait_ms": 20000,
+    "method": "sandbox.destroy",
+    "params": {
+     "sandbox_id": "sbx-01a1ed3a860171ccbd4032013572274a",
+     "expected_generation": 2
+    }
+   },
+   "response": {
+    "protocol": "acf.host/2",
+    "request_id": "req-62f511dd84b643a4",
+    "answer": "OPERATION",
+    "operation": {
+     "operation_id": "op-71b58cae1c75400aa25b58563d019177",
+     "operation_type": "sandbox.destroy",
+     "state": "SUCCEEDED",
+     "effect": "APPLIED",
+     "cleanup": null,
+     "cancelled_by": null,
+     "issuer": "PEER",
+     "tags": {
+      "peer_id": "local-operator",
+      "owner_scope": "default"
+     },
+     "on_behalf_of": null,
+     "target": "sbx-01a1ed3a860171ccbd4032013572274a",
+     "step": "retire",
+     "failure": null,
+     "result": {
+      "type": "sandbox",
+      "data": {
+       "sandbox_id": "sbx-01a1ed3a860171ccbd4032013572274a",
+       "generation": 2,
+       "name": "box",
+       "state": "DESTROYED",
+       "resources": {
+        "vcpus": 1,
+        "memory_mib": 128,
+        "disk_mib": 64,
+        "network": {
+         "mode": "allowlist",
+         "entries": [
+          {
+           "destination": {
+            "name": "pypi.org"
+           },
+           "ports": [
+            {
+             "from": 443,
+             "to": 443
+            }
+           ]
+          },
+          {
+           "destination": {
+            "network": "198.51.100.0/24"
+           },
+           "ports": [
+            {
+             "from": 5432,
+             "to": 5433
+            }
+           ]
+          }
+         ]
+        }
+       },
+       "image": {
+        "image_id": "sha256:b4211774fb7673c7a5a223be986dbaf473839a915b9505990cf910978949f0ae",
+        "alias": "python",
+        "architecture": "x86_64",
+        "kernel_identity": "sha256:6923dd1bc0460082c5d55a831908c24a282860b7f1cd6c2b79cf1bc8857c639c",
+        "rootfs_identity": "sha256:3c47ef972d531d524daa15fa33dd885dd23de6221bbd10a29eb42ecfcf2ef422",
+        "manifest_version": 1,
+        "provenance_reference": "test"
+       },
+       "tags": {
+        "peer_id": "local-operator",
+        "owner_scope": "default"
+       },
+       "expires_at": "2026-11-18T06:56:38.017Z",
+       "process": null,
+       "security_profile_id": "fake-profile",
+       "last_run": null,
+       "source_snapshot": {
+        "snapshot_id": "snp-01a1ed3a86f477b8b963dc75dd7da126",
+        "snapshot_generation": 1
+       },
+       "failure": null,
+       "quarantined": null,
+       "secret_bearing": false,
+       "notes": [],
+       "updated": "2026-11-18T05:56:40.357Z",
+       "revision": 58
+      }
+     },
+     "run_id": null,
+     "sandbox": [
+      "sbx-01a1ed3a860171ccbd4032013572274a",
+      2
+     ],
+     "snapshot": null,
+     "profile_id": {
+      "name": "test",
+      "version": "1.0.0",
+      "digest": "fa8b2ddf9b2da66ffd38752017225124ea71a200061e7196800fbd36239314da"
+     },
+     "activation_epoch": 1,
+     "issued_at": "2026-11-18T05:56:40.356Z",
+     "created": "2026-11-18T05:56:40.356Z",
+     "updated": "2026-11-18T05:56:40.357Z",
+     "revision": 58
+    },
+    "as_of": {
+     "lineage": "f57761aa7af3e691a551af84647e9d53",
+     "sequence": 58
+    }
+   }
+  },
+  {
+   "request": {
+    "protocol": "acf.host/2",
+    "request_id": "req-309e31e593514cff",
+    "operation_id": "op-f0359000767d41a9a41edeaffef11d67",
+    "issued_at": "2026-11-18T05:56:40.358Z",
+    "owner_scope": "default",
+    "wait_ms": 20000,
+    "method": "snapshot.delete",
+    "params": {
+     "snapshot": {
+      "snapshot_id": "snp-01a1ed3a86f477b8b963dc75dd7da126",
+      "snapshot_generation": 1
+     }
+    }
+   },
+   "response": {
+    "protocol": "acf.host/2",
+    "request_id": "req-309e31e593514cff",
+    "answer": "OPERATION",
+    "operation": {
+     "operation_id": "op-f0359000767d41a9a41edeaffef11d67",
+     "operation_type": "snapshot.delete",
+     "state": "SUCCEEDED",
+     "effect": "APPLIED",
+     "cleanup": null,
+     "cancelled_by": null,
+     "issuer": "PEER",
+     "tags": {
+      "peer_id": "local-operator",
+      "owner_scope": "default"
+     },
+     "on_behalf_of": null,
+     "target": "snp-01a1ed3a86f477b8b963dc75dd7da126",
+     "step": "remove",
+     "failure": null,
+     "result": {
+      "type": "snapshot",
+      "data": {
+       "snapshot": {
+        "snapshot_id": "snp-01a1ed3a86f477b8b963dc75dd7da126",
+        "snapshot_generation": 1
+       },
+       "name": "base",
+       "state": "DELETED",
+       "tags": {
+        "peer_id": "local-operator",
+        "owner_scope": "default"
+       },
+       "size_bytes": 0,
+       "source_sandbox": [
+        "sbx-01a1ed3a860171ccbd4032013572274a",
+        1
+       ],
+       "manifest_digest": "sha256:0f7f69e80d1f30c8acf0dd1eafce90aa44abd23f8f56b4365aad3a9518c09cef",
+       "restore_count": 2,
+       "secret_refs": [],
+       "incompatible": [],
+       "created": "2026-11-18T05:56:38.260Z",
+       "failure": null,
+       "revision": 61
+      }
+     },
+     "run_id": null,
+     "sandbox": null,
+     "snapshot": {
+      "snapshot_id": "snp-01a1ed3a86f477b8b963dc75dd7da126",
+      "snapshot_generation": 1
+     },
+     "profile_id": {
+      "name": "test",
+      "version": "1.0.0",
+      "digest": "fa8b2ddf9b2da66ffd38752017225124ea71a200061e7196800fbd36239314da"
+     },
+     "activation_epoch": 1,
+     "issued_at": "2026-11-18T05:56:40.358Z",
+     "created": "2026-11-18T05:56:40.359Z",
+     "updated": "2026-11-18T05:56:40.359Z",
+     "revision": 61
+    },
+    "as_of": {
+     "lineage": "f57761aa7af3e691a551af84647e9d53",
+     "sequence": 61
+    }
+   }
+  },
+  {
+   "request": {
+    "protocol": "acf.host/2",
+    "request_id": "req-afd86072b16740ad",
+    "owner_scope": "default",
+    "method": "sandbox.list",
+    "params": {
+     "changed_since": {
+      "lineage": "f57761aa7af3e691a551af84647e9d53",
+      "sequence": 37
+     }
+    }
+   },
+   "response": {
+    "protocol": "acf.host/2",
+    "request_id": "req-afd86072b16740ad",
+    "answer": "RESULT",
+    "result": {
+     "type": "sandboxes",
+     "data": {
+      "items": [
+       {
+        "sandbox_id": "sbx-01a1ed3a8f087710b59fdbca9d045007",
+        "generation": 1,
+        "name": "copy",
+        "state": "DESTROYED",
+        "resources": {
+         "vcpus": 1,
+         "memory_mib": 128,
+         "disk_mib": 64,
+         "network": {
+          "mode": "allowlist",
+          "entries": [
+           {
+            "destination": {
+             "name": "pypi.org"
+            },
+            "ports": [
+             {
+              "from": 443,
+              "to": 443
+             }
+            ]
+           },
+           {
+            "destination": {
+             "network": "198.51.100.0/24"
+            },
+            "ports": [
+             {
+              "from": 5432,
+              "to": 5433
+             }
+            ]
+           }
+          ]
+         }
+        },
+        "image": {
+         "image_id": "sha256:b4211774fb7673c7a5a223be986dbaf473839a915b9505990cf910978949f0ae",
+         "alias": "python",
+         "architecture": "x86_64",
+         "kernel_identity": "sha256:6923dd1bc0460082c5d55a831908c24a282860b7f1cd6c2b79cf1bc8857c639c",
+         "rootfs_identity": "sha256:3c47ef972d531d524daa15fa33dd885dd23de6221bbd10a29eb42ecfcf2ef422",
+         "manifest_version": 1,
+         "provenance_reference": "test"
+        },
+        "tags": {
+         "peer_id": "local-operator",
+         "owner_scope": "default"
+        },
+        "expires_at": "2026-11-18T06:56:40.328Z",
+        "process": null,
+        "security_profile_id": "fake-profile",
+        "last_run": "run-01a1ed3a8f0c704a8411bd519d17c4d5",
+        "source_snapshot": {
+         "snapshot_id": "snp-01a1ed3a86f477b8b963dc75dd7da126",
+         "snapshot_generation": 1
+        },
+        "failure": null,
+        "quarantined": null,
+        "secret_bearing": false,
+        "notes": [],
+        "updated": "2026-11-18T05:56:40.354Z",
+        "revision": 55
+       },
+       {
+        "sandbox_id": "sbx-01a1ed3a860171ccbd4032013572274a",
+        "generation": 2,
+        "name": "box",
+        "state": "DESTROYED",
+        "resources": {
+         "vcpus": 1,
+         "memory_mib": 128,
+         "disk_mib": 64,
+         "network": {
+          "mode": "allowlist",
+          "entries": [
+           {
+            "destination": {
+             "name": "pypi.org"
+            },
+            "ports": [
+             {
+              "from": 443,
+              "to": 443
+             }
+            ]
+           },
+           {
+            "destination": {
+             "network": "198.51.100.0/24"
+            },
+            "ports": [
+             {
+              "from": 5432,
+              "to": 5433
+             }
+            ]
+           }
+          ]
+         }
+        },
+        "image": {
+         "image_id": "sha256:b4211774fb7673c7a5a223be986dbaf473839a915b9505990cf910978949f0ae",
+         "alias": "python",
+         "architecture": "x86_64",
+         "kernel_identity": "sha256:6923dd1bc0460082c5d55a831908c24a282860b7f1cd6c2b79cf1bc8857c639c",
+         "rootfs_identity": "sha256:3c47ef972d531d524daa15fa33dd885dd23de6221bbd10a29eb42ecfcf2ef422",
+         "manifest_version": 1,
+         "provenance_reference": "test"
+        },
+        "tags": {
+         "peer_id": "local-operator",
+         "owner_scope": "default"
+        },
+        "expires_at": "2026-11-18T06:56:38.017Z",
+        "process": null,
+        "security_profile_id": "fake-profile",
+        "last_run": null,
+        "source_snapshot": {
+         "snapshot_id": "snp-01a1ed3a86f477b8b963dc75dd7da126",
+         "snapshot_generation": 1
+        },
+        "failure": null,
+        "quarantined": null,
+        "secret_bearing": false,
+        "notes": [],
+        "updated": "2026-11-18T05:56:40.357Z",
+        "revision": 58
+       }
+      ],
+      "more": false,
+      "next": {
+       "lineage": "f57761aa7af3e691a551af84647e9d53",
+       "sequence": 61
+      }
+     }
+    },
+    "as_of": {
+     "lineage": "f57761aa7af3e691a551af84647e9d53",
+     "sequence": 61
+    }
+   }
+  },
+  {
+   "request": {
+    "protocol": "acf.host/2",
+    "request_id": "req-7bc4e0cb898b46bf",
+    "owner_scope": "default",
+    "method": "snapshot.list",
+    "params": {
+     "changed_since": {
+      "lineage": "f57761aa7af3e691a551af84647e9d53",
+      "sequence": 37
+     }
+    }
+   },
+   "response": {
+    "protocol": "acf.host/2",
+    "request_id": "req-7bc4e0cb898b46bf",
+    "answer": "RESULT",
+    "result": {
+     "type": "snapshots",
+     "data": {
+      "items": [
+       {
+        "snapshot": {
+         "snapshot_id": "snp-01a1ed3a86f477b8b963dc75dd7da126",
+         "snapshot_generation": 1
+        },
+        "name": "base",
+        "state": "DELETED",
+        "tags": {
+         "peer_id": "local-operator",
+         "owner_scope": "default"
+        },
+        "size_bytes": 0,
+        "source_sandbox": [
+         "sbx-01a1ed3a860171ccbd4032013572274a",
+         1
+        ],
+        "manifest_digest": "sha256:0f7f69e80d1f30c8acf0dd1eafce90aa44abd23f8f56b4365aad3a9518c09cef",
+        "restore_count": 2,
+        "secret_refs": [],
+        "incompatible": [],
+        "created": "2026-11-18T05:56:38.260Z",
+        "failure": null,
+        "revision": 61
+       }
+      ],
+      "more": false,
+      "next": {
+       "lineage": "f57761aa7af3e691a551af84647e9d53",
+       "sequence": 61
+      }
+     }
+    },
+    "as_of": {
+     "lineage": "f57761aa7af3e691a551af84647e9d53",
+     "sequence": 61
+    }
+   }
+  }
+ ]
+}

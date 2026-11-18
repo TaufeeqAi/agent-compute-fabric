@@ -1,8 +1,8 @@
-//! Typed identifiers (spec §23.3). Every id is validated on construction **and** on
+//! Typed identifiers (contract §8). Every id is validated on construction **and** on
 //! deserialization, so a malformed id can never reach path construction or a jailer argv.
 //!
 //! This is a security property, not a style choice: persisted metadata never supplies a
-//! filesystem path (spec §19.3). Paths are *derived* from these validated ids, and the
+//! filesystem path (contract ID-5, ST-1). Paths are *derived* from these validated ids, and the
 //! charset (`[a-z0-9-]`, fixed length) makes `..`, `/` and NUL unrepresentable.
 
 use std::fmt;
@@ -12,6 +12,16 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::error::{AcfError, Result};
+
+/// 128 bits from the kernel CSPRNG, hex-encoded: ownership nonces and the store lineage.
+pub fn random_token() -> Result<String> {
+    use std::io::Read;
+    let mut b = [0u8; 16];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut b))
+        .map_err(|e| AcfError::internal(format!("cannot read /dev/urandom: {e}")))?;
+    Ok(hex::encode(b))
+}
 
 fn is_lower_hex32(s: &str) -> bool {
     s.len() == 32 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
@@ -80,7 +90,8 @@ macro_rules! prefixed_id {
 
 prefixed_id!(
     /// Identity of a sandbox across all of its generations.
-    SandboxId, "sbx-"
+    SandboxId,
+    "sbx-"
 );
 prefixed_id!(RunId, "run-");
 prefixed_id!(SnapshotId, "snp-");
@@ -137,7 +148,7 @@ impl JsonSchema for OperationId {
     }
 }
 
-/// Monotonic per-sandbox incarnation counter (spec §11.4). Starts at 1; never reused.
+/// Monotonic per-sandbox incarnation counter (contract ID-1). Starts at 1; never reused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 #[serde(transparent)]
 pub struct Generation(pub u64);
@@ -157,7 +168,7 @@ impl fmt::Display for Generation {
     }
 }
 
-/// A sandbox incarnation. Destructive operations require *this*, never a name (spec §12.5).
+/// A sandbox incarnation. Destructive operations require *this*, never a name (contract ID-5).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct SandboxRef {
     pub sandbox_id: SandboxId,

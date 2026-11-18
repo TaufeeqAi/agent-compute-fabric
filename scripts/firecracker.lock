@@ -3,24 +3,29 @@
 #
 # VERSION must equal `firecracker.pinned_version` in /etc/acf/host.yaml. A Firecracker snapshot is only
 # valid on the exact version that took it, so this is changed only together with the binaries, the
-# guest kernel/agent images and a re-run of tests/integration.
+# guest kernel/agent images and a re-run of tests/integration on a KVM host.
 #
-# Verified upstream, 2026-10-09/12: tag v1.17.0 exists; its CHANGELOG lists [1.17.0] including the
-# `sync_snapshot_files` snapshot parameter this host uses; v1.17.1 and v1.18.0 do not exist.
+# Verified upstream on 2026-11-18 (release metadata of firecracker-microvm/firecracker):
+#   v1.17.0  published 2026-09-10. Its changelog lists the `sync_snapshot_files` snapshot parameter this
+#            host uses, and the jailer ownership-race fix (#5956).
+#   v1.18.0  published 2026-11-09. It adds Nitro Sandbox support (`PUT /enclave`) and changes nothing in the
+#            API calls or jailer flags this host uses. The pin is NOT moved to it here: no KVM host was
+#            available to run tests/integration against it, and the pin moves only with that run.
 VERSION=v1.17.0
 
 # sha256 of the release tarball firecracker-<VERSION>-<arch>.tgz.
 #
-# UNSET means "not pinned yet" and the installer REFUSES to continue (exit 3): ACF will not install
-# a root-executed binary on trust. The digests were not filled in by the author of this repository
-# because the release assets could not be reached from the environment it was written in (see
-# docs/VERIFICATION_STATUS.md); inventing them would be worse than leaving them unset.
+# Each value below was read from two independent published sources that agree: the release's asset
+# metadata (`digest`) and the `<tarball>.sha256.txt` file published beside the tarball. They were not
+# measured from a downloaded tarball in the environment this file was written in. The installer measures
+# the tarball it downloads and refuses on any difference, so a wrong value here fails closed.
 #
-# To pin (do this once, on a machine that can reach GitHub, and review the result in code review):
+# To re-verify (on a machine that can reach GitHub):
 #   gh api repos/firecracker-microvm/firecracker/releases/tags/v1.17.0 \
 #     --jq '.assets[] | select(.name | endswith(".tgz")) | "\(.name) \(.digest)"'
-# then cross-check against the release page's published `*.tgz.sha256.txt` before committing.
-# `scripts/install-firecracker.sh --print-digest` downloads the tarball and prints the digest it
-# measured, to compare against those two sources.
-SHA256_x86_64=UNSET
-SHA256_aarch64=UNSET
+#   scripts/install-firecracker.sh --print-digest      # downloads the tarball and prints what it measured
+#
+# UNSET means "not pinned" and the installer REFUSES to continue (exit 3): a root-executed binary is never
+# installed on trust.
+SHA256_x86_64=06094a1108ae9e82aa4c23a775aa92758f53f1175d422270d9d6162cb9ade558
+SHA256_aarch64=e351ebe4f7a16b5873bbd51005d2e6767103cff4d5ebc829df2d3f95a93e2256

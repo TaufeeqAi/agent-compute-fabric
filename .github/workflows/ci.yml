@@ -27,7 +27,7 @@ env:
 
 jobs:
   rust:
-    name: Rust - fmt, clippy, tests, schemas
+    name: Rust - fmt, clippy, tests, generated contracts
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -37,11 +37,51 @@ jobs:
       # rust-toolchain.toml pins the compiler (and rustfmt/clippy); rustup >= 1.28 installs it only on request.
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: make rust-fmt
       - run: make rust-lint
+      # The whole workspace with every feature. The tests of the trusted-file rule keep their files under
+      # $HOME/.cache/acf-test, because the rule refuses anything below a world-writable directory such as /tmp.
       - run: make rust-test
-      - run: make check-schemas
+      # execution/contracts/ and schemas/ are generated from the Rust types and checked in: any difference fails.
+      - run: make check-schema
+
+  privileged:
+    name: Rust - tests that need a network namespace or root
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # The tests build a real namespace, device and packet filter with the programs the host itself uses.
+      - name: Install iproute2 and nftables
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends iproute2 nftables
+      # The tests run as the runner's ordinary user, inside `unshare --user --map-root-user --net --mount`.
+      # Ubuntu 24.04 lets an unprivileged process create a user namespace only where an AppArmor profile says
+      # so (kernel.apparmor_restrict_unprivileged_userns=1), and `unshare` has no such profile. This throw-away
+      # runner lifts the restriction; the tests themselves still hold no privilege on the machine.
+      - name: Allow unprivileged user namespaces on this runner
+        run: |
+          set -euo pipefail
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+      # `cargo test` never runs these tests (they are ignored unless asked for), so this job is the only place
+      # CI runs them. ACF_REQUIRE_NETNS=1 turns "this machine cannot give me a namespace" from a skip into a
+      # failure: the job cannot go green without having run them.
+      - name: Network plumbing and redirect tests
+        run: ACF_REQUIRE_NETNS=1 make net-plumbing-test
+      # The tests that need root itself, which `cargo test` ignores as well. The target builds as the runner's
+      # ordinary user and runs only the two test binaries through sudo, so nothing in target/ becomes root's.
+      - name: Tests that need root
+        run: make root-test
 
   release:
     name: Release build - purity proof and static guest agent
@@ -53,9 +93,9 @@ jobs:
           persist-credentials: false
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       # Builds acf-host WITHOUT the `testing` feature and fails if any test-only string is in the binary
-      # (the check is validated against a binary that has the feature: it must be able to find something).
+      # (the check is validated against acf-host-fake, which has the feature: it must be able to find something).
       - run: make release
       - run: make guest-agent
       - name: Checksums
@@ -66,7 +106,7 @@ jobs:
           (cd out && sha256sum acf-host acf-guest-agent | tee SHA256SUMS)
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: acf-phase1-binaries
+          name: acf-execution-plane-binaries
           path: out/
           if-no-files-found: error
 
@@ -80,18 +120,19 @@ jobs:
           persist-credentials: false
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.13.1"
+          version: "0.13.9"
           enable-cache: true
       - run: make py-lint
       - run: make py-test
       # A missing host binary FAILS here (ACF_REQUIRE_E2E=1 in the Makefile), it is never a quiet skip.
       - run: make e2e
       - run: make driver-selftest
-      # The same host-facing checks the KVM suite makes (admission, ceilings, state machine, identity, policy), run
-      # against the in-memory host loaded with the SHIPPED config/host.example.yaml and policies/default.yaml.
+      # The same host-facing checks the KVM suite makes (admission, ceilings, state machine, identity, safety
+      # profile), run against the in-memory host loaded with the SHIPPED config/host.example.yaml and
+      # profiles/default.yaml.
       - run: make control-plane
       # Authorisation is tested with a real client running as another uid, which needs root. Unprivileged those
       # tests SKIP; ACF_REQUIRE_ROOT=1 turns that skip into a failure so the gate cannot go green without them.
@@ -106,14 +147,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.13.1"
+          version: "0.13.9"
           enable-cache: true
       - run: make tools-lint
-      # The init, rootfs and image-build tests need uid 0 (real ownership, PID namespaces, mke2fs -d).
+      # The install, init, rootfs and image-build tests need uid 0 (real ownership, PID namespaces, mke2fs -d).
       # Without it they would SKIP, which is not the same as passing.
-      - name: Script and image tests (as root)
+      - name: Script, unit-file and image tests (as root)
         run: sudo --preserve-env=HOME env "PATH=$PATH" make tools-pytest
       - run: make check-pins
+      # All three units: acf-cgroup, acf-lifetime, acf-host. A setting systemd ignores is a failure.
       - run: make systemd-verify

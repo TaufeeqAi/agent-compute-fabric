@@ -131,15 +131,13 @@ fn second_exec_while_one_is_running_gets_busy_and_cancel_reaches_the_first() {
     }
 }
 
-/// Spec §18.4 / §27.5 "process-tree abuse": a fork loop as an unprivileged uid must be
+/// Process-tree abuse (contract EX-2, EX-4, RS-2): a fork loop as an unprivileged uid must be
 /// contained by the process budget, terminate at the deadline, and leave nothing behind.
 /// Requires running as root so the agent can drop to an unprivileged uid.
 #[test]
+#[ignore = "needs root: run with `make root-test`"]
 fn fork_bomb_is_contained_by_the_process_budget() {
-    if !rustix::process::getuid().is_root() {
-        eprintln!("skipping: needs root to switch uid");
-        return;
-    }
+    assert!(rustix::process::getuid().is_root(), "this test needs root: the agent switches to an unprivileged uid");
     const UID: u32 = 64_321;
     let d = tempfile::tempdir().unwrap();
     let mut c = connect(&agent(d.path()));

@@ -13,7 +13,9 @@ The kernel runs with no modules and no initramfs (``nomodule`` is on its command
 required feature must be built in (``=y``); ``=m`` does not count.
 
 The list follows Firecracker's own "Guest kernel configuration items" and "Minimal boot requirements"
-(docs/kernel-policy.md, v1.17.0) for the boot path, plus what ACF's guest agent and init add.
+(docs/kernel-policy.md, v1.17.0) for the boot path, plus what ACF's guest agent and init add. What only
+network mode ``allowlist`` needs (a network device, and the kernel's own address configuration) is
+reported as a note: a kernel without it still serves network mode ``none``.
 
 If the kernel was built without ``CONFIG_IKCONFIG`` there is no embedded configuration to read. That is
 reported as *unverifiable* (exit 3), never as a pass: pass ``--config`` with the ``.config`` it was
@@ -76,9 +78,12 @@ ADVICE: dict[str, str] = {
     "CONFIG_IKCONFIG": "lets this tool (and operators) read the configuration back out of the image",
 }
 
-# Not needed by a guest that never has a network device; omitting them shrinks the kernel's attack surface.
-UNNEEDED: dict[str, str] = {
-    "CONFIG_VIRTIO_NET": "no network device is ever attached (network=none); the driver is unreachable code",
+# Needed only by network mode `allowlist`, in which the guest has one network device and takes its address,
+# gateway and resolver from the kernel command line. A kernel without them still runs every sandbox in mode
+# `none`, so their absence is reported and never fatal.
+ALLOWLIST: dict[str, str] = {
+    "CONFIG_VIRTIO_NET": "the guest's network device (eth0)",
+    "CONFIG_IP_PNP": "the guest's address, gateway and resolver are set from the kernel command line (`ip=`)",
 }
 
 _LINE = re.compile(r"^(?P<key>CONFIG_[A-Z0-9_]+)=(?P<val>.*)$")
@@ -123,8 +128,8 @@ def architecture_of(cfg: dict[str, str]) -> str | None:
 
 
 class Report:
-    def __init__(self, arch: str, missing: list[str], advice: list[str], unneeded: list[str]) -> None:
-        self.arch, self.missing, self.advice, self.unneeded = arch, missing, advice, unneeded
+    def __init__(self, arch: str, missing: list[str], advice: list[str], no_allowlist: list[str]) -> None:
+        self.arch, self.missing, self.advice, self.no_allowlist = arch, missing, advice, no_allowlist
 
     @property
     def ok(self) -> bool:
@@ -142,8 +147,8 @@ def evaluate(cfg: dict[str, str]) -> Report:
             options = " or ".join("+".join(g) for g in DISCOVERY_X86_64)
             missing.append(f"one of [{options}]: the guest must be able to discover Firecracker's virtio-mmio devices")
     advice = [f"{k}: {why}" for k, why in ADVICE.items() if cfg.get(k) != "y"]
-    unneeded = [f"{k}: {why}" for k, why in UNNEEDED.items() if cfg.get(k) in ("y", "m")]
-    return Report(arch, missing, advice, unneeded)
+    no_allowlist = [f"{k}: {why}" for k, why in ALLOWLIST.items() if cfg.get(k) != "y"]
+    return Report(arch, missing, advice, no_allowlist)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -188,8 +193,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     for line in report.advice:
         print(f"note    {line}", file=sys.stderr)
-    for line in report.unneeded:
-        print(f"note    {line}", file=sys.stderr)
+    for line in report.no_allowlist:
+        print(f"note    network mode `allowlist` needs {line}", file=sys.stderr)
     for line in report.missing:
         print(f"MISSING {line}", file=sys.stderr)
     if args.arch is not None and report.arch != args.arch:

@@ -1,0 +1,132 @@
+{
+  "$defs": {
+    "CredentialMatcher": {
+      "description": "How an enrolled peer proves who it is.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Network endpoint: lower-case hex SHA-256 of the DER encoding of the client's leaf certificate.",
+          "properties": {
+            "certificate_sha256": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "certificate_sha256"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Network endpoint: lower-case hex SHA-256 of the leaf certificate's DER SubjectPublicKeyInfo.\nSurvives re-issuance of the certificate for the same key.",
+          "properties": {
+            "spki_sha256": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "spki_sha256"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Local endpoint: the uid the kernel reports for the connecting process.",
+          "properties": {
+            "local_uid": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "local_uid"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Local endpoint: the primary gid the kernel reports for the connecting process.",
+          "properties": {
+            "local_gid": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "local_gid"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "EnrolmentEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "match": {
+          "$ref": "#/$defs/CredentialMatcher"
+        },
+        "peer_id": {
+          "$ref": "#/$defs/PeerId"
+        },
+        "role": {
+          "$ref": "#/$defs/Role"
+        }
+      },
+      "required": [
+        "peer_id",
+        "role",
+        "match"
+      ],
+      "type": "object"
+    },
+    "PeerId": {
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9._:/@=+-]+$",
+      "type": "string"
+    },
+    "Role": {
+      "description": "The closed role set (§9.2).",
+      "oneOf": [
+        {
+          "const": "observer",
+          "description": "`host.info` and `host.metrics` only.",
+          "type": "string"
+        },
+        {
+          "const": "caller",
+          "description": "Every granting, containment and read method, on records carrying its own tags.",
+          "type": "string"
+        },
+        {
+          "const": "operator",
+          "description": "Everything a caller may call, on any record, plus the operator methods.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "peers": {
+      "items": {
+        "$ref": "#/$defs/EnrolmentEntry"
+      },
+      "type": "array"
+    },
+    "schema_version": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "schema_version",
+    "peers"
+  ],
+  "title": "EnrolmentDoc",
+  "type": "object"
+}

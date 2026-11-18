@@ -1,0 +1,299 @@
+{
+  "$defs": {
+    "Capabilities": {
+      "additionalProperties": false,
+      "description": "Capability switches (§9.4). A switch that is off, or a word that is not listed, is a denial.",
+      "properties": {
+        "exec": {
+          "type": "boolean"
+        },
+        "images": {
+          "description": "Image *aliases* a caller may select. Empty = no images = nothing can be created.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "network_modes": {
+          "items": {
+            "$ref": "#/$defs/NetworkMode"
+          },
+          "type": "array"
+        },
+        "private_destinations": {
+          "description": "Whether an allowlist entry may name a private address range (AL-6).",
+          "type": "boolean"
+        },
+        "sandbox_destroy": {
+          "type": "boolean"
+        },
+        "secret_injection": {
+          "description": "Delivery of secrets by reference (§22). Also requires the backend to declare it.",
+          "type": "boolean"
+        },
+        "snapshot_create": {
+          "type": "boolean"
+        },
+        "snapshot_delete": {
+          "type": "boolean"
+        },
+        "snapshot_restore": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "network_modes",
+        "images",
+        "exec",
+        "snapshot_create",
+        "snapshot_restore",
+        "snapshot_delete",
+        "sandbox_destroy",
+        "secret_injection",
+        "private_destinations"
+      ],
+      "type": "object"
+    },
+    "ExecutionRules": {
+      "additionalProperties": false,
+      "properties": {
+        "cwd_prefixes": {
+          "description": "A command's cwd must be one of these directories or beneath one.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "default_cwd": {
+          "type": "string"
+        },
+        "env_allowlist": {
+          "description": "Exact environment variable names a caller may set. Everything else is refused.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "guest_gid": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "guest_uid": {
+          "description": "Unprivileged identity commands run as inside the guest. Never 0 (N3).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "env_allowlist",
+        "cwd_prefixes",
+        "default_cwd",
+        "guest_uid",
+        "guest_gid"
+      ],
+      "type": "object"
+    },
+    "NetworkMode": {
+      "description": "The mode vocabulary. Any other word is refused with `UNSUPPORTED` before the request is decoded\nany further (§20.1, `api::command`): a mode this host does not know is a capability it does not\noffer. A known mode that the backend does not support is `UNSUPPORTED` too, and one that the\nsafety profile does not list is `SAFETY_CONTROL_DENIED`.",
+      "oneOf": [
+        {
+          "const": "none",
+          "description": "No network device exists in the guest.",
+          "type": "string"
+        },
+        {
+          "const": "allowlist",
+          "description": "Outbound TCP to listed destinations only, through the host's resolver and relay.",
+          "type": "string"
+        }
+      ]
+    },
+    "ProfileDefaults": {
+      "additionalProperties": false,
+      "properties": {
+        "lifetime_secs": {
+          "description": "Lifetime of a sandbox whose request names none.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pids": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "runtime_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "stderr_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "stdout_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "runtime_ms",
+        "pids",
+        "stdout_bytes",
+        "stderr_bytes",
+        "lifetime_secs"
+      ],
+      "type": "object"
+    },
+    "ProfileLimits": {
+      "additionalProperties": false,
+      "description": "Ceilings (§9.4, \"Items the profile sets\"). Every one is finite (N9).",
+      "properties": {
+        "max_allowlist_entries": {
+          "description": "Most allowlist entries one sandbox may have (AL-1).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_argv_bytes": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_argv_items": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_disk_mib": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_env_entries": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_lifetime_secs": {
+          "description": "Longest sandbox lifetime a request may ask for (LT-1).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_memory_mib": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_pids": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_runtime_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_stderr_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_stdout_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_vcpus": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "max_vcpus",
+        "max_memory_mib",
+        "max_disk_mib",
+        "max_runtime_ms",
+        "max_pids",
+        "max_stdout_bytes",
+        "max_stderr_bytes",
+        "max_argv_items",
+        "max_argv_bytes",
+        "max_env_entries",
+        "max_lifetime_secs",
+        "max_allowlist_entries"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "capabilities": {
+      "$ref": "#/$defs/Capabilities"
+    },
+    "defaults": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProfileDefaults"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional. When omitted, defaults are derived as `min(built-in, ceiling)`; when present they\nare validated against the ceilings (an explicit inconsistency is an error)."
+    },
+    "execution": {
+      "$ref": "#/$defs/ExecutionRules",
+      "default": {
+        "cwd_prefixes": [
+          "/workspace",
+          "/tmp"
+        ],
+        "default_cwd": "/workspace",
+        "env_allowlist": [
+          "PATH",
+          "HOME",
+          "LANG",
+          "LC_ALL",
+          "TZ",
+          "PYTHONUNBUFFERED"
+        ],
+        "guest_gid": 1000,
+        "guest_uid": 1000
+      }
+    },
+    "limits": {
+      "$ref": "#/$defs/ProfileLimits"
+    },
+    "name": {
+      "type": "string"
+    },
+    "schema_version": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "version": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "name",
+    "version",
+    "limits",
+    "capabilities"
+  ],
+  "title": "ProfileDoc",
+  "type": "object"
+}

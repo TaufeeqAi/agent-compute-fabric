@@ -1,13 +1,15 @@
-"""``acf-local operation ...`` — observe or cancel an operation by id.
+"""``acf-local operation ...`` — observe, list and cancel operations.
 
-This is the recovery tool for the one situation the CLI refuses to guess about: a mutation whose
-response was lost (spec §8.4). The rule is *observe, never repeat*:
+``operation get`` is how a lost response is resolved after the fact: the operation id is the handle
+on everything the host accepted, and asking by id never submits anything.
 
     acf-local operation get op-0123...           # what does the host say happened?
-    acf-local operation get op-0123... --wait    # ... and wait until it is final
+    acf-local operation get op-0123... --wait    # ... and follow it until it has ended
 
-Exit status mirrors the operation: ``0`` succeeded, ``3`` refused (never started; includes "the
-host has no record of that id"), ``4`` failed or cancelled, ``5`` not final / unknown.
+Its exit status states the operation's condition: ``0`` succeeded, ``4`` failed or cancelled,
+``5`` unknown (it may have been applied), ``8`` not ended yet, ``3`` the host holds no such
+operation for this caller — which, within the host's operation retention, means the request was
+never accepted.
 """
 
 from __future__ import annotations
@@ -15,89 +17,118 @@ from __future__ import annotations
 from typing import Annotated
 
 import typer
-from pydantic import ValidationError
 
-from acf_cli.client import exit_code_for_status
-from acf_cli.common import JsonOption, client_of, guard
+from acf_cli.client import Outcome, as_refused, exit_code_for
+from acf_cli.common import (
+    AllOption,
+    ChangedSinceOption,
+    JsonOption,
+    LimitOption,
+    OperationIdOption,
+    TimeoutOption,
+    WaitOption,
+    client_of,
+    conclude,
+    guard,
+    operation_id_of,
+    timeout_of,
+)
 from acf_cli.errors import ExitCode, InvalidArgument
-from acf_cli.models import OperationGetRequest, OperationSelector, OperationStatus, ResponseEnvelope
-from acf_cli.render import print_json, render_operation
-from acf_cli.units import parse_duration_ms
+from acf_cli.render import print_json, render_host_change, render_listing_footer, render_operation, render_operations
+from acf_cli.requests import operation_cancel
+from acf_cli.resolve import list_operations
+from acf_cli.responses import HostChangeBody, OperationView
+from acf_cli.units import parse_cursor
 
-app = typer.Typer(help="Observe or cancel operations by id.", no_args_is_help=True)
+app = typer.Typer(help="Observe, list and cancel operations.", no_args_is_help=True)
 
-DEFAULT_WAIT_S = 60.0
-DEFAULT_CANCEL_SETTLE_S = 30.0
-
-
-def parse_operation_id(text: str) -> OperationSelector:
-    try:
-        return OperationSelector(operation_id=text)
-    except ValidationError as e:
-        raise InvalidArgument(
-            f"{text!r} is not an operation id",
-            hint="operation ids are 8-64 letters, digits or '-'; `run` prints them on failure and with -v",
-        ) from e
+OperationArg = Annotated[str, typer.Argument(help="Operation id, as printed by the command that created it.")]
 
 
-def _emit(env: ResponseEnvelope, *, as_json: bool) -> None:
+def _required_id(text: str) -> str:
+    checked = operation_id_of(text)
+    if checked is None:  # pragma: no cover - a positional argument is never None
+        raise InvalidArgument("an operation id is required")
+    return checked
+
+
+def _report(outcome: Outcome, *, as_json: bool) -> None:
+    """State what the host said and leave with the exit code that mirrors it."""
+    view = outcome.operation
+    if view is None:
+        raise as_refused(outcome)
     if as_json:
-        print_json(env)
+        print_json(outcome.to_wire())
     else:
-        render_operation(env)
+        render_operation(view, outcome.as_of)
+    code = exit_code_for(view)
+    if code is not ExitCode.OK:
+        raise typer.Exit(int(code))
 
 
 @app.command("get")
 @guard
 def get(
     ctx: typer.Context,
-    operation_id: Annotated[str, typer.Argument(help="Operation id (the one printed on failure, or `run -v`).")],
-    wait: Annotated[bool, typer.Option("--wait", help="Keep observing until the operation is final.")] = False,
-    wait_timeout: Annotated[
-        str | None, typer.Option("--wait-timeout", help="With --wait: give up after e.g. 90, 90s, 5m (default 60s).")
-    ] = None,
+    operation_id: OperationArg,
+    wait: Annotated[
+        bool, typer.Option("--wait/--no-wait", help="Follow the operation until it ends. Default: ask once.")
+    ] = False,
+    timeout: TimeoutOption = None,
     as_json: JsonOption = False,
 ) -> None:
-    """Ask the host what happened to an operation. Never re-runs anything."""
-    selector = parse_operation_id(operation_id)
+    """Ask the host what happened to an operation. Never submits anything."""
+    op_id = _required_id(operation_id)
     client = client_of(ctx)
-    if wait:
-        seconds = parse_duration_ms(wait_timeout) / 1000 if wait_timeout else DEFAULT_WAIT_S
-        env = client.wait_final(selector.operation_id, timeout_s=seconds)
+    outcome = client.follow(op_id, timeout_s=timeout_of(timeout)) if wait else client.observe(op_id)
+    _report(outcome, as_json=as_json)
+
+
+@app.command("list")
+@guard
+def list_(
+    ctx: typer.Context,
+    changed_since: ChangedSinceOption = None,
+    limit: LimitOption = None,
+    all_pages: AllOption = False,
+    as_json: JsonOption = False,
+) -> None:
+    """List the operations the host holds for this caller, oldest change first."""
+    cursor = parse_cursor(changed_since) if changed_since is not None else None
+    listing = list_operations(client_of(ctx), changed_since=cursor, limit=limit, follow=all_pages)
+    if as_json:
+        print_json(listing.to_wire())
     else:
-        env = client.roundtrip(OperationGetRequest(params=selector))
-    _emit(env, as_json=as_json)
-    code = exit_code_for_status(env.status)
-    if code != ExitCode.OK:
-        raise typer.Exit(int(code))
+        render_operations(listing.items)
+        render_listing_footer(len(listing.items), listing.cursor, more=listing.more, as_of=listing.as_of)
+
+
+def _cancel_result(view: OperationView) -> None:
+    if isinstance(view.result, HostChangeBody):
+        render_host_change(view.result.data)
 
 
 @app.command("cancel")
 @guard
 def cancel(
     ctx: typer.Context,
-    operation_id: Annotated[str, typer.Argument(help="Operation id of a running `exec`.")],
-    wait_timeout: Annotated[
-        str | None,
-        typer.Option("--wait-timeout", help="How long to wait for the cancellation to take effect (default 30s)."),
-    ] = None,
+    target: Annotated[str, typer.Argument(help="Operation id of the execution to cancel.")],
+    operation_id: OperationIdOption = None,
+    wait: WaitOption = True,
+    timeout: TimeoutOption = None,
     as_json: JsonOption = False,
 ) -> None:
-    """Ask the host to cancel a running command, then report how it ended.
+    """Ask the host to cancel a running execution.
 
-    Cancellation is a *request*: the run ends when the host has stopped the workload and recorded
-    the result, and that is what is reported. Exit status is ``0`` once the operation is final
-    (cancelled, or it finished first), ``3`` if the host refused, ``5`` if it is still not final.
+    Cancelling is itself an operation. It succeeds when the execution has ended — cancelled, or
+    because it had already finished, in which case nothing changes. Only an execution in progress
+    can be cancelled; any other operation is refused with STATE_CONFLICT: it is bounded by its own
+    deadline, and stopping or destroying the sandbox preempts it.
     """
-    selector = parse_operation_id(operation_id)
-    client = client_of(ctx)
-    first = client.cancel(selector.operation_id)
-    if first.status in {OperationStatus.REJECTED, OperationStatus.CONFLICT}:
-        # The host refused the cancellation itself (unknown id, not cancellable, not running here).
-        _emit(first, as_json=as_json)
-        raise typer.Exit(int(exit_code_for_status(first.status)))
-    seconds = parse_duration_ms(wait_timeout) / 1000 if wait_timeout else DEFAULT_CANCEL_SETTLE_S
-    final = first if first.status.is_final else client.wait_final(selector.operation_id, timeout_s=seconds)
-    _emit(final, as_json=as_json)
-    if not final.status.is_final:
-        raise typer.Exit(int(ExitCode.UNKNOWN))
+    outcome = client_of(ctx).submit(
+        operation_cancel(_required_id(target)),
+        operation_id=operation_id_of(operation_id),
+        wait=wait,
+        timeout_s=timeout_of(timeout),
+    )
+    conclude(outcome, as_json=as_json, show=_cancel_result)

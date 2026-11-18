@@ -4,11 +4,11 @@
 //! Design rules:
 //! * **Host initiates, always.** The guest agent only *listens*; the host never binds a
 //!   `uds_path_<PORT>` listener, so the guest has no path to initiate a connection to host
-//!   control surfaces (spec SEC-001/SEC-014).
+//!   control surfaces (contract GP-1, SEC-018).
 //! * **The guest is untrusted.** Every field the guest returns is bounded by the host
 //!   before use; this crate only defines shapes.
 //! * Unknown fields are rejected (`deny_unknown_fields`) so a version skew fails loudly
-//!   instead of being silently reinterpreted (spec §24.3).
+//!   instead of being silently reinterpreted (contract GP-2, VR-2).
 
 use std::collections::BTreeMap;
 
@@ -54,11 +54,11 @@ pub enum GuestRequest {
     Cancel {
         exec_id: String,
     },
-    /// Deterministic baseline probe used as the restore-verification oracle (spec §20.5 #6).
+    /// Deterministic baseline probe used as the restore-verification oracle (contract RE-4).
     Probe {
         nonce: String,
     },
-    /// Report guest-visible network posture for `network=none` verification (spec §18.6).
+    /// Report guest-visible network posture for `network=none` verification (contract §20.2).
     NetProbe,
     Shutdown,
 }
@@ -75,7 +75,7 @@ pub struct ExecRequest {
     pub timeout_ms: u64,
     pub max_stdout_bytes: u64,
     pub max_stderr_bytes: u64,
-    /// Process budget for the command's process tree (spec §18.4).
+    /// Process budget for the command's process tree (contract EX-2).
     pub max_pids: u32,
     pub uid: u32,
     pub gid: u32,
@@ -131,9 +131,9 @@ pub struct ExecResult {
     /// True if the process-count budget was hit (fork() returned EAGAIN) during the run.
     pub pid_limit_hit: bool,
     /// True if a descendant still held an output pipe open after the grace period, so the
-    /// captured output may be missing a tail (spec §18.8 `INCOMPLETE`).
+    /// captured output may be missing a tail (contract OU-2 `INCOMPLETE`).
     pub output_incomplete: bool,
-    /// Which mechanism actually enforced the process budget for this run (spec §18.10).
+    /// Which mechanism actually enforced the process budget for this run (contract GP-6: guest-reported).
     pub containment: Containment,
 }
 

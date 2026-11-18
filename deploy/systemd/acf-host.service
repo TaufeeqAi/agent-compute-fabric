@@ -1,60 +1,121 @@
-# ACF Phase 1 host agent: the privileged execution plane (Firecracker + jailer, journal, recovery).
+# ACF host agent, the core: the privileged role of the one host binary (coordinator, durable store,
+# Firecracker/jailer backend, recovery).
+#
+#   /opt/acf/bin/acf-host serve --config /etc/acf/host.yaml
+#
+# The core starts the other roles itself by re-executing its own image:
+#   * the edge, the only process that reads bytes from a caller, as the unprivileged user named by
+#     edge.uid / edge.gid in host.yaml (deploy/sysusers.d/acf.conf creates it);
+#   * one guest-traffic process per sandbox in network mode `allowlist`, as that sandbox's own uid.
+# The lifetime enforcer is NOT one of them: it is acf-lifetime.service, started before this unit and
+# never stopped with it.
 #
 # Install:
-#   install -m 0644 deploy/systemd/acf-cgroup.service deploy/systemd/acf-host.service /etc/systemd/system/
-#   systemctl daemon-reload && systemctl enable --now acf-host.service
+#   install -m 0644 deploy/systemd/acf-*.service /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now acf-cgroup.service acf-lifetime.service acf-host.service
 #
-# Readiness: the agent recovers first (adopting or cleaning whatever a previous run left), THEN binds
-# its socket. The socket appearing is therefore the readiness signal; ExecStartPost waits for it so
-# anything ordered After=acf-host.service really can connect.
+# Readiness. The core recovers first (it resolves what an earlier activation left in flight and
+# observes every sandbox once) and opens its endpoints only afterwards. A process listening on the
+# local socket is therefore the readiness signal; ExecStartPost waits for it, so a unit ordered
+# After=acf-host.service really can connect. A socket FILE left behind by a core that was killed does
+# not count: the helper looks for a listener, not for a file.
 #
-# Hardening is deliberately moderate. This process is root by necessity (/dev/kvm, mounts, namespaces,
-# cgroups, the jailer's chroot/setuid), and the controls that matter live elsewhere: the jailer, the
-# per-VM uid, the empty network namespace, seccomp inside Firecracker, and the trusted-file loader.
-# Options that would break those mechanisms (ProtectControlGroups, PrivateMounts, a tight
-# CapabilityBoundingSet, ProtectSystem=strict) are intentionally NOT set; tightening them needs a
-# real KVM host to prove nothing breaks (tests/integration), so it is future work, not a guess.
+# What a stop or restart ends, and what it must not end (KillMode=mixed):
+#   ends      the core (SIGTERM: it stops creating sandboxes, lets operations in flight finish for up
+#             to operations.drain_timeout_ms, then exits) and, once the core is gone, whatever is left
+#             in this unit's control group: the edge and any helper still running;
+#   survives  every VM, every guest-traffic process and the lifetime enforcer. The jailer moves a VM
+#             into <cgroup_root>/acf/<jail-id>, the core moves a guest-traffic process into
+#             <cgroup_root>/acf/<jail-id>-net, and the enforcer is a unit of its own: none of them is
+#             in this unit's control group, so systemd does not signal them. The next activation
+#             adopts what it finds.
+#
+# Hardening. The core is root by necessity: /dev/kvm, control groups, namespaces, mounts and the
+# jailer's chroot, mknod and setuid. The controls that confine a sandbox are elsewhere (the jailer,
+# one uid per sandbox, an empty network namespace, Firecracker's seccomp filters) and the roles that
+# read untrusted bytes hold no privilege at all. What this unit adds are limits that are inherited by
+# everything the core starts and that none of it needs; each is explained where it is set.
+#
+# Deliberately NOT set, because it would break the host:
+#   * ProtectSystem=, ProtectHome=, PrivateTmp=, PrivateDevices=, PrivateMounts=, ProtectKernel*=,
+#     ProtectControlGroups=, ProtectProc=, ReadWritePaths= and every other option that gives the unit
+#     a mount namespace of its own. A sandbox's network namespace is kept alive by a bind mount at
+#     <runtime_dir>/netns/acf-<jail-id>. Made inside a private mount namespace, that mount is invisible
+#     to the next activation of the core, which could then neither prove that an adopted VM is inside
+#     its namespace nor re-check its packet filter, and would stop the VM.
+#   * ProtectControlGroups= (also) makes control groups read-only: no VM could be given its limits.
+#   * PrivateDevices=, DevicePolicy=, DeviceAllow= and ProtectClock= (which implies a device
+#     allow-list) take /dev/kvm away from the core's own preflight.
+#   * An allow-list CapabilityBoundingSet= or SystemCallFilter=@system-service. The jailer mounts,
+#     pivots, chroots, creates device nodes and changes uid; a list that misses one call stops every
+#     sandbox from starting, and only tests/integration on a KVM host can prove a list complete.
+# Do not add them in a drop-in either.
 
 [Unit]
-Description=ACF host agent (Firecracker execution plane)
+Description=ACF host agent (core: coordinator, store, Firecracker backend)
 Documentation=https://github.com/OWNER/agent-compute-fabric/blob/main/docs/OPERATIONS.md
 Requires=acf-cgroup.service
-After=acf-cgroup.service local-fs.target
+Wants=acf-lifetime.service
+After=acf-cgroup.service acf-lifetime.service local-fs.target network.target systemd-tmpfiles-setup.service
 StartLimitIntervalSec=120
 StartLimitBurst=5
 
 [Service]
-Type=simple
+Type=exec
 User=root
 Group=root
 
 # Optional operator overrides (RUST_LOG=debug, ACF_LOG_FORMAT=json). The dash makes it optional.
+# Nothing the core runs is found through PATH: Firecracker, the jailer, ip, nft, nsenter and unshare
+# are absolute paths in host.yaml, each verified to be a root-owned, non-writable executable.
 EnvironmentFile=-/etc/default/acf-host
 
-# Print the full preflight report to the journal (one line per check). A failure here is not fatal by
-# itself (the dash); `serve` enforces the same checks and refuses to start with a precise message.
+# The full preflight report in the journal, one line per check. A failure here is not fatal (the
+# dash), and it does not stop the core either: a failed mandatory check makes the core start in
+# CONTAINMENT, where it still stops and destroys what exists and creates nothing.
 ExecStartPre=-/opt/acf/bin/acf-host doctor --config /etc/acf/host.yaml
 ExecStart=/opt/acf/bin/acf-host serve --config /etc/acf/host.yaml
-ExecStartPost=/usr/bin/timeout 90 /bin/sh -c 'until [ -S /run/acf/host-agent.sock ]; do sleep 0.2; done'
+# Must name paths.socket_path exactly as host.yaml spells it. 270 s is more than twice
+# recovery.startup_deadline_ms (120000 by default): raise both timeouts if you raise that.
+ExecStartPost=/opt/acf/libexec/acf-wait-ready /run/acf/host-agent.sock 270
+TimeoutStartSec=300
 
-# SIGTERM = drain: in-flight operations are crash-safe, so after the 30 s drain the agent exits and
-# the next start recovers whatever was mid-flight. Give it comfortably longer than the drain.
 KillSignal=SIGTERM
-TimeoutStopSec=60
-# VMMs are moved into their own cgroups by the jailer and are NOT the service's children; they must
-# survive an agent restart (recovery adopts them), so only the main process gets the signal.
 KillMode=mixed
+# Longer than operations.drain_timeout_ms (60000 by default). Whatever is still in flight after it
+# is resolved by the next activation; correctness never depends on the drain.
+TimeoutStopSec=90
+# The core ends itself when its store demands it (an uncertain commit, a second writer); the next
+# activation re-establishes its state from the store.
 Restart=on-failure
 RestartSec=2s
 
+# ---- Limits inherited by everything the core starts ------------------------------------------------
+# No process here may gain privilege through exec. Root keeps what it has; the edge, the
+# guest-traffic processes and every VMM start with this already set.
 NoNewPrivileges=yes
-PrivateTmp=yes
-ProtectHome=yes
-ProtectSystem=full
-ProtectKernelModules=yes
-ProtectClock=yes
+# Capabilities nothing in the execution plane uses: kernel modules, reboot and kexec, the clock, raw
+# port and memory I/O, the kernel log, process accounting, terminals, mandatory access control,
+# immutable files, the audit configuration. A deny-list on purpose (see the header).
+CapabilityBoundingSet=~CAP_SYS_MODULE CAP_SYS_BOOT CAP_SYS_TIME CAP_WAKE_ALARM CAP_SYS_RAWIO CAP_SYSLOG CAP_SYS_PACCT CAP_SYS_TTY_CONFIG CAP_MAC_ADMIN CAP_MAC_OVERRIDE CAP_LINUX_IMMUTABLE CAP_AUDIT_CONTROL CAP_BLOCK_SUSPEND
+# The same, as system calls, plus swap: CAP_SYS_ADMIN has to stay, and it would allow `swapon`, which
+# is how guest memory reaches a disk. A refused call is an error (EPERM), never a killed process.
+SystemCallFilter=~@clock @module @reboot @swap @raw-io
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+# The namespaces the host uses: network (one per sandbox; `unshare --net`, `nsenter --net`, the
+# jailer's --netns), mount and pid (the jailer). User namespaces are the important omission: a
+# compromised edge or guest-traffic process cannot make itself "root" in one to reach kernel code
+# that is otherwise for the privileged.
+RestrictNamespaces=net mnt pid
+# Unix sockets (the local endpoint, the Firecracker API and vsock), IP (the mutual-TLS endpoint and
+# the guest-traffic relay) and netlink (`ip`, `nft`). No packet sockets, no other family.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 RestrictRealtime=yes
+RestrictSUIDSGID=yes
 LockPersonality=yes
+# A core dump of the core holds the host's TLS key; one of a VMM holds guest memory.
 LimitCORE=0
 LimitNOFILE=1048576
 TasksMax=infinity

@@ -1,6 +1,7 @@
 # Build output
 /target/
 /dist/
+artifacts/
 
 # Python
 __pycache__/

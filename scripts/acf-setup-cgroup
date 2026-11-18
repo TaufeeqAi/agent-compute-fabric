@@ -1,10 +1,12 @@
 #!/bin/sh
 # acf-setup-cgroup [PARENT]
 #
-# Idempotently create the cgroup v2 directory under which the Firecracker jailer places one child
-# cgroup per VM, with the cpu, memory and pids controllers delegated to those children. This is the
-# "pre-created cgroup v2 parent" that `firecracker.cgroup_parent` names (default: acf), and the
-# thing `acf-host doctor` checks as `cgroup_parent`.
+# Idempotently create the cgroup v2 directory that every sandbox's control groups live under, with
+# the cpu, memory and pids controllers delegated to its children: the Firecracker jailer places one
+# child per VM there (<PARENT>/<jail-id>), and the core one per sandbox in network mode `allowlist`
+# for that sandbox's guest-traffic process (<PARENT>/<jail-id>-net). This is the "pre-created cgroup
+# v2 parent" that `firecracker.cgroup_parent` names (default: acf), and the thing `acf-host doctor`
+# checks as `cgroup_parent`.
 #
 # It runs at every boot (deploy/systemd/acf-cgroup.service) and from `scripts/host-setup.sh`.
 # POSIX sh, no dependencies: it must work on a minimal host before anything else is installed.

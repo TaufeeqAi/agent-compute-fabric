@@ -1,4 +1,4 @@
-//! Evidence for `network=none` (spec §18.6, §18.10) — a pure function over observations, so the
+//! Evidence for the network modes (contract §20.2, NW-2) — a pure function over observations, so the
 //! decision logic is exhaustively unit-testable without a VM.
 
 use acf_wire::guest::{EgressOutcome, NetReport};
@@ -65,10 +65,49 @@ pub fn evaluate_none(host_nic_count: usize, vmm_in_empty_netns: bool, guest: Opt
     NetworkEvidence { mode: "none".into(), status, vmm_has_no_nic, vmm_in_empty_netns, guest_interfaces, guest_egress_blocked, violations }
 }
 
+/// Host-side evidence for mode `allowlist` (NW-1, NW-5): the VMM has exactly the one interface,
+/// it lives in the sandbox's own namespace, and the guest-traffic role is running. The guest is not
+/// asked: nothing a guest states is an input to a host decision (OB-1).
+pub fn evaluate_allowlist(host_nic_count: usize, vmm_in_own_netns: bool, relay_running: bool) -> NetworkEvidence {
+    let mut violations = Vec::new();
+    if host_nic_count != 1 {
+        violations.push(format!("VMM is configured with {host_nic_count} network interface(s); mode allowlist has exactly one"));
+    }
+    if !vmm_in_own_netns {
+        violations.push("VMM is not inside the sandbox's own network namespace".into());
+    }
+    if !relay_running {
+        violations.push("the guest-traffic role is not running".into());
+    }
+    let status = if violations.is_empty() { NetworkStatus::VerifiedHostOnly } else { NetworkStatus::Violation };
+    NetworkEvidence {
+        mode: "allowlist".into(),
+        status,
+        vmm_has_no_nic: false,
+        vmm_in_empty_netns: vmm_in_own_netns,
+        guest_interfaces: None,
+        guest_egress_blocked: None,
+        violations,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use acf_wire::guest::EgressAttempt;
+
+    #[test]
+    fn allowlist_needs_exactly_one_interface_its_own_namespace_and_a_running_relay() {
+        assert_eq!(evaluate_allowlist(1, true, true).status, NetworkStatus::VerifiedHostOnly);
+        for (nics, in_ns, relay) in [(0, true, true), (2, true, true), (1, false, true), (1, true, false)] {
+            let e = evaluate_allowlist(nics, in_ns, relay);
+            assert_eq!(
+                (e.status, e.violations.len(), e.mode.as_str()),
+                (NetworkStatus::Violation, 1, "allowlist"),
+                "{nics} {in_ns} {relay}"
+            );
+        }
+    }
 
     fn guest(ifaces: &[&str], connected: bool) -> NetReport {
         NetReport {

@@ -34,21 +34,22 @@ images/
 | `/sbin/init` exists and ends the VM if it fails | the guest layer links `/usr/sbin/init → /usr/local/sbin/acf-init` |
 | an agent answers `Hello` on vsock port 5252 within `guest_ready_timeout_ms` | `acf-init` starts `/usr/local/bin/acf-guest-agent --allow-shutdown` |
 | the root disk grows to the size the sandbox asked for | `acf-init` runs `resize2fs` on the root device at every boot (online) |
-| commands run as `execution.guest_uid`/`guest_gid` (1000 in `policies/default.yaml`) | the guest layer creates uid/gid 1000 if absent and makes `/workspace` theirs |
+| commands run as `execution.guest_uid`/`guest_gid` (1000 in `profiles/default.yaml`) | the guest layer creates uid/gid 1000 if absent and makes `/workspace` theirs |
 | `/workspace` exists, writable by that uid, is the default working directory | the guest layer |
-| there is a working `127.0.0.1` even though there is no network device | `acf-init` brings `lo` up and writes `/etc/hosts` |
+| there is a working `127.0.0.1`, with or without a network device | `acf-init` brings `lo` up and writes `/etc/hosts` |
 | a command's process tree is bounded and killable as a unit | `acf-init` mounts cgroup v2; the agent creates one cgroup per command |
-| `network=none` means no interface but `lo` | the host attaches no network device; the agent reports what it sees |
+| network mode `none` means no interface but `lo` | the host attaches no network device; the agent reports what it sees |
+| in network mode `allowlist` the one interface, `eth0`, has the address, gateway and resolver the host chose | the host puts them on the kernel command line (`ip=…`). The **kernel** configures `eth0` from it and records the resolver in `/proc/net/pnp`; `acf-init` writes that resolver to `/etc/resolv.conf` (nothing is written without a network). The kernel needs `CONFIG_VIRTIO_NET` and `CONFIG_IP_PNP` built in (`tools/check_kernel_config.py` notes their absence) |
 
 `acf-init`'s failure policy is *crash-only*: anything the contract cannot do without is fatal (init exits →
 kernel panic → `panic=1` reboots → `reboot=k` ends the VMM), so the host learns about a bad guest in a
 second instead of after the 30 s ready timeout. The agent exiting is fatal too. Details and the one-page
 reasoning are in the header of [`acf-init`](overlay/usr/local/sbin/acf-init).
 
-**If you change the guest user.** `execution.guest_uid` in the host policy and the user the Dockerfile
-creates are two halves of one contract: if they disagree, commands run as a uid that cannot write
-`/workspace`. `build-image.sh` checks the image side (`--owner /workspace=1000:1000`); nothing can check
-the policy side from here, so change them together.
+**If you change the guest user.** `execution.guest_uid` in the safety profile (`/etc/acf/profile.yaml`) and
+the user the Dockerfile creates are two halves of one contract: if they disagree, commands run as a uid
+that cannot write `/workspace`. `build-image.sh` checks the image side (`--owner /workspace=1000:1000`);
+nothing can check the profile side from here, so change them together.
 
 ## Building an image
 
@@ -134,13 +135,13 @@ default `--disk` is 1024.)
 
 * **Python packages:** `--requirements FILE`, pinned **with hashes** (`pip-compile --generate-hashes`, or
   `uv pip compile --generate-hashes`). `pip install --require-hashes --only-binary=:all:` refuses anything
-  else. Nothing can be installed at run time (there is no network).
+  else. In network mode `none` nothing can be installed at run time: there is no network.
 * **A new image:** add `images/<name>/Dockerfile` (copy a short one — the block between
   `# >>> ACF GUEST LAYER` and `# <<< ACF GUEST LAYER` must stay byte-identical; `tests/tools/test_images.py`
   fails otherwise), add `BASE_REF_<name>` / `BASE_DIGEST_<name>` to `images.lock`, add the name to
-  `capabilities.images` in your policy. `make check-pins` verifies the three agree.
+  `capabilities.images` in your safety profile. `make check-pins` verifies that the recipes and the lock agree.
 * ENV, USER, WORKDIR, ENTRYPOINT and CMD in a Dockerfile do nothing: only the filesystem is exported.
-  A command's environment comes from the request (`policies/default.yaml: execution.env_allowlist`) plus
+  A command's environment comes from the request (`profiles/default.yaml: execution.env_allowlist`) plus
   the guest agent's default `PATH`.
 
 ## What the guest layer does for security
@@ -149,7 +150,8 @@ None of it replaces the VM boundary; it narrows what runs *inside* it.
 
 * **No setuid/setgid files.** Every setuid/setgid bit is removed at build time. Workloads run as uid 1000
   and have no use for `su`, `mount` or `passwd`, and each is local-privilege-escalation surface.
-* **No network device at all** for `network=none` (host-side); the guest only has `lo`.
+* **No network device at all** in network mode `none` (host-side); the guest only has `lo`. In mode
+  `allowlist` the one device leads to a namespace with no route out: what leaves it is decided on the host.
 * **No modules, no initramfs:** `nomodule` on the command line; everything the guest needs is built into
   the kernel the manifest pins.
 * **Hardening sysctls:** `kernel.dmesg_restrict=1`, `kernel.kptr_restrict=2`; core dumps off.
@@ -159,11 +161,11 @@ None of it replaces the VM boundary; it narrows what runs *inside* it.
 
 * **Wall clock.** A Firecracker x86_64 guest has no RTC, so its clock starts at 1970. `acf-init` raises it
   to the image's build time (`/usr/local/share/acf/clock-epoch`, from `SOURCE_DATE_EPOCH`) — a floor, not
-  the real time. Phase 1 does not push the host's time into the guest, and a restored snapshot continues
+  the real time. The host does not push its time into the guest, and a restored snapshot continues
   from the time it was taken.
 * **Not bit-reproducible.** The *identity* of an image is exact (its manifest hash), but rebuilding the same
   recipe yields different bytes: apt packages move, and ext4 and layer timestamps differ. Pinning the
   Debian archive to a snapshot date is a future hardening step.
-* **Browser image:** experimental and not covered by the Phase 1 test-suite. Run Chromium with
+* **Browser image:** experimental and not covered by the test-suite. Run Chromium with
   `--no-sandbox` (its setuid helper is gone by design) — the microVM is the boundary.
 * **The kernel is an input, not an output.** ACF checks it and pins it; it does not build it.

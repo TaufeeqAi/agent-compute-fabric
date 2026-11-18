@@ -1,0 +1,85 @@
+# ACF lifetime enforcer: ends every sandbox runtime at its expiry, whether or not the core is running.
+#
+#   /opt/acf/bin/acf-host lifetime --config /etc/acf/host.yaml
+#
+# It is a role of the one host binary and deliberately a unit of its own. Its only input is the
+# directory of expiry tickets the core writes (<runtime_dir>/expiry); for each ticket whose expiry has
+# passed it ends the runtime the ticket names, by the recorded process identity (a pidfd) and by the
+# runtime's `cgroup.kill`. It writes a heartbeat into the same directory; the core reads it and stops
+# creating sandboxes (host mode CONTAINMENT) while the heartbeat is older than
+# lifetime.heartbeat_max_age_ms.
+#
+# What follows from that for this unit:
+#   * It starts before the core (Before=acf-host.service; the core has Wants= and After= for it).
+#   * Nothing ties its life to the core's: no PartOf=, no BindsTo=, and the core uses Wants=, not
+#     Requires=. `systemctl stop|restart acf-host` therefore leaves it running. At shutdown the
+#     ordering makes systemd stop the core first and this unit after it.
+#   * Restart=always and no start limit: an enforcer that systemd gave up on is a host that can no
+#     longer bound a sandbox's lifetime. If it cannot run (for example an unreadable host.yaml) it
+#     keeps trying and the journal says why; the core stays in CONTAINMENT meanwhile.
+#
+# Install:  install -m 0644 deploy/systemd/acf-lifetime.service /etc/systemd/system/
+
+[Unit]
+Description=ACF lifetime enforcer (ends every sandbox runtime at its expiry)
+Documentation=https://github.com/OWNER/agent-compute-fabric/blob/main/docs/OPERATIONS.md
+After=acf-cgroup.service local-fs.target systemd-tmpfiles-setup.service
+Before=acf-host.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+# Root, because the tickets and the control groups are root's. What root may do here is cut down below.
+User=root
+Group=root
+
+# Optional operator overrides (RUST_LOG=debug, ACF_LOG_FORMAT=json). The dash makes it optional.
+EnvironmentFile=-/etc/default/acf-host
+
+ExecStart=/opt/acf/bin/acf-host lifetime --config /etc/acf/host.yaml
+Restart=always
+RestartSec=1s
+TimeoutStopSec=10
+
+# ---- Privilege: only what ending a runtime needs ---------------------------------------------------
+# CAP_KILL: a VMM runs as its sandbox's own uid, so signalling it through its pidfd needs this one
+# capability. Nothing else is needed: the tickets, the heartbeat and every `cgroup.kill` are files
+# that root owns, so ordinary owner permissions are enough (no CAP_DAC_OVERRIDE).
+CapabilityBoundingSet=CAP_KILL
+AmbientCapabilities=
+NoNewPrivileges=yes
+
+# ---- File system: read-only, except the runtime directory ------------------------------------------
+# ProtectSystem=strict leaves /proc, /sys and /dev writable, which is what keeps
+# <cgroup_root>/acf/<jail-id>/cgroup.kill writable. For that reason ProtectControlGroups= and
+# ProtectKernelTunables= must NOT be added here. ProtectProc= must stay at its default too: the
+# enforcer proves a runtime's identity from /proc/<pid>/stat of a process that runs as another user.
+# If paths.runtime_dir in host.yaml is not /run/acf, change ReadWritePaths= to match (a drop-in).
+ProtectSystem=strict
+ReadWritePaths=/run/acf
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+UMask=0077
+
+# ---- Everything else the role never does -----------------------------------------------------------
+# It reads no byte from a peer or a guest and opens no connection: no network at all.
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+LimitCORE=0
+
+[Install]
+WantedBy=multi-user.target

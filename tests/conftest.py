@@ -39,8 +39,8 @@ REPO = Path(__file__).resolve().parent.parent
 __all__ = ["acf", "clean_host", "host_env", "host_unit"]
 
 # The parts of the repository the scripts read at run time. A test that needs to edit a lock file, a
-# Dockerfile or a unit works on a private copy of exactly these.
-TREE_PARTS = ("scripts", "tools", "images", "config", "policies", "deploy", "schemas", "Cargo.toml")
+# Dockerfile, a unit or one of the shipped trusted files works on a private copy of exactly these.
+TREE_PARTS = ("scripts", "tools", "images", "config", "profiles", "deploy", "schemas", "Cargo.toml")
 
 Runner = Callable[..., "subprocess.CompletedProcess[str]"]
 
@@ -49,7 +49,8 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     not_root = os.geteuid() != 0
     skip_root = pytest.mark.skip(reason="needs root (it builds filesystems / extracts tarballs with real ownership)")
     skip_kvm = pytest.mark.skip(
-        reason="boots real microVMs: needs a KVM host with acf-host running (ACF_INTEGRATION=1; docs/OPERATIONS.md)"
+        reason="needs a running host: a KVM host with acf-host running (ACF_INTEGRATION=1; docs/OPERATIONS.md), "
+        "or, for the tests that need no guest, the in-memory host (ACF_CONTROL_PLANE=1; `make control-plane`)"
     )
     skip_real_guest = pytest.mark.skip(
         reason="needs a real guest: it asserts on what runs inside a microVM (ACF_INTEGRATION=1 on a KVM host)"

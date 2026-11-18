@@ -1,7 +1,31 @@
 {
+  "$defs": {
+    "FileEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "file": {
+          "type": "string"
+        },
+        "sha256": {
+          "description": "Lowercase hex sha256.",
+          "type": "string"
+        },
+        "size": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "file",
+        "sha256",
+        "size"
+      ],
+      "type": "object"
+    }
+  },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "ImageManifest",
-  "type": "object",
+  "additionalProperties": false,
   "properties": {
     "architecture": {
       "type": "string"
@@ -32,12 +56,11 @@
       "$ref": "#/$defs/FileEntry"
     },
     "schema_version": {
-      "type": "integer",
       "format": "uint32",
-      "minimum": 0
+      "minimum": 0,
+      "type": "integer"
     }
   },
-  "additionalProperties": false,
   "required": [
     "schema_version",
     "name",
@@ -46,29 +69,6 @@
     "rootfs",
     "guest_agent_version"
   ],
-  "$defs": {
-    "FileEntry": {
-      "type": "object",
-      "properties": {
-        "file": {
-          "type": "string"
-        },
-        "sha256": {
-          "description": "Lowercase hex sha256.",
-          "type": "string"
-        },
-        "size": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "file",
-        "sha256",
-        "size"
-      ]
-    }
-  }
+  "title": "ImageManifest",
+  "type": "object"
 }

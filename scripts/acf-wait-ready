@@ -1,0 +1,87 @@
+#!/bin/sh
+# acf-wait-ready SOCKET [SECONDS]
+#
+# Wait until the core of the host agent is ready, which means: a process is LISTENING on SOCKET.
+#
+# `acf-host serve` recovers first (it resolves what an earlier activation left in flight and observes
+# every sandbox once) and only then binds its local socket and starts listening. That is the
+# readiness signal deploy/systemd/acf-host.service waits for in ExecStartPost, so that anything
+# ordered after the unit can connect.
+#
+# Why a listener and not the socket file: a core that was killed leaves its socket file behind, and
+# the next core replaces it only after its own recovery. A file test would call that stale file
+# "ready". /proc/net/unix lists every Unix socket with its state, and a listening socket is the one
+# whose flags are 00010000; nothing is opened, connected to or removed here.
+#
+# The wait ends early, with an error, when the core is gone: systemd exports the main process as
+# MAINPID to ExecStartPost, and a core that exited (a host.yaml it cannot read, a second instance)
+# will never listen. SOCKET must be spelled exactly as paths.socket_path in host.yaml.
+#
+# POSIX sh and awk only: it runs on a minimal host. `sleep` must accept fractions (coreutils, busybox).
+#
+#   ACF_PROC_NET_UNIX   the socket table to read (default /proc/net/unix); overridable for tests
+#
+# Exit: 0 ready, 1 the core exited or the time ran out, 2 usage.
+
+set -eu
+
+SOCKET="${1:-}"
+SECONDS_TO_WAIT="${2:-270}"
+TABLE="${ACF_PROC_NET_UNIX:-/proc/net/unix}"
+
+usage() {
+    printf 'Usage: acf-wait-ready SOCKET [SECONDS]\n' >&2
+    exit 2
+}
+
+die() {
+    printf 'acf-wait-ready: ERROR: %s\n' "$*" >&2
+    exit 1
+}
+
+[ $# -ge 1 ] && [ $# -le 2 ] || usage
+case "$SOCKET" in
+    /*) ;;
+    *) printf 'acf-wait-ready: SOCKET must be an absolute path: %s\n' "$SOCKET" >&2; exit 2 ;;
+esac
+case "$SECONDS_TO_WAIT" in
+    '' | *[!0-9]*) printf 'acf-wait-ready: SECONDS must be a whole number: %s\n' "$SECONDS_TO_WAIT" >&2; exit 2 ;;
+esac
+
+[ -r "$TABLE" ] || die "cannot read $TABLE, so a listener cannot be told from a stale socket file"
+
+# A line of the table is `Num RefCount Protocol Flags Type St Inode Path`; the path is the rest of the
+# line (it may contain spaces). Flags 00010000 marks a socket that accepts connections.
+listening() {
+    awk -v want="$SOCKET" '
+        $4 == "00010000" {
+            path = $0
+            sub(/^[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+ /, "", path)
+            if (path == want) found = 1
+        }
+        END { exit(found ? 0 : 1) }
+    ' "$TABLE"
+}
+
+core_is_gone() {
+    [ -n "${MAINPID:-}" ] && ! kill -0 "$MAINPID" 2>/dev/null
+}
+
+# Five looks a second.
+tries=$((SECONDS_TO_WAIT * 5))
+while :; do
+    if [ -S "$SOCKET" ] && listening; then
+        exit 0
+    fi
+    if core_is_gone; then
+        die "the core (pid $MAINPID) exited before it listened on $SOCKET; its own messages say why"
+    fi
+    [ "$tries" -gt 0 ] || break
+    tries=$((tries - 1))
+    sleep 0.2
+done
+
+if [ -S "$SOCKET" ]; then
+    die "nothing listens on $SOCKET after ${SECONDS_TO_WAIT}s (the file exists: it was left by an earlier core, or startup recovery is still running)"
+fi
+die "$SOCKET did not appear within ${SECONDS_TO_WAIT}s (startup recovery is bounded by recovery.startup_deadline_ms)"

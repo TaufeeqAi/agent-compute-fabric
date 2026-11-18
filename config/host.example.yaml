@@ -1,91 +1,186 @@
-# Agent Compute Fabric — Phase 1 host configuration (schema_version 1).
+# Agent Compute Fabric — host configuration (schema_version 2).
 #
-# Config answers: WHERE THINGS LIVE AND HOW BIG THIS MACHINE IS. (What callers may do is policy:
-# policies/default.yaml.) Install as /etc/acf/host.yaml:
+# Configuration answers: WHERE THINGS LIVE, HOW BIG THIS MACHINE IS, AND EVERY BOUND THE HOST KEEPS.
+# What a request may consume is the safety profile (profiles/default.yaml); who may call is the
+# enrolment table (config/enrolment.example.yaml).
 #
 #   install -d -m 0755 -o root -g root /etc/acf
 #   install -m 0644 -o root -g root config/host.example.yaml /etc/acf/host.yaml
 #
-# The file is loaded through the trusted-file path: root-owned regular file, no symlink, not
-# group/world-writable, in root-owned non-writable directories, <= 1 MiB. Unknown keys are refused.
+# The file is a trusted input: root-owned regular file, no symlink, not writable by group or other,
+# in root-owned non-writable directories, at most 1 MiB. Unknown keys are refused.
 #
-# `acf-host doctor --config /etc/acf/host.yaml` checks that this machine can actually honour the
-# profile (KVM, cgroup v2 delegation, uid range, binaries, policy). `acf-host serve` runs the same
-# checks that are fatal and refuses to start when one fails.
+# Every bound below is finite; zero is never "unlimited". The values written here are the built-in
+# defaults. A value that breaks one of the documented relations between bounds does not stop the
+# host: it starts in CONTAINMENT (it serves destroy, stop and reads, and creates nothing) and
+# `host.info` says which relation failed. `acf-host doctor` reports the same before you start it.
 
-schema_version: 1
+schema_version: 2
+
+# Identity of this deployment: a label on every event, and the name clients address.
+host_id: host-1
 
 paths:
-  # Durable state: journal, sandboxes, snapshots, images, telemetry. Created 0700 root.
+  # Durable state: store, sandboxes, snapshots, images, telemetry. Created 0700 root.
   state_root: /var/lib/acf
-  # Volatile runtime files (created by systemd-tmpfiles, see deploy/tmpfiles.d/acf.conf).
+  # Volatile runtime files: sockets, namespaces, expiry tickets (deploy/tmpfiles.d/acf.conf).
   runtime_dir: /run/acf
-  # A Unix socket path may be at most 107 bytes; longer paths are refused at startup.
-  # The CLI's default is the same path, so leave it unless you also pass --socket / ACF_SOCKET.
+  # The local endpoint. A Unix socket path may be at most 107 bytes.
   socket_path: /run/acf/host-agent.sock
-  policy_path: /etc/acf/policy.yaml
+  profile_path: /etc/acf/profile.yaml
+  enrolment_path: /etc/acf/enrolment.yaml
+  # One file per secret reference, for the built-in provider. Root-owned, not readable by others.
+  secrets_dir: /etc/acf/secrets
+
+# The edge: the only process that reads bytes from a caller. It runs as its own unprivileged user
+# with no capabilities; the core hands it its listeners and never lets it open a file by name.
+edge:
+  # REQUIRED when the core runs as root. Create the user with deploy/sysusers.d/acf.conf.
+  # uid: 990
+  # gid: 990
+  # The local socket is created 0600, then opened to this mode and group. Identity is never the
+  # socket's permissions: it is the uid or gid the kernel reports, matched against enrolment.
+  socket_mode: "0660"
+  # socket_gid: 991
+  # The network endpoint: mutual TLS 1.3. Absent = the host has only its local endpoint.
+  # Trust anchors are listed explicitly; the system trust store is never used. A chain-valid
+  # certificate is only authentication: authority comes from an enrolment entry that names the
+  # certificate's fingerprint or its public key's.
+  # tls:
+  #   listen: "0.0.0.0:7443"
+  #   certificate: /etc/acf/tls/host.crt     # must carry host_id as a subject alternative name
+  #   private_key: /etc/acf/tls/host.key
+  #   trust_anchors: /etc/acf/tls/clients-ca.crt
+  max_connections: 32
+  max_connections_per_source: 8     # must not exceed max_connections
+  max_request_bytes: 1048576
+  handshake_deadline_ms: 10000      # must be less than idle_timeout_ms
+  idle_timeout_ms: 300000
+  # An enrolment change reaches open connections within this bound.
+  enrolment_refresh_ms: 10000
 
 security:
-  # The socket is the first access-control layer; the kernel reports the caller's real uid/gid
-  # (SO_PEERCRED). A caller must match one of these lists. Empty + empty = nobody, not even root.
-  allowed_uids: [0]
-  allowed_gids: []
-  # To let an operator group use the CLI without sudo:
-  #   allowed_gids: [<gid of group "acf">]   socket_gid: <same gid>   socket_mode: "0660"
-  socket_mode: "0660"
-  # socket_gid: 990
-  max_connections: 32
-  max_request_bytes: 1048576
-  idle_timeout_secs: 300
-  # Who may own policy/config/binaries for them to be trusted. Root only.
+  # Owners trusted for the profile, the enrolment table, secrets and executables. Root only.
   trusted_owner_uids: [0]
 
 # The schedulable envelope of THIS machine. Admission reserves against it; a request that does not
-# fit is refused (ADMISSION_REJECTED), never overcommitted. Size it below what the host really has
-# and leave room for the host agent, the kernel and page cache.
-#   vcpus       : schedulable guest vCPUs (the sum across running sandboxes)
-#   memory_mib  : guest RAM + per-VMM overhead (firecracker.vmm_overhead_mib) summed over sandboxes
-#   disk_mib    : sum of sandbox root disks (sparse files, but budgeted at full size)
+# fit is refused (RESOURCE_EXHAUSTED), never overcommitted and never shrunk. Size it below what the
+# host has, and leave room for the host agent, the kernel and the page cache.
 envelope:
   vcpus: 4
-  memory_mib: 8192
-  disk_mib: 65536
-  max_sandboxes: 16            # must be <= firecracker.uid_range_size
+  memory_mib: 8192               # guest memory + firecracker.vmm_overhead_mib, summed over sandboxes
+  disk_mib: 65536                # sum of sandbox root disks (sparse files, budgeted at full size)
+  max_sandboxes: 16              # must not exceed firecracker.uid_range_size
   snapshot_quota_bytes: 34359738368   # 32 GiB across all snapshots
   max_snapshots: 64
-  min_free_headroom_mib: 2048  # free space that must remain on the state filesystem after a reservation
+  min_free_headroom_mib: 2048    # free space that must remain on the state filesystem
+  # Memory set aside for the host agent. With every sandbox executing, the output it holds in memory
+  # (max_sandboxes x (max_stdout_bytes + max_stderr_bytes) of the profile) must fit.
+  agent_memory_mib: 512
 
 firecracker:
-  # Installed by scripts/install-firecracker.sh, root:root 0755, in root-owned directories.
+  # Installed by scripts/install-firecracker.sh: root:root 0755, in root-owned directories.
   firecracker_bin: /opt/acf/bin/firecracker
   jailer_bin: /opt/acf/bin/jailer
-  # Exact release the profile was validated against. A mismatch at startup is fatal: Firecracker
-  # snapshots are only valid on the same version. Change this only together with the binaries,
-  # the kernel/guest-agent images and a re-run of tests/integration.
+  # Exact release the isolation profile was validated against. A mismatch is a failed mandatory
+  # check: snapshots are only valid on the same version. Change it only together with the binaries
+  # and a new run of tests/integration.
   pinned_version: v1.17.0
+  # The pinned identity of each binary: the SHA-256 of the installed file. The installer prints
+  # these two lines. Both files are hashed at startup and again before every launch. While a digest
+  # is unset or differs, the host creates no sandbox (a failed mandatory check). They are not set
+  # here on purpose: a digest that nobody measured would be worse than none.
+  # firecracker_sha256: "<64 lowercase hex characters>"
+  # jailer_sha256: "<64 lowercase hex characters>"
   # cgroup v2 only. The parent must exist with cpu, memory and pids delegated to its children
-  # (scripts/host-setup.sh creates it; deploy/systemd/acf-cgroup.service re-creates it at boot).
+  # (deploy/systemd/acf-cgroup.service creates it at boot).
   cgroup_root: /sys/fs/cgroup
   cgroup_parent: acf
-  # One unique unprivileged uid/gid per running VM, drawn from this range. It must not overlap any
-  # real account (`acf-host doctor` checks /etc/passwd) and must be >= 1000.
+  # The identifier pool. Slot i runs its VMM as uid uid_range_start + i. The range must not overlap
+  # a real account (`acf-host doctor` checks /etc/passwd) and must start at 1000 or above.
   uid_range_start: 100000
   uid_range_size: 4096
-  # Memory the VMM itself needs beyond guest RAM; budgeted in admission and in memory.max.
+  # Memory the VMM itself needs beyond guest memory; counted in admission and in memory.max.
   vmm_overhead_mib: 64
-  # Off by default: a Firecracker log file is guest-influenced host disk growth.
+  # Off by default: a VMM log file is guest-influenced host disk growth.
   diagnostic_log: false
-  # Kernel command line. The built-in default is Firecracker v1.17.0's own documented default
-  # (reboot=k panic=1 nomodule 8250.nr_uarts=0 i8042.noaux i8042.nomux i8042.dumbkbd swiotlb=noforce)
-  # plus an explicit `pci=off`, because this host uses the MMIO transport. A value set here or in an
-  # image manifest REPLACES the default, so an override must carry every flag it wants to keep.
-  # Leave unset unless you know why.
+  # Kernel command line. Unset: the VMM's documented default plus an explicit `pci=off` (this host
+  # uses the MMIO transport). A value here or in an image manifest REPLACES the default.
   # boot_args: "..."
-  api_ready_timeout_ms: 5000      # VMM API socket must answer within this
-  guest_ready_timeout_ms: 30000   # guest agent must answer Hello within this after boot
-  shutdown_grace_ms: 2000         # graceful stop before SIGKILL
+  api_ready_timeout_ms: 5000
+  guest_ready_timeout_ms: 30000
+  shutdown_grace_ms: 2000
+
+# Network mode `allowlist`. Each sandbox gets its own network namespace with no route in or out; the
+# only way out is an unprivileged relay that answers DNS for listed names only and relays TCP to
+# listed destinations only. If the relay stops, the sandbox has no connectivity.
+network:
+  # The private /30 between a guest and the host side of its namespace. The same in every namespace.
+  guest_segment: 10.201.0.0/30
+  # Slot i runs its relay as uid traffic_uid_start + i. Must not overlap the VMM uid range.
+  traffic_uid_start: 200000
+  # Executables the core runs as root. Each must be a trusted input: root-owned, not writable by
+  # group or other, in directories with the same property. A distribution may ship one as a link
+  # (/usr/sbin/ip -> /bin/ip); the file it resolves to is then held to the same rule.
+  # Without ip, nft and nsenter the mode `allowlist` is not offered; `none` is unaffected.
+  ip_bin: /usr/sbin/ip
+  nft_bin: /usr/sbin/nft
+  nsenter_bin: /usr/bin/nsenter
+  # Creates every sandbox's network namespace, in both modes. Without it no sandbox can be created.
+  unshare_bin: /usr/bin/unshare
+  dns_binding_ttl_ms: 300000        # how long a resolved address may be connected to
+  relay_max_connections: 256        # concurrent connections per sandbox
+  server_name_deadline_ms: 5000     # time a guest has to name the server it wants
+  connect_deadline_ms: 10000
+  relay_idle_timeout_ms: 300000
+  upstream_timeout_ms: 5000
+
+operations:
+  acceptance_horizon_ms: 300000     # how old a request's issued_at may be
+  clock_skew_tolerance_ms: 30000    # how far ahead issued_at may be; less than the horizon
+  operation_retention_ms: 86400000  # a finished operation is kept this long; at least the horizon
+  change_retention_ms: 3600000      # tombstones of destroyed sandboxes and deleted snapshots
+  output_retention_ms: 86400000     # execution output; at most operation_retention_ms
+  wait_max_ms: 30000                # longest a response is held; less than the shortest deadline
+  rate_limit_per_minute: 600        # operations per peer (containment is never rate limited)
+  read_rate_limit_per_minute: 6000
+  deadlines:                        # a granting operation that passes its deadline is undone
+    create_ms: 300000
+    start_ms: 120000
+    stop_ms: 60000
+    destroy_ms: 120000
+    snapshot_ms: 600000
+    restore_ms: 600000
+    delete_ms: 120000
+    operator_ms: 120000
+  backstop_margin_ms: 3000          # host deadline minus guest deadline for one command
+  step_max_attempts: 3              # attempts of a step whose failure proved it had no effect
+  retry_budget: 4                   # host-wide concurrent step retries
+  preempt_grace_ms: 5000            # how long containment waits for what it superseded to let go
+  drain_timeout_ms: 60000
 
 recovery:
-  # A record recovery has touched this many times is quarantined, not retried forever.
-  max_attempts: 3
+  max_attempts: 3                   # then quarantine: never retried forever
   teardown_timeout_ms: 10000
+  startup_deadline_ms: 120000       # recovery before any endpoint opens
+  observe_timeout_ms: 5000          # one observation
+  sweep_interval_ms: 15000          # every generation is observed at least this often
+  runtime_loss_detection_ms: 5000   # a lost runtime is noticed within this; at most the interval
+  # No isolation control of a live sandbox goes unverified for longer than this, whether the sandbox
+  # is idle or an operation holds it. At least four times sweep_interval_ms.
+  posture_recheck_interval_ms: 60000
+
+# Lifetime enforcement that does not depend on the core: `acf-host lifetime` (its own service) ends
+# every runtime at its expiry, whether or not the core is running.
+lifetime:
+  expiry_tolerance_ms: 5000
+  enforcer_interval_ms: 500         # less than the tolerance
+  heartbeat_max_age_ms: 5000        # older than this = "not running": the core stops creating
+
+store:
+  # Store capacity kept from workload data, so that a full disk never prevents recording a destroy.
+  reserve_bytes: 16777216
+  # The store's file only grows by appending. The host rewrites it as current state once it has
+  # grown past this and at least half of it is history. At most half of the largest store the
+  # core opens (256 MiB).
+  compact_at_bytes: 67108864

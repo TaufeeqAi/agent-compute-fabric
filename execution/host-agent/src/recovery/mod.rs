@@ -1,18 +1,21 @@
-//! BND-10 — Recovery (spec §22). On every start, before serving any request, the host agent
-//! resolves everything a crashed predecessor left half-done.
+//! Recovery (contract §16): before the host serves anything, it resolves everything an earlier
+//! activation left unfinished, and it keeps reconciling for as long as it runs.
 //!
-//! Principles (each is tested):
-//! * **Observe, don't assume.** Decisions come from the journal *and* what is actually on the
-//!   host (VMM present? directory present? marker proves ownership?).
-//! * **Fail safe.** When a guest command's result cannot be proven, the operation is `UNKNOWN` and
-//!   the VMM is stopped — never "retried", never reported `FAILED`/`SUCCEEDED` by guesswork.
-//! * **Never delete what ownership cannot prove is ours** — quarantine instead.
-//! * **Bounded.** Every record carries an attempt count that survives restarts; exceeding the bound
-//!   quarantines rather than looping destructively.
-//! * **Idempotent.** Running recovery twice is a no-op the second time.
+//! The principles, each of which has tests:
+//!
+//! * **Observe, do not assume (OB-1..3).** A decision uses the store *and* what is on the host: is
+//!   the recorded runtime instance there, does the ownership marker prove the files are ours, are
+//!   the mandatory controls still in force.
+//! * **Never continue (OP-18).** An inherited granting operation is undone to proven absence, or,
+//!   when a guest command may have run, ended `UNKNOWN`. Only containment is re-driven (OP-19).
+//! * **Never delete on doubt (RC-4).** What ownership cannot prove is quarantined, and stays so
+//!   until an operator releases it.
+//! * **Bounded (RC-6).** Attempt counts are durable; exceeding the bound quarantines.
+//! * **Idempotent (RC-7).** Recovery that finds nothing to do changes nothing.
+//!
+//! [`decision`] is the decision table as pure functions; `coordinator::recover` observes and applies.
 
-pub mod actuate;
-pub mod classify;
+pub mod decision;
 
-pub use actuate::RecoveryReport;
-pub use classify::{DirObs, Observed, Plan, VmObs, classify};
+pub use crate::coordinator::recover::RecoveryReport;
+pub use decision::{Enforcement, ExecState, IdleFacts, IdlePlan, InheritedPlan, Observed, OnDisk, Runtime, decide_idle, decide_inherited};

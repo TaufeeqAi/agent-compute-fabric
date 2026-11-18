@@ -1,6 +1,6 @@
 [package]
 name = "acf-host-agent"
-description = "ACF Phase 1 privileged host agent: admission, operation journal, lifecycle, Firecracker/Jailer backend, snapshots, recovery."
+description = "ACF host agent (execution plane): unprivileged edge, privileged coordinator, durable store, Firecracker/Jailer backend, recovery, lifetime enforcement."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -15,7 +15,7 @@ path = "src/lib.rs"
 name = "acf-host"
 path = "src/main.rs"
 
-# Test-only: the real server + coordinator over an in-memory backend, for CLI end-to-end tests.
+# Test-only: the real edge and coordinator over an in-memory backend, for client end-to-end tests.
 # Never built without `--features testing`, so it cannot appear in a release artifact.
 [[bin]]
 name = "acf-host-fake"
@@ -25,10 +25,11 @@ required-features = ["testing"]
 [features]
 default = []
 # Test doubles + crash-point injection. NEVER enabled in release builds (see Makefile `release`).
-testing = ["dep:acf-guest-agent"]
+testing = ["dep:acf-guest-agent", "dep:rcgen", "dep:tempfile"]
 
 [dependencies]
 acf-guest-agent = { path = "../guest-agent", optional = true }
+acf-traffic = { workspace = true }
 acf-wire = { workspace = true, features = ["tokio"] }
 async-trait = { workspace = true }
 base64 = { workspace = true }
@@ -39,14 +40,18 @@ hex = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true }
 hyper-util = { workspace = true }
+rcgen = { workspace = true, optional = true }
 rustix = { workspace = true }
+rustls = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde-saphyr = { workspace = true }
 sha2 = { workspace = true }
+tempfile = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+tokio-rustls = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

@@ -4,7 +4,7 @@
 # build context (this file, overlay/, the guest agent, requirements.txt) and exports the resulting
 # filesystem as a tarball for scripts/create-rootfs.sh. ONLY the filesystem is exported — ENV, USER,
 # WORKDIR, ENTRYPOINT and CMD instructions have no effect on the guest, so none are used. Environment
-# for a command comes from the request (see policies/default.yaml) and the guest agent's default PATH.
+# for a command comes from the request (see profiles/default.yaml) and the guest agent's default PATH.
 #
 # BASE_REF has no default on purpose: a build without one fails ("base name should not be blank")
 # instead of silently building from whatever `latest` means today.

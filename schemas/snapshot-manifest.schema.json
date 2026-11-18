@@ -1,84 +1,57 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "SnapshotManifest",
-  "type": "object",
-  "properties": {
-    "acf_version": {
-      "type": "string"
-    },
-    "artifacts": {
-      "$ref": "#/$defs/SnapshotArtifacts"
-    },
-    "backend": {
-      "$ref": "#/$defs/BackendSummary"
-    },
-    "baseline_state_digest": {
-      "description": "The deterministic guest probe taken just before the snapshot (restore oracle).",
-      "type": "string"
-    },
-    "created_wall": {
-      "type": "string"
-    },
-    "guest_agent_version": {
-      "type": "string"
-    },
-    "host": {
-      "$ref": "#/$defs/HostFingerprint"
-    },
-    "image": {
-      "$ref": "#/$defs/ImageRef"
-    },
-    "policy_id": {
-      "$ref": "#/$defs/PolicyId"
-    },
-    "resources": {
-      "$ref": "#/$defs/SandboxResources"
-    },
-    "schema_version": {
-      "type": "integer",
-      "format": "uint32",
-      "minimum": 0
-    },
-    "snapshot_generation": {
-      "$ref": "#/$defs/Generation"
-    },
-    "snapshot_id": {
-      "$ref": "#/$defs/SnapshotId"
-    },
-    "source": {
-      "$ref": "#/$defs/SandboxRef"
-    },
-    "source_run": {
-      "anyOf": [
+  "$defs": {
+    "AllowDestination": {
+      "description": "AL-1: the destination is an exact DNS name or an IPv4 network.",
+      "oneOf": [
         {
-          "$ref": "#/$defs/RunId"
+          "additionalProperties": false,
+          "description": "An exact DNS name: permits TLS whose server name equals it, to an address the host resolver\nreturned for it (AL-4).",
+          "properties": {
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
         },
         {
-          "type": "null"
+          "additionalProperties": false,
+          "description": "An IPv4 network in CIDR form: permits TCP to its addresses (AL-5).",
+          "properties": {
+            "network": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "network"
+          ],
+          "type": "object"
         }
       ]
-    }
-  },
-  "additionalProperties": false,
-  "required": [
-    "schema_version",
-    "snapshot_id",
-    "snapshot_generation",
-    "created_wall",
-    "source",
-    "image",
-    "resources",
-    "artifacts",
-    "backend",
-    "host",
-    "policy_id",
-    "baseline_state_digest",
-    "guest_agent_version",
-    "acf_version"
-  ],
-  "$defs": {
+    },
+    "AllowEntry": {
+      "additionalProperties": false,
+      "description": "AL-1: a destination and a non-empty set of ports.",
+      "properties": {
+        "destination": {
+          "$ref": "#/$defs/AllowDestination"
+        },
+        "ports": {
+          "items": {
+            "$ref": "#/$defs/PortRange"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "destination",
+        "ports"
+      ],
+      "type": "object"
+    },
     "BackendSummary": {
-      "type": "object",
       "properties": {
         "name": {
           "type": "string"
@@ -94,15 +67,15 @@
         "name",
         "version",
         "security_profile_id"
-      ]
+      ],
+      "type": "object"
     },
     "FileDigest": {
-      "type": "object",
       "properties": {
         "bytes": {
-          "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "type": "integer"
         },
         "name": {
           "type": "string"
@@ -116,22 +89,22 @@
         "name",
         "bytes",
         "sha256"
-      ]
+      ],
+      "type": "object"
     },
     "Generation": {
-      "description": "Monotonic per-sandbox incarnation counter (spec §11.4). Starts at 1; never reused.",
-      "type": "integer",
+      "description": "Monotonic per-sandbox incarnation counter (contract ID-1). Starts at 1; never reused.",
       "format": "uint64",
-      "minimum": 0
+      "minimum": 0,
+      "type": "integer"
     },
     "HostFingerprint": {
-      "type": "object",
       "properties": {
         "arch": {
           "type": "string"
         },
         "cpu_flags_digest": {
-          "description": "sha256 of the sorted CPU feature flags. A snapshot restored onto a CPU with *fewer*\nfeatures can crash the guest; Phase 1 requires the identical set (spec §20.4).",
+          "description": "sha256 of the sorted CPU feature flags. A snapshot restored onto a CPU with *fewer*\nfeatures can crash the guest; the host requires the identical set (contract RE-2, §21.6).",
           "type": "string"
         },
         "cpu_model": {
@@ -146,11 +119,11 @@
         "cpu_model",
         "cpu_flags_digest",
         "kernel_release"
-      ]
+      ],
+      "type": "object"
     },
     "ImageRef": {
-      "description": "Immutable execution identity. The alias is a *mutable human label* and is never sufficient\non its own (spec §8.9): `image_id` is the digest of the image manifest.",
-      "type": "object",
+      "description": "Immutable execution identity. The alias is a *mutable human label* and is never sufficient\non its own (contract IM-1): `image_id` is the digest of the image manifest.",
       "properties": {
         "alias": {
           "type": [
@@ -170,9 +143,9 @@
           "type": "string"
         },
         "manifest_version": {
-          "type": "integer",
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "type": "integer"
         },
         "provenance_reference": {
           "type": [
@@ -191,21 +164,89 @@
         "kernel_identity",
         "rootfs_identity",
         "manifest_version"
+      ],
+      "type": "object"
+    },
+    "NetworkIntent": {
+      "description": "What connectivity a sandbox is given. Recorded on the generation; never widened afterwards.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "No network device exists in the guest.",
+          "properties": {
+            "mode": {
+              "const": "none",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Outbound TCP to listed destinations only, through the host's resolver and relay.",
+          "properties": {
+            "entries": {
+              "items": {
+                "$ref": "#/$defs/AllowEntry"
+              },
+              "type": "array"
+            },
+            "mode": {
+              "const": "allowlist",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "entries"
+          ],
+          "type": "object"
+        }
       ]
     },
-    "NetworkMode": {
-      "description": "Phase 1 network vocabulary: `none` only (spec §18.7, DELTA-015). The enum is\n`non_exhaustive` so adding a mode later is a *minor* contract change that must ship with\nits own semantic contract and adversarial tests.",
-      "type": "string",
-      "enum": [
-        "none"
-      ]
+    "OwnerScope": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9._:/@=+-]+$",
+      "type": "string"
     },
-    "PolicyId": {
-      "description": "Identity of the policy in force when an operation was admitted (spec §16.7).",
-      "type": "object",
+    "PeerId": {
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9._:/@=+-]+$",
+      "type": "string"
+    },
+    "PortRange": {
+      "additionalProperties": false,
+      "description": "One inclusive port range. `from` and `to` are 1..=65535 and `from <= to`.",
+      "properties": {
+        "from": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "to": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "type": "object"
+    },
+    "ProfileId": {
+      "description": "Identity of the safety profile in force when an operation was admitted (SP-1, SP-2).",
       "properties": {
         "digest": {
-          "description": "sha256 of the exact bytes that were verified and parsed.",
+          "description": "sha256 of the exact bytes that were verified and parsed. This is the identity.",
           "type": "string"
         },
         "name": {
@@ -219,19 +260,19 @@
         "name",
         "version",
         "digest"
-      ]
+      ],
+      "type": "object"
     },
     "RunId": {
-      "type": "string",
-      "pattern": "^run-[0-9a-f]{32}$"
+      "pattern": "^run-[0-9a-f]{32}$",
+      "type": "string"
     },
     "SandboxId": {
-      "type": "string",
-      "pattern": "^sbx-[0-9a-f]{32}$"
+      "pattern": "^sbx-[0-9a-f]{32}$",
+      "type": "string"
     },
     "SandboxRef": {
-      "description": "A sandbox incarnation. Destructive operations require *this*, never a name (spec §12.5).",
-      "type": "object",
+      "description": "A sandbox incarnation. Destructive operations require *this*, never a name (contract ID-5).",
       "properties": {
         "generation": {
           "$ref": "#/$defs/Generation"
@@ -243,43 +284,43 @@
       "required": [
         "sandbox_id",
         "generation"
-      ]
+      ],
+      "type": "object"
     },
     "SandboxResources": {
-      "description": "What a sandbox is *given*. Immutable for the life of a generation.",
-      "type": "object",
+      "additionalProperties": false,
+      "description": "What a sandbox is *given*. Immutable for the life of a generation (NW-3, RS-4).",
       "properties": {
         "disk_mib": {
-          "type": "integer",
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "type": "integer"
         },
         "memory_mib": {
-          "type": "integer",
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "type": "integer"
         },
         "network": {
-          "$ref": "#/$defs/NetworkMode"
+          "$ref": "#/$defs/NetworkIntent"
         },
         "vcpus": {
-          "type": "integer",
           "format": "uint8",
           "maximum": 255,
-          "minimum": 0
+          "minimum": 0,
+          "type": "integer"
         }
       },
-      "additionalProperties": false,
       "required": [
         "vcpus",
         "memory_mib",
         "disk_mib",
         "network"
-      ]
+      ],
+      "type": "object"
     },
     "SnapshotArtifacts": {
-      "description": "The three artifacts that together *are* a snapshot (spec §20.3): CPU/device state, guest\nmemory, and the disk the guest was running on. Missing any one makes the others useless.",
-      "type": "object",
+      "description": "The three artifacts that together *are* a snapshot (contract SNP-2): CPU/device state, guest\nmemory, and the disk the guest was running on. Missing any one makes the others useless.",
       "properties": {
         "disk": {
           "$ref": "#/$defs/FileDigest"
@@ -300,11 +341,130 @@
         "mem",
         "disk",
         "vmm_version"
-      ]
+      ],
+      "type": "object"
     },
     "SnapshotId": {
-      "type": "string",
-      "pattern": "^snp-[0-9a-f]{32}$"
+      "pattern": "^snp-[0-9a-f]{32}$",
+      "type": "string"
+    },
+    "Tags": {
+      "description": "`(peer_id, owner_scope)` of the request that created a record (AU-8).",
+      "properties": {
+        "owner_scope": {
+          "$ref": "#/$defs/OwnerScope"
+        },
+        "peer_id": {
+          "$ref": "#/$defs/PeerId"
+        }
+      },
+      "required": [
+        "peer_id",
+        "owner_scope"
+      ],
+      "type": "object"
     }
-  }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "acf_version": {
+      "type": "string"
+    },
+    "artifacts": {
+      "$ref": "#/$defs/SnapshotArtifacts"
+    },
+    "backend": {
+      "$ref": "#/$defs/BackendSummary"
+    },
+    "baseline_state_digest": {
+      "description": "The deterministic guest probe taken just before the snapshot (restore oracle).",
+      "type": "string"
+    },
+    "created_wall": {
+      "type": "string"
+    },
+    "guest_agent_version": {
+      "type": "string"
+    },
+    "guest_protocol_version": {
+      "description": "Host ↔ guest protocol version the snapshot's agent speaks (GP-4).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "host": {
+      "$ref": "#/$defs/HostFingerprint"
+    },
+    "image": {
+      "$ref": "#/$defs/ImageRef"
+    },
+    "profile_id": {
+      "$ref": "#/$defs/ProfileId"
+    },
+    "resources": {
+      "$ref": "#/$defs/SandboxResources"
+    },
+    "restore_reseeds_entropy": {
+      "description": "Whether a restore of this snapshot reseeds guest entropy (RE-7). Evidence only.",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "secret_refs": {
+      "description": "References of the secrets live in the sandbox at capture (SC-5). Never material.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "snapshot_generation": {
+      "$ref": "#/$defs/Generation"
+    },
+    "snapshot_id": {
+      "$ref": "#/$defs/SnapshotId"
+    },
+    "source": {
+      "$ref": "#/$defs/SandboxRef"
+    },
+    "source_run": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RunId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "tags": {
+      "$ref": "#/$defs/Tags",
+      "description": "Tags of the request that created the snapshot (SNP-6)."
+    }
+  },
+  "required": [
+    "schema_version",
+    "snapshot_id",
+    "snapshot_generation",
+    "created_wall",
+    "source",
+    "image",
+    "resources",
+    "artifacts",
+    "backend",
+    "host",
+    "profile_id",
+    "baseline_state_digest",
+    "guest_agent_version",
+    "guest_protocol_version",
+    "tags",
+    "secret_refs",
+    "restore_reseeds_entropy",
+    "acf_version"
+  ],
+  "title": "SnapshotManifest",
+  "type": "object"
 }

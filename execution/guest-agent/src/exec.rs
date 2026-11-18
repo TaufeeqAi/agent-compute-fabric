@@ -3,13 +3,13 @@
 //! Guarantees (each has a test):
 //! * stdout/stderr are captured up to the requested cap; bytes beyond the cap are *drained
 //!   and counted* (so the child never blocks on a full pipe) but not stored, and the result
-//!   says so explicitly (`*_truncated`, `*_total_bytes`)  — spec §18.8;
-//! * a wall-clock deadline kills the whole process group — spec §18.3;
-//! * an external cancel flag does the same, reported distinctly from a timeout — spec §8.4;
+//!   says so explicitly (`*_truncated`, `*_total_bytes`) — contract OU-1, OU-2;
+//! * a wall-clock deadline kills the whole process group — contract EX-5;
+//! * an external cancel flag does the same, reported distinctly from a timeout — contract §11.7;
 //! * the process tree is bounded — by a per-exec **cgroup v2** (`pids.max`) when the guest
 //!   kernel provides the `pids` controller, else by `RLIMIT_NPROC` for the non-root exec uid —
 //!   and pressure against the budget is reported. The mechanism actually used is part of the
-//!   result (`containment`) so evidence never overstates what was enforced — spec §18.4/§18.10;
+//!   result (`containment`) so evidence never overstates what was enforced — contract RS-2, GP-6;
 //! * **a run owns its process tree**: when the run ends (exit, timeout or cancel) every
 //!   remaining descendant is killed, so nothing leaks across runs;
 //! * a descendant that escapes the kill and keeps a pipe open cannot hang the agent: we
@@ -482,6 +482,22 @@ mod tests {
         assert!(!r.stdout_truncated && !r.stderr_truncated && !r.output_incomplete);
     }
 
+    /// EX-1 (T-EXEC-04 below a real guest): the request is an argument vector and is executed as one.
+    /// No shell stands between the request and the program, so what a shell would expand, split or
+    /// run arrives as the bytes that were sent, and nothing it names is executed.
+    #[test]
+    fn an_argument_with_shell_metacharacters_reaches_the_program_as_it_was_given() {
+        let dir = tempfile::tempdir().unwrap();
+        let canary = dir.path().join("a-shell-ran-this");
+        let hostile = format!("$(touch {0}); `touch {0}` && echo $HOME | cat > {0}; * ' \" \\", canary.display());
+        let mut request = req("");
+        request.argv = vec!["/bin/echo".into(), "--".into(), hostile.clone(), "second argument".into()];
+        let r = run(&request, &never(), &ExecEnv::default());
+        assert_eq!(r.status, ExecStatus::Exited { code: 0 });
+        assert_eq!(String::from_utf8(r.stdout).unwrap(), format!("-- {hostile} second argument\n"));
+        assert!(!canary.exists(), "nothing in an argument is ever interpreted");
+    }
+
     #[test]
     fn a_request_without_path_gets_the_default_and_one_with_path_keeps_its_own() {
         let mut q = req("unused");
@@ -535,13 +551,19 @@ mod tests {
     fn escaped_descendant_holding_pipe_open_yields_incomplete_not_a_hang() {
         // `setsid` moves the sleeper out of the process group, and uid 0 is never uid-reaped,
         // so under the rlimit fallback it genuinely survives teardown holding stdout open.
+        //
+        // The sleeper's duration is unique to this test process, so that the cleanup below ends this
+        // run's sleeper and no other: two runs of this test on one machine (two checkouts, two CI jobs
+        // of one user) must not end each other's sleeper, which would close the pipe early and make
+        // the output look complete.
+        let sleeper = format!("sleep 31.{:06}", std::process::id() % 1_000_000);
         let t = Instant::now();
-        let r = run(&req("setsid sleep 31 & echo started"), &never(), &ExecEnv::default());
+        let r = run(&req(&format!("setsid {sleeper} & echo started")), &never(), &ExecEnv::default());
         assert_eq!(r.status, ExecStatus::Exited { code: 0 });
         assert!(r.output_incomplete, "must flag possibly-missing output tail");
         assert!(t.elapsed() < Duration::from_secs(5), "took {:?}", t.elapsed());
         assert_eq!(r.stdout, b"started\n");
-        let _ = std::process::Command::new("pkill").args(["-f", "sleep 31"]).status();
+        let _ = std::process::Command::new("pkill").args(["-f", &sleeper]).status();
     }
 
     #[test]

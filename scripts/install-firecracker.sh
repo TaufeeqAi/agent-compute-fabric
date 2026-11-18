@@ -150,8 +150,16 @@ main() {
     mv -f -- "$bindir/.firecracker.new.$$" "$bindir/firecracker"
     mv -f -- "$bindir/.jailer.new.$$" "$bindir/jailer"
 
+    # The host pins each binary by its own digest and hashes it at startup and before every launch.
+    # These are the digests of the two files just installed from the verified archive; they are the
+    # only thing written to stdout, as the two lines the host configuration needs.
+    local fc_digest jl_digest
+    fc_digest="$(sha256_file "$bindir/firecracker")"
+    jl_digest="$(sha256_file "$bindir/jailer")"
+
     log "installed $bindir/firecracker and $bindir/jailer ($VERSION, $arch)"
-    log "make sure firecracker.pinned_version is $VERSION in /etc/acf/host.yaml, then run: acf-host doctor"
+    log "set pinned_version: $VERSION and the two lines below in the firecracker section of /etc/acf/host.yaml, then run: acf-host doctor"
+    printf '  firecracker_sha256: "%s"\n  jailer_sha256: "%s"\n' "$fc_digest" "$jl_digest"
 }
 
 main "$@"

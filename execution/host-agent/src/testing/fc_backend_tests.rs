@@ -21,16 +21,16 @@ use tokio_util::sync::CancellationToken;
 
 use super::fake_fc::FakeFc;
 use crate::{
+    backend::firecracker::{FirecrackerBackend, ProcInspector, ProcessInspector, jailer},
+    backend::process::SecurityPosture,
     backend::*,
     clock::{Clock, SystemClock},
     config::{HostConfig, test_support::config},
-    domain::{CommandSpec, NetworkMode, RunLimitsRequest, SandboxResources},
+    domain::{CommandSpec, NetworkIntent, RunLimitsRequest, SandboxResources},
     error::{FailureClass, Result},
-    filesystem::{GenerationDir, Layout, generation::OwnerMarker, images::test_support},
-    firecracker::{FirecrackerBackend, ProcInspector, ProcessInspector, jailer},
     ids::{Generation, OperationId, SandboxId, SandboxRef},
-    operation::ProcessIdentity,
-    process::SecurityPosture,
+    storage::{GenerationDir, Layout, generation::OwnerMarker, images::test_support},
+    store::ProcessIdentity,
 };
 
 const UID_SLOT: u32 = 3;
@@ -41,6 +41,10 @@ struct Scripted {
     real: ProcInspector,
     posture: Mutex<SecurityPosture>,
     ours: bool,
+    /// User ids "live" processes run as (identifier-slot observation).
+    uids: Mutex<Vec<u32>>,
+    /// Limit drift the control group "reports" (posture recheck).
+    drift: Mutex<Vec<String>>,
 }
 
 impl ProcessInspector for Scripted {
@@ -56,6 +60,12 @@ impl ProcessInspector for Scripted {
     fn cmdline_has(&self, pid: i32, needle: &str) -> bool {
         self.ours && self.real.cmdline_has(pid, needle)
     }
+    fn live_uids(&self) -> Result<Vec<u32>> {
+        Ok(self.uids.lock().unwrap().clone())
+    }
+    fn limit_drift(&self, _: &Path, _: &crate::backend::process::CgroupSpec) -> Vec<String> {
+        self.drift.lock().unwrap().clone()
+    }
 }
 
 fn good_posture() -> SecurityPosture {
@@ -66,16 +76,17 @@ fn good_posture() -> SecurityPosture {
 type FcSlot = Arc<Mutex<Option<Arc<FakeFc>>>>;
 
 #[derive(Default)]
-struct Sink(Mutex<Vec<ProcessIdentity>>, Mutex<Option<usize>>, Mutex<Option<FcSlot>>);
+struct Sink(Mutex<Vec<ProcessIdentity>>, Mutex<Option<usize>>, Mutex<Option<FcSlot>>, Mutex<Option<PathBuf>>);
 
 #[async_trait]
 impl LaunchSink for Sink {
-    async fn launched(&self, p: &ProcessIdentity) -> Result<()> {
-        // Record how many API requests the VMM had received when its identity was journaled.
+    async fn launched(&self, launched: &Launched) -> Result<()> {
+        // Record how many API requests the VMM had received when its identity was recorded.
         let seen =
             self.2.lock().unwrap().as_ref().and_then(|slot| slot.lock().unwrap().as_ref().map(|f| f.state.lock().unwrap().log.len()));
         *self.1.lock().unwrap() = seen;
-        self.0.lock().unwrap().push(p.clone());
+        self.0.lock().unwrap().push(launched.process.clone());
+        *self.3.lock().unwrap() = launched.kill_switch.clone();
         Ok(())
     }
 }
@@ -105,16 +116,20 @@ fn write_fake_jailer(path: &Path, argv_has_id: bool) {
 }
 
 impl Harness {
+    /// These tests create network namespaces and give files to the per-sandbox users, so they need
+    /// root. They are `#[ignore]`d for that reason; asked for without root they fail, never skip.
     fn new(argv_has_id: bool, ours: bool) -> Option<Self> {
-        if !rustix::process::geteuid().is_root() {
-            eprintln!("skip: needs root (netns, chown)");
-            return None;
-        }
+        assert!(rustix::process::geteuid().is_root(), "this test needs root: run it with `make root-test`");
         let dir = tempfile::tempdir().unwrap();
         let mut cfg = config(dir.path());
         let jailer_script = dir.path().join("fake-jailer");
         write_fake_jailer(&jailer_script, argv_has_id);
         cfg.firecracker.jailer_bin = jailer_script;
+        // TI-2: both binaries are hashed before every launch, so both exist and are pinned. The
+        // stand-in for the VMM is never executed: the fake jailer uses only its name.
+        cfg.firecracker.firecracker_bin = dir.path().join("firecracker");
+        std::fs::write(&cfg.firecracker.firecracker_bin, b"stand-in for the VMM binary").unwrap();
+        crate::backend::firecracker::verify::test_support::pin(&mut cfg.firecracker);
         cfg.firecracker.guest_ready_timeout_ms = 3_000;
         cfg.firecracker.api_ready_timeout_ms = 3_000;
         cfg.firecracker.shutdown_grace_ms = 3_000;
@@ -123,7 +138,13 @@ impl Harness {
         let agent_dir = dir.path().join("agent-state");
         std::fs::create_dir_all(&agent_dir).unwrap();
         std::fs::write(agent_dir.join("boot_id"), "boot-A\n").unwrap();
-        let scripted = Arc::new(Scripted { real: ProcInspector, posture: Mutex::new(good_posture()), ours });
+        let scripted = Arc::new(Scripted {
+            real: ProcInspector,
+            posture: Mutex::new(good_posture()),
+            ours,
+            uids: Mutex::default(),
+            drift: Mutex::default(),
+        });
         let backend = FirecrackerBackend::new(Arc::clone(&cfg), Arc::clone(&layout), Arc::new(SystemClock), scripted.clone());
         test_support::install(&cfg.paths.state_root.join("images"), "python", b"kernel-image-bytes", b"rootfs-image-bytes");
         Some(Self { _dir: dir, cfg, layout, backend, agent_dir, scripted })
@@ -153,19 +174,21 @@ impl Harness {
     fn new_generation(&self, sbx: &SandboxId, g: u64) -> (SandboxRef, String) {
         let nonce = format!("nonce-{g}");
         let marker = OwnerMarker {
-            schema_version: 1,
+            schema_version: crate::storage::generation::OWNER_MARKER_SCHEMA_VERSION,
             sandbox_id: sbx.clone(),
             generation: Generation(g),
             nonce: nonce.clone(),
             created_by: OperationId::parse("op-12345678").unwrap(),
             host_instance_id: "t".into(),
+            lineage: Some("test-lineage".into()),
+            created_seq: Some(1),
         };
         GenerationDir::create(&self.layout, &marker).unwrap();
         (SandboxRef { sandbox_id: sbx.clone(), generation: Generation(g) }, nonce)
     }
 
     fn resources() -> SandboxResources {
-        SandboxResources { vcpus: 2, memory_mib: 256, disk_mib: 64, network: NetworkMode::None }
+        SandboxResources { vcpus: 2, memory_mib: 256, disk_mib: 64, network: NetworkIntent::None }
     }
 
     fn root_of(&self, s: &SandboxRef) -> PathBuf {
@@ -223,7 +246,28 @@ async fn kill_all(h: &Harness, handle: &BackendHandle, sink: &Sink) {
     let _ = h.backend.stop(&hh, Duration::from_secs(3)).await;
 }
 
+/// T-BACK-02 for this adapter: the rules of the port that the test backend is held to
+/// (`testing/conformance.rs`) hold for the Firecracker adapter too. The VMM is emulated and the guest
+/// agent is real; the same rules against a real VMM are the L4 half, in `tests/integration`.
 #[tokio::test]
+#[ignore = "needs root: run with `make root-test`"]
+async fn t_back_02_the_firecracker_adapter_passes_the_backend_conformance_suite() {
+    let Some(h) = Harness::new(true, true) else { return };
+    let image = h.layout.image_store().unwrap().resolve("python").unwrap();
+    // Every launch of the suite finds an emulated VMM that binds its API socket in the jail.
+    let appear = |s: &SandboxRef| drop(h.watch(s, h.agent()));
+    super::conformance::run(&super::conformance::Subject {
+        backend: &h.backend,
+        layout: &h.layout,
+        image: &image,
+        uid_slot: UID_SLOT,
+        before_launch: &appear,
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "needs root: run with `make root-test`"]
 async fn boots_in_the_documented_order_and_journals_identity_before_any_configuration() {
     let Some(h) = Harness::new(true, true) else { return };
     let sbx = SandboxId::generate();
@@ -267,6 +311,7 @@ async fn boots_in_the_documented_order_and_journals_identity_before_any_configur
 }
 
 #[tokio::test]
+#[ignore = "needs root: run with `make root-test`"]
 async fn a_guest_that_reports_a_nic_fails_the_boot_closed_and_the_vmm_is_killed() {
     let Some(h) = Harness::new(true, true) else { return };
     let sbx = SandboxId::generate();
@@ -278,10 +323,11 @@ async fn a_guest_that_reports_a_nic_fails_the_boot_closed_and_the_vmm_is_killed(
     assert_eq!(e.class, FailureClass::SecurityControlFailure, "{e}");
     assert!(e.message.contains("eth0"), "{}", e.message);
     let id = sink.0.lock().unwrap()[0].clone();
-    assert_eq!(crate::process::identity::check(&id, &SystemClock.boot_id()), crate::process::IdentityCheck::Gone);
+    assert_eq!(crate::backend::process::identity::check(&id, &SystemClock.boot_id()), crate::backend::process::IdentityCheck::Gone);
 }
 
 #[tokio::test]
+#[ignore = "needs root: run with `make root-test`"]
 async fn a_vmm_that_fails_the_confinement_check_is_killed_before_it_is_configured() {
     let Some(h) = Harness::new(true, true) else { return };
     let sbx = SandboxId::generate();
@@ -299,10 +345,11 @@ async fn a_vmm_that_fails_the_confinement_check_is_killed_before_it_is_configure
         "an unconfined VMM must not be configured"
     );
     let id = sink.0.lock().unwrap()[0].clone();
-    assert_eq!(crate::process::identity::check(&id, &SystemClock.boot_id()), crate::process::IdentityCheck::Gone);
+    assert_eq!(crate::backend::process::identity::check(&id, &SystemClock.boot_id()), crate::backend::process::IdentityCheck::Gone);
 }
 
 #[tokio::test]
+#[ignore = "needs root: run with `make root-test`"]
 async fn a_pid_file_naming_a_process_that_is_not_ours_is_never_adopted_or_signalled() {
     let Some(h) = Harness::new(false, true) else { return }; // argv lacks the jail id
     let sbx = SandboxId::generate();
@@ -320,6 +367,7 @@ async fn a_pid_file_naming_a_process_that_is_not_ours_is_never_adopted_or_signal
 }
 
 #[tokio::test]
+#[ignore = "needs root: run with `make root-test`"]
 async fn an_api_failure_after_launch_leaves_no_live_vmm_behind() {
     let Some(h) = Harness::new(true, true) else { return };
     let sbx = SandboxId::generate();
@@ -332,10 +380,11 @@ async fn an_api_failure_after_launch_leaves_no_live_vmm_behind() {
     assert!(e.message.contains("boom"), "Firecracker's own fault_message must be surfaced: {}", e.message);
     assert!(!e.is_definite(), "InstanceStart may have been applied: side effect must be Possible");
     let id = sink.0.lock().unwrap()[0].clone();
-    assert_eq!(crate::process::identity::check(&id, &SystemClock.boot_id()), crate::process::IdentityCheck::Gone);
+    assert_eq!(crate::backend::process::identity::check(&id, &SystemClock.boot_id()), crate::backend::process::IdentityCheck::Gone);
 }
 
 #[tokio::test]
+#[ignore = "needs root: run with `make root-test`"]
 async fn exec_runs_through_the_vsock_path_into_the_real_guest_agent() {
     let Some(h) = Harness::new(true, true) else { return };
     let sbx = SandboxId::generate();
@@ -346,11 +395,12 @@ async fn exec_runs_through_the_vsock_path_into_the_real_guest_agent() {
     let out = h.backend.start(&handle, &sink).await.unwrap();
     let handle = BackendHandle { process: Some(out.process.clone()), ..handle };
 
-    let policy = crate::admission::policy::test_support::policy();
-    let cmd = policy
+    let profile = crate::authority::profile::test_support::profile();
+    let cmd = profile
         .authorize_exec(&CommandSpec {
             argv: vec!["/bin/sh".into(), "-c".into(), "echo via-vsock; exit 5".into()],
             env: Default::default(),
+            secret_env: Default::default(),
             cwd: Some("/tmp".into()),
             limits: RunLimitsRequest::default(),
         })
@@ -361,7 +411,7 @@ async fn exec_runs_through_the_vsock_path_into_the_real_guest_agent() {
         .backend
         .exec(
             &handle,
-            &GuestExecRequest { exec_id: "x1".into(), command: cmd, grace: Duration::from_millis(500) },
+            &GuestExecRequest { exec_id: "x1".into(), command: cmd, grace: Duration::from_millis(500), secrets: Vec::new() },
             CancellationToken::new(),
         )
         .await
@@ -375,6 +425,7 @@ async fn exec_runs_through_the_vsock_path_into_the_real_guest_agent() {
 }
 
 #[tokio::test]
+#[ignore = "needs root: run with `make root-test`"]
 async fn snapshot_then_restore_reproduces_guest_state_and_a_reboot_is_detected() {
     let Some(h) = Harness::new(true, true) else { return };
     let sbx = SandboxId::generate();
@@ -434,6 +485,7 @@ async fn snapshot_then_restore_reproduces_guest_state_and_a_reboot_is_detected()
 }
 
 #[tokio::test]
+#[ignore = "needs root: run with `make root-test`"]
 async fn a_tampered_snapshot_is_refused_before_any_vmm_is_launched() {
     let Some(h) = Harness::new(true, true) else { return };
     let sbx = SandboxId::generate();
@@ -457,12 +509,13 @@ async fn a_tampered_snapshot_is_refused_before_any_vmm_is_launched() {
         .restore(&RestoreRequest { sandbox: s2.clone(), resources: &res, uid_slot: UID_SLOT, source: &dest, expected: &art }, &sink2)
         .await
         .unwrap_err();
-    assert_eq!(e.class, FailureClass::CorruptInput, "{e}");
+    assert_eq!(e.class, FailureClass::IntegrityFailure, "{e}");
     assert!(sink2.0.lock().unwrap().is_empty(), "no VMM may be launched from unverified bytes");
     assert!(!h.root_of(&s2).exists(), "the jailer must not even have been invoked");
 }
 
 #[tokio::test]
+#[ignore = "needs root: run with `make root-test`"]
 async fn teardown_refuses_while_running_and_requires_ownership_proof() {
     let Some(h) = Harness::new(true, true) else { return };
     let sbx = SandboxId::generate();
@@ -482,10 +535,11 @@ async fn teardown_refuses_while_running_and_requires_ownership_proof() {
     assert!(h.layout.generation_path(&s.sandbox_id, s.generation).exists(), "wrong proof => nothing deleted");
     assert_eq!(h.backend.teardown(&s, &nonce).await.unwrap(), TeardownOutcome::Removed);
     assert_eq!(h.backend.teardown(&s, &nonce).await.unwrap(), TeardownOutcome::Absent, "teardown is idempotent");
-    assert!(!crate::network::Netns::path_for(&h.cfg.paths.runtime_dir.join("netns"), &s.jail_id()).exists(), "netns released");
+    assert!(!crate::backend::netns::Netns::path_for(&h.cfg.paths.runtime_dir.join("netns"), &s.jail_id()).exists(), "netns released");
 }
 
 #[tokio::test]
+#[ignore = "needs root: run with `make root-test`"]
 async fn discover_finds_our_vmm_by_jail_id_even_without_a_journaled_identity() {
     let Some(h) = Harness::new(true, true) else { return };
     let sbx = SandboxId::generate();
@@ -501,6 +555,7 @@ async fn discover_finds_our_vmm_by_jail_id_even_without_a_journaled_identity() {
 }
 
 #[tokio::test]
+#[ignore = "needs root: run with `make root-test`"]
 async fn provisioning_rejects_a_corrupt_image_and_an_undersized_disk() {
     let Some(h) = Harness::new(true, true) else { return };
     let sbx = SandboxId::generate();
@@ -515,7 +570,7 @@ async fn provisioning_rejects_a_corrupt_image_and_an_undersized_disk() {
         .provision(&ProvisionRequest { sandbox: s.clone(), resources: &tiny, image: &image, uid_slot: UID_SLOT })
         .await
         .unwrap_err();
-    assert_eq!(e.class, FailureClass::CorruptInput, "{e}");
+    assert_eq!(e.class, FailureClass::IntegrityFailure, "{e}");
     assert!(
         !h.layout.generation_path(&s.sandbox_id, s.generation).join("payload/rootfs.ext4").exists(),
         "a mismatching copy must be deleted, not left behind"

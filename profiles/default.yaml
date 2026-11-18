@@ -1,0 +1,100 @@
+# Agent Compute Fabric — default host safety profile (schema_version 2).
+#
+# The safety profile answers one question: HOW MUCH MAY ONE REQUEST CONSUME ON THIS HOST, AND WHICH
+# CAPABILITIES EXIST HERE? It is the host's own floor. It holds no rule about tenants, users,
+# approvals or prices: those are decided before a request reaches this host, and the host enforces
+# this profile even when a request asks for more.
+#
+# What is NOT in this file, and cannot be: the fixed floor that no profile, configuration or request
+# can switch off (unprivileged roles, one identity per sandbox, no guest root, bounded everything,
+# fail-closed checks). The loader refuses a profile that tries (guest_uid 0, a zero bound).
+#
+# How the host uses this file
+#   * It is a trusted input: a regular file (no symlink), owned by root, not writable by group or
+#     other, inside root-owned non-writable directories, at most 1 MiB.
+#       install -m 0644 -o root -g root profiles/default.yaml /etc/acf/profile.yaml
+#   * Its identity is the sha256 of the verified bytes. Every operation records that identity and is
+#     governed by the profile it was ADMITTED under until it ends.
+#   * `profile.reload` (an operator method) installs a changed file for LATER operations only. A
+#     file that does not validate is refused and the previous profile stays in force.
+#   * Unknown keys are refused. A typo fails at load, never silently.
+#
+# What a caller sees
+#   above a ceiling, or a capability that is not granted   -> SAFETY_CONTROL_DENIED  (never clamped)
+#   a field this profile has no rule for (an env name)      -> SAFETY_CONTROL_DENIED
+#   a malformed request                                     -> INVALID_REQUEST
+
+schema_version: 2
+name: default
+version: "2.0.0"
+
+# ------------------------------------------------------------------------------------------------
+# Ceilings, per sandbox and per command. Every one is finite; zero is refused, it never means
+# "unlimited". Keep each at or below the host envelope (config/host.example.yaml): the host checks
+# the pair at startup and stops creating privilege if they disagree.
+# ------------------------------------------------------------------------------------------------
+limits:
+  max_vcpus: 4               # the VMM accepts 1 or an even number; admission enforces that too
+  max_memory_mib: 4096
+  max_disk_mib: 8192         # at least the largest installed image's root filesystem
+  max_runtime_ms: 3600000    # one command: at most 1 hour
+  max_pids: 1024             # process-tree cap inside the guest, per command
+  max_stdout_bytes: 8388608  # 8 MiB. stdout + stderr of one run must fit in one response,
+  max_stderr_bytes: 8388608  # and max_sandboxes x (stdout + stderr) must fit envelope.agent_memory_mib.
+  max_argv_items: 256
+  max_argv_bytes: 131072     # 128 KiB of argv in total
+  max_env_entries: 32
+  max_lifetime_secs: 86400   # a sandbox lives at most 24 hours; the host destroys it at its expiry
+  max_allowlist_entries: 32  # network mode `allowlist`: entries per sandbox
+
+# ------------------------------------------------------------------------------------------------
+# Defaults for what a request leaves out. Optional: when omitted they are min(built-in, ceiling).
+# Each must be at or below its ceiling.
+# ------------------------------------------------------------------------------------------------
+defaults:
+  runtime_ms: 600000         # 10 minutes
+  pids: 256
+  stdout_bytes: 1048576      # 1 MiB
+  stderr_bytes: 1048576
+  lifetime_secs: 3600        # a sandbox whose request names no lifetime lives 1 hour
+
+# ------------------------------------------------------------------------------------------------
+# Capabilities: an allow-list. A switch that is off, or a word that is not listed, is a denial.
+# ------------------------------------------------------------------------------------------------
+capabilities:
+  # `none`      : the guest has no network device at all.
+  # `allowlist` : one device on an isolated segment; DNS and TCP only, only to the destinations the
+  #               request lists, through an unprivileged relay. Offered only where the backend
+  #               declares it (`acf-host doctor`: network_tools).
+  network_modes: [none, allowlist]
+  # Image ALIASES a request may select. An alias grants nothing by itself: the image must be
+  # installed (scripts/build-image.sh) and its manifest digests must verify at use.
+  images: [base, python, node, browser]
+  exec: true
+  snapshot_create: true
+  snapshot_restore: true
+  # These two switches govern role `caller`. An operator, and the host itself, are never refused
+  # containment: destroying a sandbox and deleting a snapshot only remove privilege.
+  snapshot_delete: true
+  sandbox_destroy: true
+  # Delivery of secrets by reference at execution time. Requests never carry secret material.
+  secret_injection: false
+  # Whether an allowlist entry may name a private address range (10/8, 172.16/12, 192.168/16, ...).
+  # Loopback, link-local, metadata, multicast, the host's own addresses and other sandboxes are
+  # always denied, whatever this says.
+  private_destinations: false
+
+# ------------------------------------------------------------------------------------------------
+# How commands run inside the guest. Every command runs as this unprivileged identity; guest root is
+# never available to a request.
+# ------------------------------------------------------------------------------------------------
+execution:
+  # Exact variable NAMES a request may set (as a value or as a secret reference). Everything else is
+  # refused, notably LD_PRELOAD, LD_LIBRARY_PATH, PYTHONPATH, NODE_OPTIONS and BASH_ENV, which turn
+  # "set a variable" into "run chosen code before main()". Add to this list only with that in mind.
+  env_allowlist: [PATH, HOME, LANG, LC_ALL, TZ, PYTHONUNBUFFERED, PYTHONHASHSEED, NODE_ENV, CI]
+  # A command's working directory must be one of these or beneath one (no `..`, no relative paths).
+  cwd_prefixes: [/workspace, /tmp]
+  default_cwd: /workspace
+  guest_uid: 1000
+  guest_gid: 1000

@@ -58,7 +58,7 @@ impl UdsTarget {
 }
 
 fn unavailable(msg: impl Into<String>) -> AcfError {
-    AcfError::new(FailureClass::BackendUnavailable, msg)
+    AcfError::new(FailureClass::DependencyUnavailable, msg)
 }
 
 /// Plain Unix socket (tests, and any future non-vsock transport).
@@ -83,7 +83,7 @@ impl GuestConnector for UnixConnector {
 /// expect `OK <n>\n`; after that the stream is a transparent pipe to the guest port.
 ///
 /// The host **never listens** on a `uds_path_<PORT>` socket, so the guest has no way to open a
-/// connection to the host over vsock (spec SEC-001/SEC-014): host-initiated only.
+/// connection to the host over vsock (contract GP-1, SEC-018): host-initiated only.
 #[derive(Debug, Clone)]
 pub struct VsockUdsConnector {
     pub target: UdsTarget,
@@ -168,9 +168,9 @@ mod tests {
             let _ = s.write_all(b"NOPE\n").await;
         });
         let c = VsockUdsConnector { target: UdsTarget::direct(&p), port: 5252, connect_timeout: Duration::from_secs(2) };
-        assert_eq!(c.connect().await.err().unwrap().class, FailureClass::BackendUnavailable);
+        assert_eq!(c.connect().await.err().unwrap().class, FailureClass::DependencyUnavailable);
         let missing = UnixConnector { target: UdsTarget::direct(d.path().join("none")), connect_timeout: Duration::from_millis(200) };
-        assert_eq!(missing.connect().await.err().unwrap().class, FailureClass::BackendUnavailable);
+        assert_eq!(missing.connect().await.err().unwrap().class, FailureClass::DependencyUnavailable);
     }
 
     #[tokio::test]

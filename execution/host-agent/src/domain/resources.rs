@@ -1,33 +1,24 @@
-//! Resource vocabulary (spec §8.8, §18). Every resource follows
-//! `request -> admission -> reservation -> enforcement -> violation -> evidence`.
+//! Resource vocabulary (contract §19). Every resource follows
+//! `request -> admission -> lease -> enforcement -> violation -> evidence`.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::network::NetworkIntent;
 use crate::error::{AcfError, Result};
 
-/// Phase 1 network vocabulary: `none` only (spec §18.7, DELTA-015). The enum is
-/// `non_exhaustive` so adding a mode later is a *minor* contract change that must ship with
-/// its own semantic contract and adversarial tests.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-#[non_exhaustive]
-pub enum NetworkMode {
-    None,
-}
-
-/// What a sandbox is *given*. Immutable for the life of a generation.
+/// What a sandbox is *given*. Immutable for the life of a generation (NW-3, RS-4).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SandboxResources {
     pub vcpus: u8,
     pub memory_mib: u32,
     pub disk_mib: u32,
-    pub network: NetworkMode,
+    pub network: NetworkIntent,
 }
 
 impl SandboxResources {
-    /// Hardware-level validity (independent of any policy ceiling).
+    /// Hardware-level validity (independent of any profile ceiling).
     pub fn validate_shape(&self) -> Result<()> {
         // Firecracker: "either 1 or an even number", 1..=32.
         if self.vcpus == 0 || self.vcpus > 32 || (self.vcpus != 1 && !self.vcpus.is_multiple_of(2)) {
@@ -43,7 +34,7 @@ impl SandboxResources {
     }
 }
 
-/// Per-run limits (spec §18.3, §18.4, §18.8).
+/// Per-run limits (contract §18.1, §18.4).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RunLimits {
@@ -68,16 +59,34 @@ impl RunLimits {
     }
 }
 
-/// What admission set aside for one sandbox generation. Persisted so ownership of capacity
-/// survives a host-agent restart.
+/// The lease of one generation (§12.4): what admission set aside and which identifiers it holds.
+/// Persisted, so ownership of capacity survives a restart. It is released only in the transaction
+/// that commits the generation `DESTROYED` (LS-1, INV-027).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Reservation {
     pub vcpus: u32,
-    /// Guest memory **plus** the per-VMM overhead the host budgets for.
+    /// Guest memory **plus** the per-runtime overhead the backend declares (RS-1).
     pub memory_mib: u64,
     pub disk_mib: u64,
-    /// Index into the per-VM uid/gid range (Firecracker recommends a unique uid per VM).
+    /// Index into the host-wide identifier pool (RS-3). The VMM user id, the guest-traffic user id
+    /// and the sandbox's network segment are all derived from this one slot, so one reservation
+    /// holds every identifier of a generation.
     pub uid_slot: u32,
+}
+
+/// When a sandbox ends (contract §19.2). Both clocks are recorded: within one boot the monotonic
+/// reading decides; across a reboot the remaining time is recomputed from the wall clock and can
+/// only shrink (LT-2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Expiry {
+    /// Boot in which `mono_ns` is meaningful.
+    pub boot_id: String,
+    /// Monotonic deadline, nanoseconds, in that boot.
+    pub mono_ns: u64,
+    /// The same instant on the wall clock, milliseconds since the Unix epoch.
+    pub wall_ms: i64,
+    /// The lifetime that was granted, for display and for bounding a recomputed remainder.
+    pub lifetime_ms: u64,
 }
 
 #[cfg(test)]
@@ -85,7 +94,7 @@ mod tests {
     use super::*;
 
     fn r(v: u8, m: u32, d: u32) -> SandboxResources {
-        SandboxResources { vcpus: v, memory_mib: m, disk_mib: d, network: NetworkMode::None }
+        SandboxResources { vcpus: v, memory_mib: m, disk_mib: d, network: NetworkIntent::None }
     }
 
     #[test]
@@ -105,9 +114,8 @@ mod tests {
     }
 
     #[test]
-    fn unknown_network_mode_is_rejected_at_the_wire() {
-        // `restricted` was removed from the contract in v1.1.0 (DELTA-015).
-        assert!(serde_json::from_str::<NetworkMode>("\"restricted\"").is_err());
-        assert_eq!(serde_json::from_str::<NetworkMode>("\"none\"").unwrap(), NetworkMode::None);
+    fn unknown_fields_are_refused() {
+        let extra = r#"{"vcpus":1,"memory_mib":256,"disk_mib":128,"network":{"mode":"none"},"kernel_args":"x"}"#;
+        assert!(serde_json::from_str::<SandboxResources>(extra).is_err(), "kernel and VMM parameters are not caller-settable (API-4)");
     }
 }

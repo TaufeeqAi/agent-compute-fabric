@@ -1,14 +1,12 @@
-"""Test doubles for the host agent: a scripted Unix-socket server and a fake clock.
+"""Test doubles and helpers.
 
-The scripted host speaks the real wire format (u32 big-endian length + JSON) over a real
-``AF_UNIX`` socket, so the client's framing, timeout and connection handling are exercised for
-real. What is *scripted* is the host's behaviour: answer, answer with a given status, drop the
-connection after reading the request (the "lost response" case), close before reading, send
-garbage, send half a frame, or stall.
-
-Each accepted connection consumes the next behaviour in the script. A connection with no behaviour
-left, or a script that is not fully consumed, fails the test (``assert_clean``): a client that
-sends more or fewer requests than the test expects is a behavioural change, not a detail.
+* :class:`Contract` reads the host's published API description and validates what the client sends
+  and what a host may answer. Every request that leaves the client in *any* test goes through it.
+* :class:`ScriptedConnection` is an in-process transport: each exchange consumes the next step of a
+  script — answer, lose the response, refuse to connect. The client's retry and resolution logic
+  runs against it in zero wall time, and a script that is not fully consumed fails the test.
+* :class:`ScriptedHost` is a scripted server on a real ``AF_UNIX`` socket, for the transport itself.
+* :class:`FakeClock` makes waiting instantaneous and observable.
 """
 
 from __future__ import annotations
@@ -21,13 +19,162 @@ import struct
 import threading
 import time
 from collections import deque
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
-from typing import Any, ClassVar, Protocol
+from typing import Any, Protocol
+
+from jsonschema import Draft202012Validator
+
+import factories as f
 
 HEADER = struct.Struct(">I")
-PROTOCOL = "acf.host/1"
+PROTOCOL = "acf.host/2"
 SUN_PATH_SAFE = 100
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+API_FILE = REPO_ROOT / "execution" / "contracts" / "host-api.json"
+
+
+# ----------------------------------------------------------------------------- the published contract
+class Contract:
+    """The host API description (``execution/contracts/host-api.json``) as a set of validators."""
+
+    def __init__(self, document: dict[str, Any]) -> None:
+        self.document = document
+        self.defs: dict[str, Any] = document["$defs"]
+        self.methods: dict[str, dict[str, Any]] = {m["name"]: m for m in document["methods"]}
+        self._request = self._validator({"$ref": "#/$defs/RequestEnvelope"})
+        self._response = self._validator({"$ref": "#/$defs/ResponseEnvelope"})
+
+    @classmethod
+    def load(cls) -> Contract:
+        document = json.loads(API_FILE.read_text(encoding="utf-8"))
+        assert isinstance(document, dict)
+        return cls(document)
+
+    def _validator(self, schema: dict[str, Any]) -> Draft202012Validator:
+        return Draft202012Validator({**schema, "$defs": self.defs})
+
+    def validator_for(self, name: str) -> Draft202012Validator:
+        """A validator for one named type of the description."""
+        return self._validator({"$ref": f"#/$defs/{name}"})
+
+    def check_request(self, request: dict[str, Any]) -> None:
+        """A request is valid when its envelope is, its method exists, and its params have that method's shape."""
+        self._request.validate(request)
+        method = self.methods.get(request["method"])
+        assert method is not None, f"{request['method']!r} is not a published method"
+        params = request.get("params")
+        if method["params"] is None:
+            assert params in (None, {}), f"{method['name']} takes no params, got {params!r}"
+        elif params is None:
+            assert not method["params_required"], f"{method['name']} requires params"
+        else:
+            self._validator(method["params"]).validate(params)
+        identified = request.get("operation_id") is not None and request.get("issued_at") is not None
+        assert identified == method["creates_operation"], (
+            f"{method['name']}: operation_id and issued_at accompany exactly the methods that create an operation"
+        )
+        assert "authority" not in request, "the client never sends `authority`"
+
+    def check_response(self, response: dict[str, Any]) -> None:
+        self._response.validate(response)
+
+
+# ----------------------------------------------------------------------------- answers, in wire form
+def refused(
+    failure_class: str, message: str = "refused", retry: str = "NEVER", *, as_of: dict[str, Any] | None = f.AS_OF
+) -> dict[str, Any]:
+    return {
+        "answer": "REFUSED",
+        "refusal": {"class": failure_class, "retry": retry, "message": message},
+        "as_of": as_of,
+    }
+
+
+def accepted(view: dict[str, Any], *, as_of: dict[str, Any] | None = f.AS_OF) -> dict[str, Any]:
+    return {"answer": "OPERATION", "operation": view, "as_of": as_of}
+
+
+def answered(kind: str, data: Any, *, as_of: dict[str, Any] | None = f.AS_OF) -> dict[str, Any]:
+    return {"answer": "RESULT", "result": {"type": kind, "data": data}, "as_of": as_of}
+
+
+Step = Callable[[dict[str, Any]], "dict[str, Any] | bytes | BaseException"] | dict[str, Any] | bytes | BaseException
+
+
+def op(state: str = "SUCCEEDED", result: dict[str, Any] | None = None, **over: Any) -> Step:
+    """Answer about *the request's own* operation.
+
+    For a request that creates an operation: an ``OPERATION`` answer whose view carries the
+    request's ``operation_id``, ``issued_at`` and method. For ``operation.get``: a ``RESULT`` with
+    the view of the operation that was asked about.
+    """
+
+    def build(request: dict[str, Any]) -> dict[str, Any]:
+        if request["method"] == "operation.get":
+            view = f.operation_view(state=state, result=result, operation_id=request["params"]["operation_id"], **over)
+            return answered("operation", view)
+        fields = {"operation_id": request["operation_id"], "issued_at": request["issued_at"], **over}
+        fields.setdefault("operation_type", request["method"])
+        return accepted(f.operation_view(state=state, result=result, **fields))
+
+    return build
+
+
+# ----------------------------------------------------------------------------- the in-process transport
+class ScriptedConnection:
+    """An :class:`acf_cli.transport.Exchange` whose every turn is scripted.
+
+    A step is a response (a dict, completed with ``protocol`` and the request's ``request_id``
+    unless it sets them), raw bytes, an exception to raise *after the request was taken* (the
+    transport's way of saying "not sent" or "sent, no answer"), or a callable from the request to
+    any of those.
+    """
+
+    def __init__(
+        self,
+        script: Iterable[Step] = (),
+        *,
+        check: Callable[[dict[str, Any]], None] | None = None,
+        default: Step | None = None,
+    ) -> None:
+        self.requests: list[dict[str, Any]] = []
+        self.read_timeouts: list[float] = []
+        self.closed = 0
+        self._script: deque[Step] = deque(script)
+        self._default = default
+        self._check = check
+
+    @property
+    def methods(self) -> list[str]:
+        return [str(r["method"]) for r in self.requests]
+
+    def exchange(self, payload: bytes, *, read_timeout_s: float) -> bytes:
+        request = json.loads(payload)
+        assert isinstance(request, dict)
+        if self._check is not None:
+            self._check(request)
+        self.requests.append(request)
+        self.read_timeouts.append(read_timeout_s)
+        if self._script:
+            step = self._script.popleft()
+        elif self._default is not None:
+            step = self._default
+        else:
+            raise AssertionError(f"the client sent {request['method']} but the script was exhausted")
+        out = step(request) if callable(step) else step
+        if isinstance(out, BaseException):
+            raise out
+        if isinstance(out, bytes):
+            return out
+        return json.dumps({"protocol": PROTOCOL, "request_id": request.get("request_id"), **out}).encode()
+
+    def close(self) -> None:
+        self.closed += 1
+
+    def assert_exhausted(self) -> None:
+        assert not self._script, f"{len(self._script)} scripted step(s) were never used"
 
 
 # ----------------------------------------------------------------------------- framing (independent of acf_cli)
@@ -59,7 +206,7 @@ def _read_exactly(conn: socket.socket, count: int) -> bytes | None:
 
 
 def bind_unix(sock: socket.socket, path: Path) -> None:
-    """Bind, working around the 108-byte ``sun_path`` limit exactly like the host does."""
+    """Bind, working around the 108-byte ``sun_path`` limit for deep temporary directories."""
     if len(os.fsencode(path)) < SUN_PATH_SAFE:
         sock.bind(str(path))
         return
@@ -70,161 +217,97 @@ def bind_unix(sock: socket.socket, path: Path) -> None:
         os.close(dir_fd)
 
 
-# ----------------------------------------------------------------------------- response builders
-def respond(
-    request: dict[str, Any] | None,
-    status: str,
-    *,
-    result: dict[str, Any] | None = None,
-    error: dict[str, Any] | None = None,
-    operation_id: str | None = None,
-    protocol: str = PROTOCOL,
-) -> dict[str, Any]:
-    """A response envelope correlated to ``request`` (same ``request_id``; its ``operation_id`` unless overridden)."""
-    request = request or {}
-    return {
-        "protocol": protocol,
-        "request_id": request.get("request_id"),
-        "operation_id": operation_id if operation_id is not None else request.get("operation_id"),
-        "status": status,
-        "result": result,
-        "error": error,
-    }
+# ----------------------------------------------------------------------------- a scripted server on a real socket
+class Serves(Protocol):
+    """What the scripted server does with one connection. It returns the request frames it read."""
+
+    def serve(self, conn: socket.socket) -> list[bytes]: ...
 
 
-def error_body(
-    failure_class: str,
-    message: str,
-    *,
-    side_effect: str = "none",
-    retryable: bool = False,
-    outcome_unknown: bool = False,
-) -> dict[str, Any]:
-    return {
-        "class": failure_class,
-        "message": message,
-        "side_effect": side_effect,
-        "retryable": retryable,
-        "outcome_unknown": outcome_unknown,
-    }
+class Echo:
+    """Answer each of ``turns`` requests with one frame carrying ``reply(request_payload)``."""
 
+    def __init__(self, reply: Callable[[bytes], bytes], *, turns: int = 1) -> None:
+        self._reply = reply
+        self._turns = turns
 
-# ----------------------------------------------------------------------------- behaviours
-Build = Callable[[dict[str, Any]], dict[str, Any] | bytes]
-
-
-class Behavior(Protocol):
-    reads_request: ClassVar[bool]
-
-    def run(self, conn: socket.socket, request: dict[str, Any] | None) -> None: ...
-
-
-class Reply:
-    """Read the request, then answer with ``build(request)`` (or a fixed dict/bytes) as one frame."""
-
-    reads_request: ClassVar[bool] = True
-
-    def __init__(self, build: Build | dict[str, Any] | bytes, *, delay: float = 0.0) -> None:
-        self._build = build
-        self._delay = delay
-
-    def run(self, conn: socket.socket, request: dict[str, Any] | None) -> None:
-        assert request is not None
-        if self._delay:
-            time.sleep(self._delay)
-        out = self._build(request) if callable(self._build) else self._build
-        payload = out if isinstance(out, bytes) else json.dumps(out).encode()
-        send_frame(conn, payload)
+    def serve(self, conn: socket.socket) -> list[bytes]:
+        seen: list[bytes] = []
+        for _ in range(self._turns):
+            frame = read_frame(conn)
+            if frame is None:
+                break
+            seen.append(frame)
+            send_frame(conn, self._reply(frame))
+        return seen
 
 
 class Lost:
     """Read the whole request, then close without answering: the response was *lost*."""
 
-    reads_request: ClassVar[bool] = True
-
-    def run(self, conn: socket.socket, request: dict[str, Any] | None) -> None:
-        return
+    def serve(self, conn: socket.socket) -> list[bytes]:
+        frame = read_frame(conn)
+        return [frame] if frame is not None else []
 
 
 class ClosedBeforeRead:
-    """Accept, then close without reading anything (a host that is down or refusing)."""
+    """Accept, then close without reading anything."""
 
-    reads_request: ClassVar[bool] = False
+    def serve(self, conn: socket.socket) -> list[bytes]:
+        _ = conn
+        return []
 
-    def run(self, conn: socket.socket, request: dict[str, Any] | None) -> None:
-        return
 
+class SayThenClose:
+    """Write one frame *without reading the request*, then close (an authentication refusal at accept time)."""
 
-class DenyUnread:
-    """Answer *without reading the request*, then close (an authorization denial at accept time)."""
-
-    reads_request: ClassVar[bool] = False
-
-    def __init__(self, payload: dict[str, Any]) -> None:
+    def __init__(self, payload: bytes) -> None:
         self._payload = payload
 
-    def run(self, conn: socket.socket, request: dict[str, Any] | None) -> None:
-        send_frame(conn, json.dumps(self._payload).encode())
+    def serve(self, conn: socket.socket) -> list[bytes]:
+        send_frame(conn, self._payload)
+        return []
 
 
-class RawBytes:
+class RawAfterRead:
     """Read the request, then write these exact bytes (no framing added)."""
-
-    reads_request: ClassVar[bool] = True
 
     def __init__(self, data: bytes) -> None:
         self._data = data
 
-    def run(self, conn: socket.socket, request: dict[str, Any] | None) -> None:
+    def serve(self, conn: socket.socket) -> list[bytes]:
+        frame = read_frame(conn)
         conn.sendall(self._data)
-
-
-class Partial:
-    """Read the request, announce a frame, deliver only part of it, close."""
-
-    reads_request: ClassVar[bool] = True
-
-    def __init__(self, payload: bytes, delivered: int) -> None:
-        self._payload = payload
-        self._delivered = delivered
-
-    def run(self, conn: socket.socket, request: dict[str, Any] | None) -> None:
-        conn.sendall(HEADER.pack(len(self._payload)) + self._payload[: self._delivered])
+        return [frame] if frame is not None else []
 
 
 class Stall:
-    """Read the request, then say nothing for ``seconds`` (bounded) — the client's timeout fires first."""
-
-    reads_request: ClassVar[bool] = True
+    """Read the request, then say nothing for ``seconds``: the client's timeout fires first."""
 
     def __init__(self, seconds: float) -> None:
         self._seconds = seconds
 
-    def run(self, conn: socket.socket, request: dict[str, Any] | None) -> None:
+    def serve(self, conn: socket.socket) -> list[bytes]:
+        frame = read_frame(conn)
         time.sleep(self._seconds)
+        return [frame] if frame is not None else []
 
 
-# ----------------------------------------------------------------------------- the server
 class ScriptedHost:
-    """Connections are *assigned* behaviours in arrival order, then served concurrently.
+    """Connections are assigned behaviours in arrival order and served concurrently."""
 
-    Concurrency matters for the stall case: a host that is busy with one connection must still
-    accept the client's next one (the client's ``operation_get``), exactly like the real host.
-    """
-
-    def __init__(self, path: Path, script: Sequence[Behavior], *, default: Behavior | None = None) -> None:
+    def __init__(self, path: Path, script: Sequence[Serves]) -> None:
         self.socket_path = path
-        self.requests: list[dict[str, Any]] = []
+        self.frames: list[bytes] = []
+        self.connections = 0
         self.problems: list[str] = []
-        self._script: deque[Behavior] = deque(script)
-        self._default = default
+        self._script: deque[Serves] = deque(script)
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._server: socket.socket | None = None
         self._acceptor: threading.Thread | None = None
         self._workers: list[threading.Thread] = []
 
-    # -- lifecycle
     def start(self) -> None:
         server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         bind_unix(server, self.socket_path)
@@ -247,13 +330,6 @@ class ScriptedHost:
         assert not self.problems, f"scripted host saw unexpected behaviour: {self.problems}"
         assert not self._script, f"{len(self._script)} scripted behaviour(s) were never used"
 
-    # -- introspection
-    @property
-    def methods(self) -> list[str]:
-        with self._lock:
-            return [str(r["body"]["method"]) for r in self.requests]
-
-    # -- server loop
     def _accept_loop(self) -> None:
         assert self._server is not None
         while not self._stop.is_set():
@@ -263,43 +339,28 @@ class ScriptedHost:
                 continue
             except OSError:
                 return
-            behavior = self._next()
+            with self._lock:
+                self.connections += 1
+                behavior = self._script.popleft() if self._script else None
             worker = threading.Thread(target=self._serve_one, args=(conn, behavior), daemon=True)
             self._workers.append(worker)
             worker.start()
 
-    def _next(self) -> Behavior | None:
-        with self._lock:
-            if self._script:
-                return self._script.popleft()
-        return self._default
-
-    def _serve_one(self, conn: socket.socket, behavior: Behavior | None) -> None:
+    def _serve_one(self, conn: socket.socket, behavior: Serves | None) -> None:
         with conn, contextlib.suppress(OSError):
             conn.settimeout(5)
             if behavior is None:
-                self._problem("a connection arrived but the script was exhausted")
-                return
-            request: dict[str, Any] | None = None
-            if behavior.reads_request:
-                frame = read_frame(conn)
-                if frame is None:
-                    self._problem("the client closed before sending a full request")
-                    return
-                request = json.loads(frame)
-                assert isinstance(request, dict)
                 with self._lock:
-                    self.requests.append(request)
-            behavior.run(conn, request)
-
-    def _problem(self, text: str) -> None:
-        with self._lock:
-            self.problems.append(text)
+                    self.problems.append("a connection arrived but the script was exhausted")
+                return
+            seen = behavior.serve(conn)
+            with self._lock:
+                self.frames.extend(seen)
 
 
 # ----------------------------------------------------------------------------- time
 class FakeClock:
-    """``sleep`` advances ``monotonic`` instantly, so retry/backoff logic runs in zero wall time."""
+    """``sleep`` advances ``monotonic`` instantly, so retry and polling logic runs in zero wall time."""
 
     def __init__(self) -> None:
         self.now = 1000.0

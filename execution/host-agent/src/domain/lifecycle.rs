@@ -1,4 +1,4 @@
-//! Phase 1 lifecycle state machine (spec §11).
+//! The generation lifecycle and the snapshot states (contract §12.1, §12.3).
 //!
 //! ```text
 //! REQUESTED -> PROVISIONING -> READY -> RUNNING -> COMPLETED
@@ -9,7 +9,8 @@
 //!
 //! `Ready` and `Completed` are the two *idle* states (guest agent up, no run in flight):
 //! `Ready` before the first run, `Completed` after a run finished with a known result.
-//! `ROLLBACKING`, `SNAPSHOT`, `ARCHIVED` from the Master Plan are deliberately absent (§11.1).
+//! There is no snapshotting, restoring or destroying *state*: those are operations in flight over
+//! the states above (contract Appendix B.2), and `QUARANTINED` is a condition, not a state.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -38,7 +39,7 @@ impl LifecycleState {
         [Requested, Provisioning, Ready, Running, Paused, Completed, Failed, Stopping, Stopped, Destroyed];
 
     /// The transition relation. Everything not listed is forbidden, which by construction
-    /// includes the spec §11.3 cases: `DESTROYED -> *`, `FAILED -> RUNNING`, `STOPPED -> RUNNING`.
+    /// includes the consequences stated in §12.1: `DESTROYED -> *`, `FAILED -> RUNNING`, `STOPPED -> RUNNING`.
     pub const fn can_transition_to(self, to: LifecycleState) -> bool {
         matches!(
             (self, to),
@@ -74,7 +75,7 @@ pub fn require_transition(from: LifecycleState, to: LifecycleState) -> Result<()
     if from.can_transition_to(to) { Ok(()) } else { Err(AcfError::conflict(format!("illegal lifecycle transition {from:?} -> {to:?}"))) }
 }
 
-/// Snapshot artifact state (spec §11.2, creation half).
+/// Snapshot artifact state (contract §12.3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum SnapshotState {
@@ -99,14 +100,13 @@ impl SnapshotState {
         )
     }
 
-    /// A snapshot can only be restored from `Ready` — `SNAPSHOT_INVALID -> RESTORING` is
-    /// forbidden (spec §11.3).
+    /// Only a `READY` snapshot can be restored (contract §12.3, RE-1).
     pub const fn is_restorable(self) -> bool {
         matches!(self, SnapshotState::Ready)
     }
 }
 
-/// Restore progress (spec §11.2, restore half). Carried in the operation's step.
+/// Restore progress (contract §21.5). Carried in the operation's step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum RestoreState {
@@ -134,6 +134,77 @@ impl RestoreState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// T-STATE-01: every state × state pair against the relation of §12.1. The table is transcribed
+    /// row by row, in the contract's own spelling, so that the two can be compared by eye; it is an
+    /// oracle independent of the `matches!` above. Anything not listed is illegal and is refused
+    /// with `STATE_CONFLICT`.
+    #[test]
+    fn every_pair_of_states_is_judged_exactly_as_the_contract_table_says() {
+        const TABLE: &[(&str, &str)] = &[
+            ("REQUESTED", "PROVISIONING, FAILED, DESTROYED"),
+            ("PROVISIONING", "READY, FAILED, STOPPING, DESTROYED"),
+            ("READY", "RUNNING, PAUSED, STOPPING, FAILED"),
+            ("RUNNING", "COMPLETED, PAUSED, STOPPING, FAILED"),
+            ("PAUSED", "READY, RUNNING, COMPLETED, STOPPING, FAILED"),
+            ("COMPLETED", "RUNNING, PAUSED, STOPPING, FAILED"),
+            ("STOPPING", "STOPPED, FAILED"),
+            ("STOPPED", "DESTROYED"),
+            ("FAILED", "STOPPING, STOPPED, DESTROYED"),
+        ];
+        let name = |s: LifecycleState| serde_json::to_value(s).unwrap().as_str().unwrap().to_owned();
+        let names: Vec<String> = LifecycleState::ALL.iter().map(|s| name(*s)).collect();
+        // A misspelt state in the transcription would silently read as "illegal": every word is a state.
+        for (from, to) in TABLE {
+            assert!(names.iter().any(|n| n == from), "{from} is not a state");
+            assert!(to.split(", ").all(|t| names.iter().any(|n| n == t)), "{to}");
+        }
+        assert_eq!(TABLE.len(), LifecycleState::ALL.len() - 1, "DESTROYED has no row: nothing leaves it");
+
+        let mut pairs = 0;
+        for from in LifecycleState::ALL {
+            let listed: Vec<&str> =
+                TABLE.iter().find(|(f, _)| *f == name(from)).map(|(_, to)| to.split(", ").collect()).unwrap_or_default();
+            for to in LifecycleState::ALL {
+                let legal = listed.contains(&name(to).as_str());
+                assert_eq!(from.can_transition_to(to), legal, "{} -> {}", name(from), name(to));
+                match require_transition(from, to) {
+                    Ok(()) => assert!(legal),
+                    Err(e) => {
+                        assert!(!legal);
+                        assert_eq!(e.class, crate::error::FailureClass::StateConflict, "{} -> {}", name(from), name(to));
+                    }
+                }
+                pairs += 1;
+            }
+        }
+        assert_eq!(pairs, 100);
+    }
+
+    /// §12.3, pair by pair: the path to `READY`, `INVALID` from every state before `DELETED`, and
+    /// nothing else.
+    #[test]
+    fn every_pair_of_snapshot_states_is_judged_as_the_contract_says() {
+        use SnapshotState as S;
+        const ALL: [S; 6] = [S::Requested, S::Snapshotting, S::Verifying, S::Ready, S::Invalid, S::Deleted];
+        let legal = [
+            (S::Requested, S::Snapshotting),
+            (S::Snapshotting, S::Verifying),
+            (S::Verifying, S::Ready),
+            (S::Ready, S::Deleted),
+            (S::Requested, S::Invalid),
+            (S::Snapshotting, S::Invalid),
+            (S::Verifying, S::Invalid),
+            (S::Invalid, S::Deleted),
+            (S::Ready, S::Invalid),
+        ];
+        for from in ALL {
+            for to in ALL {
+                assert_eq!(from.can_transition_to(to), legal.contains(&(from, to)), "{from:?} -> {to:?}");
+            }
+            assert_eq!(from.is_restorable(), from == S::Ready, "only a READY snapshot can be restored");
+        }
+    }
 
     #[test]
     fn spec_forbidden_transitions_are_forbidden() {

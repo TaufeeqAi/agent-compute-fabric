@@ -123,7 +123,8 @@ def test_a_failed_download_is_an_error_that_suggests_the_offline_route(run: Runn
 def test_an_unset_digest_stops_with_exit_3_names_the_measured_digest_and_installs_nothing(
     run: Runner, tree: Path, release: Path, tmp_path: Path
 ) -> None:
-    set_lock(tree, **{f"SHA256_{OTHER_ARCH}": "ab" * 32})  # a pin for ANOTHER architecture must not count
+    # This architecture is not pinned; a pin for ANOTHER architecture must not count.
+    set_lock(tree, **{f"SHA256_{ARCH}": "UNSET", f"SHA256_{OTHER_ARCH}": "ab" * 32})
     result = run_installer(run, tree, "--from-tarball", release, "--destdir", tmp_path / "dest")
     assert result.returncode == 3, result.stderr
     assert f"NOT PINNED: SHA256_{ARCH} is UNSET" in result.stderr
@@ -157,6 +158,12 @@ def test_a_matching_digest_in_the_lock_installs_both_binaries_root_owned_and_exe
     for d in (dest / "opt/acf", dest / "opt/acf/bin"):
         assert stat.S_IMODE(d.stat().st_mode) == 0o755
         assert (d.stat().st_uid, d.stat().st_gid) == (0, 0)
+    # The host pins each binary by its own digest and hashes it before every launch. Stdout is exactly the two
+    # lines its configuration needs, for the files that were installed; everything else went to stderr.
+    by_name = {p.name: sha256(p) for p in installed(dest)}
+    assert result.stdout == (
+        f'  firecracker_sha256: "{by_name["firecracker"]}"\n  jailer_sha256: "{by_name["jailer"]}"\n'
+    )
 
 
 @pytest.mark.needs_root

@@ -1,11 +1,11 @@
 [build-system]
-requires = ["hatchling>=1.32.4"]
+requires = ["hatchling>=1.33.0"]
 build-backend = "hatchling.build"
 
 [project]
 name = "acf-cli"
 dynamic = ["version"]
-description = "acf-local: command-line client for the Agent Compute Fabric Phase 1 host agent."
+description = "acf-local: reference command-line client of the Agent Compute Fabric host agent (protocol acf.host/2, Unix socket and mutual TLS)."
 readme = "README.md"
 requires-python = ">=3.12"
 license = "Apache-2.0"
@@ -14,32 +14,36 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
     "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
     "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Systems Administration",
     "Typing :: Typed",
 ]
-# Deliberately tiny runtime surface: this process talks to a privileged socket, so every
-# dependency is supply-chain surface. Floors are the newest releases verified on 2026-10-09 and re-verified on 2026-10-17
-# (see docs/DEPENDENCY_PROVENANCE.md); caps are the next incompatible major/minor line.
+# Deliberately tiny runtime surface: this process talks to a privileged host agent, so every
+# dependency is supply-chain surface. TLS is the standard library's `ssl`. Floors are the newest
+# releases verified against PyPI on 2026-11-18 (docs/DEPENDENCY_PROVENANCE.md describes the method);
+# caps are the next incompatible major/minor line.
 dependencies = [
-    "typer>=0.27.3,<0.28",
-    "pydantic>=2.14.1,<3",
+    "typer>=0.29.1,<0.30",
+    "pydantic>=2.14.3,<3",
     "rich>=15.0.0,<16",  # imported directly (tables, text); typer also depends on it
 ]
 
 [project.scripts]
-acf-local = "acf_cli.main:run"
+acf-local = "acf_cli.main:main"
 
 [dependency-groups]
 dev = [
-    "pytest>=9.1.1",
+    "pytest>=9.2.0",
     "pytest-timeout>=2.4.0",
     "pytest-cov>=7.1.0",
     "jsonschema>=4.26.0",
     "types-jsonschema>=4.26.0.20261006",
-    "mypy>=2.4.0",
-    "ruff>=0.17.1",
+    "mypy>=2.4.1",
+    "ruff>=0.17.5",
 ]
 
 [tool.hatch.version]
@@ -66,7 +70,7 @@ ignore = [
     "TRY003",  # long messages in exception constructors are fine for a CLI
     "FBT001", "FBT002",  # boolean flags are idiomatic in Typer commands
     "PLR0913", "PLR0917",  # Typer commands legitimately take many options (invoked by keyword)
-    "N818",  # exception names mirror the contract vocabulary (Rejected, OutcomeUnknown, ...) on purpose
+    "N818",  # exception names mirror the contract vocabulary (Refused, OutcomeUnknown, ...) on purpose
     "RET505",  # explicit else after return is sometimes clearer
 ]
 
@@ -95,7 +99,7 @@ testpaths = ["tests"]
 addopts = "-ra --strict-markers --strict-config"
 timeout = 60
 markers = [
-    "e2e: runs the real Rust host (acf-host-fake binary) over a real Unix socket; skipped if it is not built",
+    "e2e: runs the real host (the acf-host-fake binary named by $ACF_HOST_FAKE) over its Unix socket and over mutual TLS; skipped without it unless ACF_REQUIRE_E2E=1",
 ]
 
 [tool.coverage.run]

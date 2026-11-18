@@ -1,11 +1,696 @@
 {
+  "$defs": {
+    "EdgeConfig": {
+      "additionalProperties": false,
+      "description": "The edge domain (PD-1): ingress endpoints and their pre-authentication limits (PA-2).",
+      "properties": {
+        "enrolment_refresh_ms": {
+          "default": 10000,
+          "description": "`enrolment_refresh_bound`: delay before an enrolment change applies to open connections (AU-5).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "gid": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "handshake_deadline_ms": {
+          "default": 10000,
+          "description": "`handshake_deadline`: time to authenticate.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "idle_timeout_ms": {
+          "default": 300000,
+          "description": "`idle_timeout`: an idle connection.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_connections": {
+          "default": 32,
+          "description": "`max_connections`: concurrent connections over both endpoints.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_connections_per_source": {
+          "default": 8,
+          "description": "Per-source cap: connections from one peer address (network) or one uid (local).",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_request_bytes": {
+          "default": 1048576,
+          "description": "`max_request_bytes`: one request frame.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "socket_gid": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "socket_mode": {
+          "default": "0660",
+          "description": "Octal string, e.g. \"0660\". The socket is the first access-control layer of the local endpoint.",
+          "type": "string"
+        },
+        "tls": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TlsConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "uid": {
+          "default": null,
+          "description": "Unprivileged identity the edge role runs as. Required when the core runs as root.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Envelope": {
+      "additionalProperties": false,
+      "description": "The machine's schedulable envelope (RS-1). Admission reserves against this.",
+      "properties": {
+        "agent_memory_mib": {
+          "default": 512,
+          "description": "Memory set aside for the host agent itself. Execution output held in memory must fit (OU-3).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "disk_mib": {
+          "default": 65536,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_sandboxes": {
+          "default": 16,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_snapshots": {
+          "default": 64,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "memory_mib": {
+          "default": 8192,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "min_free_headroom_mib": {
+          "default": 2048,
+          "description": "Free space that must remain on the state filesystem after a reservation.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "snapshot_quota_bytes": {
+          "default": 34359738368,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "vcpus": {
+          "default": 4,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "FirecrackerConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "api_ready_timeout_ms": {
+          "default": 5000,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "boot_args": {
+          "default": "reboot=k panic=1 pci=off nomodule 8250.nr_uarts=0 i8042.noaux i8042.nomux i8042.dumbkbd swiotlb=noforce",
+          "type": "string"
+        },
+        "cgroup_parent": {
+          "default": "acf",
+          "description": "Pre-created cgroup v2 directory (under `cgroup_root`) with the cpu/memory/pids controllers\ndelegated; the jailer creates one child per sandbox beneath it.",
+          "type": "string"
+        },
+        "cgroup_root": {
+          "default": "/sys/fs/cgroup",
+          "type": "string"
+        },
+        "diagnostic_log": {
+          "default": false,
+          "description": "Off by default: a log file is guest-influenced host disk growth.",
+          "type": "boolean"
+        },
+        "firecracker_bin": {
+          "type": "string"
+        },
+        "firecracker_sha256": {
+          "default": null,
+          "description": "The pinned identity of `firecracker_bin` (TI-2): the SHA-256 of the installed file, 64 lowercase\nhex characters. `scripts/install-firecracker.sh` prints it. The file is hashed at startup and\nagain before every launch; an unset or different digest is a failed mandatory check.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "guest_ready_timeout_ms": {
+          "default": 30000,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "jailer_bin": {
+          "type": "string"
+        },
+        "jailer_sha256": {
+          "default": null,
+          "description": "The pinned identity of `jailer_bin`. As `firecracker_sha256`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pinned_version": {
+          "description": "Exact release the profile was validated against, e.g. `v1.17.0`. A mismatch at startup is a\nfailed mandatory check: snapshots are only valid on the same version.",
+          "type": "string"
+        },
+        "shutdown_grace_ms": {
+          "default": 2000,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "uid_range_size": {
+          "default": 4096,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "uid_range_start": {
+          "default": 100000,
+          "description": "The identifier pool (RS-3): slot `i` runs its VMM as uid `uid_range_start + i`.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "vmm_overhead_mib": {
+          "default": 64,
+          "description": "Per-runtime memory overhead the backend declares; counted in admission and in `memory.max`.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "firecracker_bin",
+        "jailer_bin",
+        "pinned_version"
+      ],
+      "type": "object"
+    },
+    "LifetimeConfig": {
+      "additionalProperties": false,
+      "description": "Lifetime enforcement that does not depend on the core (PD-4, LT-4).",
+      "properties": {
+        "enforcer_interval_ms": {
+          "default": 500,
+          "description": "How often the enforcer looks at its tickets. Must be well under the tolerance.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "expiry_tolerance_ms": {
+          "default": 5000,
+          "description": "`expiry_tolerance`: lateness of lifetime enforcement.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "heartbeat_max_age_ms": {
+          "default": 5000,
+          "description": "The core treats an enforcer heartbeat older than this as \"not running\".",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "NetworkConfig": {
+      "additionalProperties": false,
+      "description": "Network mode `allowlist` (§20): the guest segment and the guest-traffic role's bounds.",
+      "properties": {
+        "connect_deadline_ms": {
+          "default": 10000,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "dns_binding_ttl_ms": {
+          "default": 300000,
+          "description": "`dns_binding_ttl`: validity of a resolved address for AL-4.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "guest_segment": {
+          "default": "10.201.0.0/30",
+          "description": "The private /30 every sandbox uses between its guest and the host side of its own network\nnamespace. The same in every namespace: it is never routed, so it cannot collide, and a\nrestored guest finds the addresses it was captured with.",
+          "type": "string"
+        },
+        "ip_bin": {
+          "default": "/usr/sbin/ip",
+          "type": "string"
+        },
+        "nft_bin": {
+          "default": "/usr/sbin/nft",
+          "type": "string"
+        },
+        "nsenter_bin": {
+          "default": "/usr/bin/nsenter",
+          "description": "Used to run `ip` and `nft` inside a sandbox's network namespace.",
+          "type": "string"
+        },
+        "relay_idle_timeout_ms": {
+          "default": 300000,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "relay_max_connections": {
+          "default": 256,
+          "description": "Concurrent relayed connections per sandbox.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "server_name_deadline_ms": {
+          "default": 5000,
+          "description": "Time a guest has to present a TLS server name.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "traffic_uid_start": {
+          "default": 200000,
+          "description": "Slot `i` runs its guest-traffic process as uid `traffic_uid_start + i` (PD-3).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unshare_bin": {
+          "default": "/usr/bin/unshare",
+          "description": "Used to create every sandbox's network namespace, in both network modes.",
+          "type": "string"
+        },
+        "upstream_timeout_ms": {
+          "default": 5000,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "OperationDeadlines": {
+      "additionalProperties": false,
+      "description": "Operation deadlines, per type (§30). A granting deadline covers every step of the operation.",
+      "properties": {
+        "create_ms": {
+          "default": 300000,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "delete_ms": {
+          "default": 120000,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "destroy_ms": {
+          "default": 120000,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "operator_ms": {
+          "default": 120000,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "restore_ms": {
+          "default": 600000,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "snapshot_ms": {
+          "default": 600000,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "start_ms": {
+          "default": 120000,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "stop_ms": {
+          "default": 60000,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "OperationsConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "acceptance_horizon_ms": {
+          "default": 300000,
+          "description": "`acceptance_horizon`: how old `issued_at` may be.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "backstop_margin_ms": {
+          "default": 3000,
+          "description": "`backstop_margin`: host deadline minus guest deadline for an execution.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "change_retention_ms": {
+          "default": 3600000,
+          "description": "`change_retention`: how long tombstones of destroyed sandboxes and deleted snapshots are kept.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "clock_skew_tolerance_ms": {
+          "default": 30000,
+          "description": "`clock_skew_tolerance`: how far in the future `issued_at` may be.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "deadlines": {
+          "$ref": "#/$defs/OperationDeadlines",
+          "default": {
+            "create_ms": 300000,
+            "delete_ms": 120000,
+            "destroy_ms": 120000,
+            "operator_ms": 120000,
+            "restore_ms": 600000,
+            "snapshot_ms": 600000,
+            "start_ms": 120000,
+            "stop_ms": 60000
+          }
+        },
+        "drain_timeout_ms": {
+          "default": 60000,
+          "description": "`drain_timeout`: time in `DRAINING` before the core may stop.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "operation_retention_ms": {
+          "default": 86400000,
+          "description": "`operation_retention`: how long a terminal operation is kept.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "output_retention_ms": {
+          "default": 86400000,
+          "description": "`output_retention`: how long execution output is kept.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "preempt_grace_ms": {
+          "default": 5000,
+          "description": "How long a containment operation waits for the operation it superseded to let go (CC-3).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rate_limit_per_minute": {
+          "default": 600,
+          "description": "`operation_rate_limit`: operations per peer per minute (granting and operator methods).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "read_rate_limit_per_minute": {
+          "default": 6000,
+          "description": "Reads per peer per minute.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "retry_budget": {
+          "default": 4,
+          "description": "`retry_budget`: host-wide concurrent step retries.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "step_max_attempts": {
+          "default": 3,
+          "description": "`step_max_attempts`: attempts of one step whose failure was marked `NONE`.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "wait_max_ms": {
+          "default": 30000,
+          "description": "`wait_max`: how long a response may be held.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "Paths": {
+      "additionalProperties": false,
+      "properties": {
+        "enrolment_path": {
+          "default": "/etc/acf/enrolment.yaml",
+          "description": "The enrolment table (§9.1).",
+          "type": "string"
+        },
+        "profile_path": {
+          "default": "/etc/acf/profile.yaml",
+          "description": "The safety profile (§9.4).",
+          "type": "string"
+        },
+        "runtime_dir": {
+          "default": "/run/acf",
+          "type": "string"
+        },
+        "secrets_dir": {
+          "default": "/etc/acf/secrets",
+          "description": "Secrets the operator provisioned for the built-in provider (§22). One file per reference.",
+          "type": "string"
+        },
+        "socket_path": {
+          "default": "/run/acf/host-agent.sock",
+          "description": "The local endpoint (operating-system peer credentials).",
+          "type": "string"
+        },
+        "state_root": {
+          "default": "/var/lib/acf",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "RecoveryConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "max_attempts": {
+          "default": 3,
+          "description": "`recovery_max_attempts`: a record recovery has touched this many times is quarantined (RC-4).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "observe_timeout_ms": {
+          "default": 5000,
+          "description": "Deadline of one observation (OB-2).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "posture_recheck_interval_ms": {
+          "default": 60000,
+          "description": "`posture_recheck_interval`: the longest time between two verifications of any mandatory\ncontrol of a live generation (IS-3). At least four times `sweep_interval_ms`; see\n[`RecoveryConfig::posture_due_after`].",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "runtime_loss_detection_ms": {
+          "default": 5000,
+          "description": "`runtime_loss_detection_bound`: time to notice a lost runtime.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "startup_deadline_ms": {
+          "default": 120000,
+          "description": "`startup_recovery_deadline`: time in `STARTING` (RC-5).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sweep_interval_ms": {
+          "default": 15000,
+          "description": "`sweep_interval`: longest time between observations of a generation (RC-6).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "teardown_timeout_ms": {
+          "default": 10000,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "SecurityConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "trusted_owner_uids": {
+          "default": [
+            0
+          ],
+          "description": "Owners trusted for the profile, the enrolment table, secrets and executables (TI-1).",
+          "items": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "StoreConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "compact_at_bytes": {
+          "default": 67108864,
+          "description": "The store's file is rewritten as current state once it has grown past this and at least half\nof it is no longer current (PS-10). At most half of the largest file the core opens.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reserve_bytes": {
+          "default": 16777216,
+          "description": "`control_store_reserve`: store capacity kept from workload data (PS-9).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "TlsConfig": {
+      "additionalProperties": false,
+      "description": "The network endpoint (AU-1, AU-3). Absent: the host has only its local endpoint.",
+      "properties": {
+        "certificate": {
+          "description": "The host's certificate chain (PEM), leaf first. The leaf must carry `host_id` as a subject\nalternative name (AU-4); otherwise the endpoint is not opened.",
+          "type": "string"
+        },
+        "listen": {
+          "description": "`address:port` to listen on.",
+          "type": "string"
+        },
+        "private_key": {
+          "description": "The host's private key (PEM). Read by the core and handed to the edge; never readable by the edge user.",
+          "type": "string"
+        },
+        "trust_anchors": {
+          "description": "Trust anchors for client certificates (PEM), listed explicitly. The system trust store is never used (AU-3).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "listen",
+        "certificate",
+        "private_key",
+        "trust_anchors"
+      ],
+      "type": "object"
+    }
+  },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "HostConfig",
-  "type": "object",
+  "additionalProperties": false,
   "properties": {
+    "edge": {
+      "$ref": "#/$defs/EdgeConfig",
+      "default": {
+        "enrolment_refresh_ms": 10000,
+        "gid": null,
+        "handshake_deadline_ms": 10000,
+        "idle_timeout_ms": 300000,
+        "max_connections": 32,
+        "max_connections_per_source": 8,
+        "max_request_bytes": 1048576,
+        "socket_gid": null,
+        "socket_mode": "0660",
+        "tls": null,
+        "uid": null
+      }
+    },
     "envelope": {
       "$ref": "#/$defs/Envelope",
       "default": {
+        "agent_memory_mib": 512,
         "disk_mib": 65536,
         "max_sandboxes": 16,
         "max_snapshots": 64,
@@ -18,11 +703,70 @@
     "firecracker": {
       "$ref": "#/$defs/FirecrackerConfig"
     },
+    "host_id": {
+      "description": "Identity of this deployment (§8): the audience of commands and a label on events.",
+      "type": "string"
+    },
+    "lifetime": {
+      "$ref": "#/$defs/LifetimeConfig",
+      "default": {
+        "enforcer_interval_ms": 500,
+        "expiry_tolerance_ms": 5000,
+        "heartbeat_max_age_ms": 5000
+      }
+    },
+    "network": {
+      "$ref": "#/$defs/NetworkConfig",
+      "default": {
+        "connect_deadline_ms": 10000,
+        "dns_binding_ttl_ms": 300000,
+        "guest_segment": "10.201.0.0/30",
+        "ip_bin": "/usr/sbin/ip",
+        "nft_bin": "/usr/sbin/nft",
+        "nsenter_bin": "/usr/bin/nsenter",
+        "relay_idle_timeout_ms": 300000,
+        "relay_max_connections": 256,
+        "server_name_deadline_ms": 5000,
+        "traffic_uid_start": 200000,
+        "unshare_bin": "/usr/bin/unshare",
+        "upstream_timeout_ms": 5000
+      }
+    },
+    "operations": {
+      "$ref": "#/$defs/OperationsConfig",
+      "default": {
+        "acceptance_horizon_ms": 300000,
+        "backstop_margin_ms": 3000,
+        "change_retention_ms": 3600000,
+        "clock_skew_tolerance_ms": 30000,
+        "deadlines": {
+          "create_ms": 300000,
+          "delete_ms": 120000,
+          "destroy_ms": 120000,
+          "operator_ms": 120000,
+          "restore_ms": 600000,
+          "snapshot_ms": 600000,
+          "start_ms": 120000,
+          "stop_ms": 60000
+        },
+        "drain_timeout_ms": 60000,
+        "operation_retention_ms": 86400000,
+        "output_retention_ms": 86400000,
+        "preempt_grace_ms": 5000,
+        "rate_limit_per_minute": 600,
+        "read_rate_limit_per_minute": 6000,
+        "retry_budget": 4,
+        "step_max_attempts": 3,
+        "wait_max_ms": 30000
+      }
+    },
     "paths": {
       "$ref": "#/$defs/Paths",
       "default": {
-        "policy_path": "/etc/acf/policy.yaml",
+        "enrolment_path": "/etc/acf/enrolment.yaml",
+        "profile_path": "/etc/acf/profile.yaml",
         "runtime_dir": "/run/acf",
+        "secrets_dir": "/etc/acf/secrets",
         "socket_path": "/run/acf/host-agent.sock",
         "state_root": "/var/lib/acf"
       }
@@ -31,275 +775,40 @@
       "$ref": "#/$defs/RecoveryConfig",
       "default": {
         "max_attempts": 3,
+        "observe_timeout_ms": 5000,
+        "posture_recheck_interval_ms": 60000,
+        "runtime_loss_detection_ms": 5000,
+        "startup_deadline_ms": 120000,
+        "sweep_interval_ms": 15000,
         "teardown_timeout_ms": 10000
       }
     },
     "schema_version": {
-      "type": "integer",
       "format": "uint32",
-      "minimum": 0
+      "minimum": 0,
+      "type": "integer"
     },
     "security": {
       "$ref": "#/$defs/SecurityConfig",
       "default": {
-        "allowed_gids": [],
-        "allowed_uids": [
-          0
-        ],
-        "idle_timeout_secs": 300,
-        "max_connections": 32,
-        "max_request_bytes": 1048576,
-        "socket_gid": null,
-        "socket_mode": "0660",
         "trusted_owner_uids": [
           0
         ]
       }
+    },
+    "store": {
+      "$ref": "#/$defs/StoreConfig",
+      "default": {
+        "compact_at_bytes": 67108864,
+        "reserve_bytes": 16777216
+      }
     }
   },
-  "additionalProperties": false,
   "required": [
     "schema_version",
+    "host_id",
     "firecracker"
   ],
-  "$defs": {
-    "Envelope": {
-      "description": "The machine's schedulable envelope (spec §18.1). Admission reserves against this.",
-      "type": "object",
-      "properties": {
-        "disk_mib": {
-          "type": "integer",
-          "format": "uint64",
-          "default": 65536,
-          "minimum": 0
-        },
-        "max_sandboxes": {
-          "type": "integer",
-          "format": "uint32",
-          "default": 16,
-          "minimum": 0
-        },
-        "max_snapshots": {
-          "type": "integer",
-          "format": "uint32",
-          "default": 64,
-          "minimum": 0
-        },
-        "memory_mib": {
-          "type": "integer",
-          "format": "uint64",
-          "default": 8192,
-          "minimum": 0
-        },
-        "min_free_headroom_mib": {
-          "description": "Free space that must remain on the state filesystem after a reservation.",
-          "type": "integer",
-          "format": "uint64",
-          "default": 2048,
-          "minimum": 0
-        },
-        "snapshot_quota_bytes": {
-          "type": "integer",
-          "format": "uint64",
-          "default": 34359738368,
-          "minimum": 0
-        },
-        "vcpus": {
-          "type": "integer",
-          "format": "uint32",
-          "default": 4,
-          "minimum": 0
-        }
-      },
-      "additionalProperties": false
-    },
-    "FirecrackerConfig": {
-      "type": "object",
-      "properties": {
-        "api_ready_timeout_ms": {
-          "type": "integer",
-          "format": "uint64",
-          "default": 5000,
-          "minimum": 0
-        },
-        "boot_args": {
-          "type": "string",
-          "default": "reboot=k panic=1 pci=off nomodule 8250.nr_uarts=0 i8042.noaux i8042.nomux i8042.dumbkbd swiotlb=noforce"
-        },
-        "cgroup_parent": {
-          "description": "Pre-created cgroup v2 directory (under `cgroup_root`) with the cpu/memory/pids controllers\ndelegated; the jailer creates one child per sandbox beneath it.",
-          "type": "string",
-          "default": "acf"
-        },
-        "cgroup_root": {
-          "type": "string",
-          "default": "/sys/fs/cgroup"
-        },
-        "diagnostic_log": {
-          "description": "Off by default: a log file is guest-influenced host disk growth (Firecracker prod guidance).",
-          "type": "boolean",
-          "default": false
-        },
-        "firecracker_bin": {
-          "type": "string"
-        },
-        "guest_ready_timeout_ms": {
-          "type": "integer",
-          "format": "uint64",
-          "default": 30000,
-          "minimum": 0
-        },
-        "jailer_bin": {
-          "type": "string"
-        },
-        "pinned_version": {
-          "description": "Exact release the profile was validated against, e.g. `v1.17.0`. A mismatch at startup is\na hard failure: Firecracker snapshots are only valid on the same version (spec §20.4).",
-          "type": "string"
-        },
-        "shutdown_grace_ms": {
-          "type": "integer",
-          "format": "uint64",
-          "default": 2000,
-          "minimum": 0
-        },
-        "uid_range_size": {
-          "type": "integer",
-          "format": "uint32",
-          "default": 4096,
-          "minimum": 0
-        },
-        "uid_range_start": {
-          "type": "integer",
-          "format": "uint32",
-          "default": 100000,
-          "minimum": 0
-        },
-        "vmm_overhead_mib": {
-          "description": "Memory the VMM itself needs beyond guest RAM; budgeted in admission and in `memory.max`.",
-          "type": "integer",
-          "format": "uint32",
-          "default": 64,
-          "minimum": 0
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "firecracker_bin",
-        "jailer_bin",
-        "pinned_version"
-      ]
-    },
-    "Paths": {
-      "type": "object",
-      "properties": {
-        "policy_path": {
-          "type": "string",
-          "default": "/etc/acf/policy.yaml"
-        },
-        "runtime_dir": {
-          "type": "string",
-          "default": "/run/acf"
-        },
-        "socket_path": {
-          "type": "string",
-          "default": "/run/acf/host-agent.sock"
-        },
-        "state_root": {
-          "type": "string",
-          "default": "/var/lib/acf"
-        }
-      },
-      "additionalProperties": false
-    },
-    "RecoveryConfig": {
-      "type": "object",
-      "properties": {
-        "max_attempts": {
-          "description": "A record recovery has touched this many times is quarantined, not retried (spec §22.7).",
-          "type": "integer",
-          "format": "uint32",
-          "default": 3,
-          "minimum": 0
-        },
-        "teardown_timeout_ms": {
-          "type": "integer",
-          "format": "uint64",
-          "default": 10000,
-          "minimum": 0
-        }
-      },
-      "additionalProperties": false
-    },
-    "SecurityConfig": {
-      "type": "object",
-      "properties": {
-        "allowed_gids": {
-          "type": "array",
-          "default": [],
-          "items": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          }
-        },
-        "allowed_uids": {
-          "description": "Callers allowed by uid. Empty list + empty gids = nobody (even root) may connect.",
-          "type": "array",
-          "default": [
-            0
-          ],
-          "items": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          }
-        },
-        "idle_timeout_secs": {
-          "type": "integer",
-          "format": "uint64",
-          "default": 300,
-          "minimum": 0
-        },
-        "max_connections": {
-          "type": "integer",
-          "format": "uint",
-          "default": 32,
-          "minimum": 0
-        },
-        "max_request_bytes": {
-          "type": "integer",
-          "format": "uint",
-          "default": 1048576,
-          "minimum": 0
-        },
-        "socket_gid": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "default": null,
-          "minimum": 0
-        },
-        "socket_mode": {
-          "description": "Octal string, e.g. \"0660\". The socket is the first access-control layer (spec §16.1).",
-          "type": "string",
-          "default": "0660"
-        },
-        "trusted_owner_uids": {
-          "description": "Owners trusted for policy/config files.",
-          "type": "array",
-          "default": [
-            0
-          ],
-          "items": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          }
-        }
-      },
-      "additionalProperties": false
-    }
-  }
+  "title": "HostConfig",
+  "type": "object"
 }

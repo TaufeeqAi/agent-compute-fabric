@@ -4,7 +4,7 @@
 # build context (this file, overlay/, the guest agent, requirements.txt) and exports the resulting
 # filesystem as a tarball for scripts/create-rootfs.sh. ONLY the filesystem is exported — ENV, USER,
 # WORKDIR, ENTRYPOINT and CMD instructions have no effect on the guest, so none are used. Environment
-# for a command comes from the request (see policies/default.yaml) and the guest agent's default PATH.
+# for a command comes from the request (see profiles/default.yaml) and the guest agent's default PATH.
 #
 # BASE_REF has no default on purpose: a build without one fails ("base name should not be blank")
 # instead of silently building from whatever `latest` means today.
@@ -12,7 +12,7 @@ ARG BASE_REF
 FROM ${BASE_REF}
 
 # Headless Chromium from the Debian archive, on top of the Python image's base (so Python drivers such as
-# Playwright's or Selenium's can talk to it). EXPERIMENTAL: not exercised by the Phase 1 test-suite.
+# Playwright's or Selenium's can talk to it). EXPERIMENTAL: not exercised by any test-suite.
 #
 # The guest layer below strips every setuid bit, including Chromium's `chrome-sandbox`, so run it with
 # `--no-sandbox --headless --disable-gpu --disable-dev-shm-usage`. That is the normal way to run Chromium

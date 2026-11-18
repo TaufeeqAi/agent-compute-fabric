@@ -1,319 +1,591 @@
-"""The client's models cannot drift from the host's wire contract.
+"""The client against the host's published API description (``execution/contracts/host-api.json``).
 
-The Rust host emits JSON Schemas (``acf-host schema``; committed under ``schemas/``). Drift in either
-direction is a failure here, in CI, rather than a confusing runtime error:
+The description is generated from the host's own types, so it is the contract in machine-readable
+form. These tests need no host. They prove that the client cannot drift from it:
 
-* every request the client can build validates against ``request.schema.json``;
-* the set of methods the client knows equals the set the host serves;
-* every field the host can send for a response type is modelled (or consciously excluded);
-* values that drive control flow (statuses, failure classes the client branches on) exist in the schema;
-* the factories the other tests rely on are valid against the schema themselves.
+* the client's method table *is* the published one (names, classes, which ones create operations);
+* every closed vocabulary the client knows has exactly the published words;
+* every request type has exactly the published fields, and every request the client can build —
+  for every method — validates;
+* answers recorded from the real host (``tests/data/recorded_answers.json``) and the answers the
+  test factories generate validate, and the client's models read them and write them back unchanged.
 """
 
 from __future__ import annotations
 
-import typing
+import json
+from collections.abc import Callable
+from enum import StrEnum
+from pathlib import Path
 from typing import Any
 
 import pytest
-from jsonschema import Draft202012Validator
-from pydantic import BaseModel, ValidationError
+from jsonschema import ValidationError as SchemaError
+from pydantic import BaseModel
 
 import factories as f
-from acf_cli import models as m
-from acf_cli.client import DEFAULT_SOCKET, _rejection_hint
-from acf_cli.resolve import LIVE_STATES
-from support import error_body, respond
+from acf_cli import requests as rq
+from acf_cli import responses as rs
+from acf_cli import wire
+from acf_cli.responses import ResponseEnvelope, to_wire
+from support import Contract, accepted, answered, refused
+
+RECORDED = Path(__file__).resolve().parent / "data" / "recorded_answers.json"
 
 
-def schema_validator(schema: dict[str, Any]) -> Draft202012Validator:
-    Draft202012Validator.check_schema(schema)
-    return Draft202012Validator(schema)
+def _words(schema: dict[str, Any]) -> set[str]:
+    """The words of an enumeration schema, however the generator spelled it (``enum`` or ``oneOf`` of constants)."""
+    words = set(schema.get("enum", []))
+    for alternative in schema.get("oneOf", []):
+        words |= _words(alternative)
+        if "const" in alternative:
+            words.add(alternative["const"])
+    return words
 
 
-def enum_values(defn: dict[str, Any]) -> set[str]:
-    """String values of an enum, whether schemars emitted ``enum`` or a ``oneOf`` of ``const``/``enum``."""
-    if "enum" in defn:
-        return {str(v) for v in defn["enum"]}
-    if "const" in defn:
-        return {str(defn["const"])}
-    out: set[str] = set()
-    for key in ("oneOf", "anyOf"):
-        for part in defn.get(key, []):
-            out |= enum_values(part)
-    return out
+def _published_type(reference: dict[str, Any] | None) -> str | None:
+    return reference["$ref"].rsplit("/", 1)[1] if reference is not None else None
 
 
-# ----------------------------------------------------------------------------- requests
-TARGET = m.SandboxTarget(sandbox_id=f.SANDBOX_ID, expected_generation=3)
-SNAP_REF = m.SnapshotRef(snapshot_id=f.SNAPSHOT_ID, snapshot_generation=1)
-
-SAMPLES: dict[type[m.Body], m.Body] = {
-    m.HostInfoRequest: m.HostInfoRequest(),
-    m.MetricsRequest: m.MetricsRequest(),
-    m.PolicyReloadRequest: m.PolicyReloadRequest(),
-    m.SandboxListRequest: m.SandboxListRequest(),
-    m.SnapshotListRequest: m.SnapshotListRequest(),
-    m.SandboxCreateRequest: m.SandboxCreateRequest(
-        params=m.SandboxCreateParams(
-            name="work",
-            image="python",
-            resources=m.SandboxResources(vcpus=2, memory_mib=4096, disk_mib=1024, network="none"),
-        )
-    ),
-    m.SandboxStartRequest: m.SandboxStartRequest(params=TARGET),
-    m.SandboxStopRequest: m.SandboxStopRequest(params=TARGET),
-    m.SandboxDestroyRequest: m.SandboxDestroyRequest(params=TARGET),
-    m.SandboxInspectRequest: m.SandboxInspectRequest(params=m.SandboxSelector(sandbox="work")),
-    m.ExecRequest: m.ExecRequest(
-        params=m.ExecParams(
-            sandbox_id=f.SANDBOX_ID,
-            expected_generation=3,
-            command=m.CommandSpec(
-                argv=["python", "x.py"],
-                env={"LANG": "C"},
-                cwd="/work",
-                limits=m.RunLimitsRequest(timeout_ms=5000, max_pids=64, max_stdout_bytes=1024, max_stderr_bytes=2048),
-            ),
-        )
-    ),
-    m.SnapshotCreateRequest: m.SnapshotCreateRequest(
-        params=m.SnapshotCreateParams(sandbox_id=f.SANDBOX_ID, expected_generation=3, name="base")
-    ),
-    m.SnapshotRestoreRequest: m.SnapshotRestoreRequest(
-        params=m.SnapshotRestoreParams(
-            snapshot=SNAP_REF, target=m.RestoreExisting(sandbox_id=f.SANDBOX_ID, expected_generation=3)
-        )
-    ),
-    m.SnapshotDeleteRequest: m.SnapshotDeleteRequest(params=SNAP_REF),
-    m.OperationGetRequest: m.OperationGetRequest(params=m.OperationSelector(operation_id=f.OP_ID)),
-    m.OperationCancelRequest: m.OperationCancelRequest(params=m.OperationSelector(operation_id=f.OP_ID)),
-    m.RunInspectRequest: m.RunInspectRequest(params=m.RunSelector(run_id=f.RUN_ID)),
-}
+# ----------------------------------------------------------------------------- protocol and methods
+def test_the_client_speaks_the_published_protocol(contract: Contract) -> None:
+    assert contract.document["protocol"] == wire.PROTOCOL
 
 
-def envelope_of(body: m.Body, *, operation_id: str | None = None) -> dict[str, Any]:
-    env: dict[str, Any] = {"protocol": m.PROTOCOL, "request_id": "req-0123456789ab", "body": body.wire()}
-    if operation_id is not None:
-        env["operation_id"] = operation_id
-    return env
+def test_the_method_table_is_the_published_one(contract: Contract) -> None:
+    published = contract.document["methods"]
+    assert [m.name for m in rq.METHODS.values()] == [m["name"] for m in published], "same methods, same order"
+    assert len(rq.METHODS) == 22
+    for entry in published:
+        method = rq.METHODS[entry["name"]]
+        assert method.operation_class.value == entry["class"], entry["name"]
+        assert method.creates_operation == entry["creates_operation"], entry["name"]
+        assert method.params_required == entry["params_required"], entry["name"]
+        mine = method.params.__name__ if method.params is not None else None
+        assert mine == _published_type(entry["params"]), f"{entry['name']}: params type"
+        expected_answer = "OPERATION" if method.creates_operation else "RESULT"
+        assert entry["answer"] == expected_answer, entry["name"]
 
 
-def test_every_request_type_has_a_sample() -> None:
-    assert set(SAMPLES) == set(m.ALL_REQUEST_TYPES), "add a sample for the new request type"
+def test_roles_are_the_published_ones(contract: Contract) -> None:
+    roles = {role for m in contract.document["methods"] for role in m["roles"]}
+    assert roles == {r.value for r in wire.Role}
 
 
-@pytest.mark.parametrize("request_type", m.ALL_REQUEST_TYPES, ids=lambda t: t.method)
-def test_every_request_the_client_builds_validates_against_the_host_schema(
-    request_schema: dict[str, Any], request_type: type[m.Body]
-) -> None:
-    body = SAMPLES[request_type]
-    validator = schema_validator(request_schema)
-    validator.validate(envelope_of(body))
-    validator.validate(envelope_of(body, operation_id=f.OP_ID))
-    assert body.method == request_type.method
+# ----------------------------------------------------------------------------- vocabularies
+def test_failure_classes_are_the_published_ones(contract: Contract) -> None:
+    published = contract.document["failure_classes"]
+    assert [c.value for c in wire.FailureClass] == [c["class"] for c in published], "same classes, same order"
+    assert {c["retry"] for c in published} == {a.value for a in wire.RetryAdvice}
 
 
-def test_the_client_and_the_host_serve_the_same_methods(request_schema: dict[str, Any]) -> None:
-    host_methods = {option["properties"]["method"]["const"] for option in request_schema["$defs"]["Request"]["oneOf"]}
-    client_methods = {t.method for t in m.ALL_REQUEST_TYPES}
-    assert client_methods == host_methods
+@pytest.mark.parametrize(
+    ("key", "vocabulary"),
+    [
+        ("operation_states", wire.OperationState),
+        ("operation_types", wire.OperationType),
+        ("lifecycle_states", wire.LifecycleState),
+        ("host_modes", wire.HostMode),
+    ],
+)
+def test_the_state_vocabularies_are_the_published_ones(contract: Contract, key: str, vocabulary: type[StrEnum]) -> None:
+    assert [v.value for v in vocabulary] == contract.document[key]
 
 
-def test_the_schema_really_is_strict_so_the_checks_above_mean_something(request_schema: dict[str, Any]) -> None:
-    validator = schema_validator(request_schema)
-    bad_by_name = envelope_of(m.SandboxListRequest())
-    bad_by_name["body"] = {"method": "sandbox_destroy", "params": {"sandbox": "work"}}
-    assert not validator.is_valid(bad_by_name), "destructive operations must not be expressible by name"
-    extra_param = envelope_of(SAMPLES[m.SandboxDestroyRequest])
-    extra_param["body"]["params"]["force"] = True
-    assert not validator.is_valid(extra_param)
-    unknown_method = envelope_of(m.SandboxListRequest())
-    unknown_method["body"] = {"method": "rm_rf"}
-    assert not validator.is_valid(unknown_method)
-    extra_envelope_field = envelope_of(m.SandboxListRequest())
-    extra_envelope_field["sneaky"] = 1
-    assert not validator.is_valid(extra_envelope_field)
+def test_terminal_states_are_the_contract_table() -> None:
+    terminal = {s for s in wire.OperationState if s.is_terminal}
+    assert terminal == {
+        wire.OperationState.SUCCEEDED,
+        wire.OperationState.FAILED,
+        wire.OperationState.CANCELLED,
+        wire.OperationState.UNKNOWN,
+    }
 
 
-def test_the_client_cannot_even_construct_what_the_host_would_refuse() -> None:
-    with pytest.raises(ValidationError):
-        m.SandboxTarget(sandbox="by-name")  # type: ignore[call-arg]
-    with pytest.raises(ValidationError):
-        m.SandboxTarget(sandbox_id=f.SANDBOX_ID, expected_generation=1, force=True)  # type: ignore[call-arg]
-    with pytest.raises(ValidationError):
-        m.SandboxTarget(sandbox_id="sbx-nothex", expected_generation=1)
-    with pytest.raises(ValidationError):
-        m.SandboxTarget(sandbox_id=f.SANDBOX_ID, expected_generation=0)  # generations start at 1
-    with pytest.raises(ValidationError):
-        m.SandboxResources(vcpus=1, memory_mib=1, disk_mib=1, network="host")  # type: ignore[arg-type]
-    with pytest.raises(ValidationError):
-        m.OperationSelector(operation_id="short")
+VOCABULARIES: list[type[StrEnum]] = [
+    wire.FailureClass,
+    wire.RetryAdvice,
+    wire.SideEffect,
+    wire.OperationState,
+    wire.OperationType,
+    wire.Effect,
+    wire.Cleanup,
+    wire.CancelledBy,
+    wire.Issuer,
+    wire.HostMode,
+    wire.LifecycleState,
+    wire.SnapshotState,
+    wire.RunStatus,
+    wire.EvidenceStatus,
+    wire.OutputStatus,
+    wire.ArtifactKind,
+    wire.NetworkMode,
+    wire.OutputStream,
+    wire.ReleaseMode,
+    wire.RequestedMode,
+    wire.AckCondition,
+]
 
 
-def test_the_phase_1_network_vocabulary_is_none_on_both_sides(
-    request_schema: dict[str, Any], response_schema: dict[str, Any]
-) -> None:
-    # When a later phase adds a network mode this fails on purpose: the CLI must learn it deliberately.
-    assert enum_values(request_schema["$defs"]["NetworkMode"]) == {"none"}
-    assert enum_values(response_schema["$defs"]["NetworkMode"]) == {"none"}
+@pytest.mark.parametrize("vocabulary", VOCABULARIES, ids=lambda v: v.__name__)
+def test_every_vocabulary_has_exactly_the_published_words(contract: Contract, vocabulary: type[StrEnum]) -> None:
+    assert {v.value for v in vocabulary} == _words(contract.defs[vocabulary.__name__])
 
 
-# ----------------------------------------------------------------------------- responses
-#: Response types whose full field set the client models, by schema ``$defs`` name.
-MODELLED: dict[str, type[BaseModel]] = {
-    "HostInfo": m.HostInfo,
-    "SandboxView": m.SandboxView,
-    "SnapshotView": m.SnapshotView,
-    "RunResult": m.RunResult,
-    "OperationView": m.OperationView,
-    "OutputCapture": m.OutputCapture,
-    "RunMetrics": m.RunMetrics,
-    "ResourceEvidence": m.ResourceEvidence,
-    "FailureInfo": m.FailureInfo,
-    "ArtifactRef": m.ArtifactRef,
-    "ImageRef": m.ImageRef,
-    "PolicyId": m.PolicyId,
-    "ProcessIdentity": m.ProcessIdentity,
-    "BackendIdentity": m.BackendIdentity,
-    "CapabilityProfile": m.CapabilityProfile,
-    "SandboxResources": m.SandboxResources,
-    "SnapshotRef": m.SnapshotRef,
-    "ErrorBody": m.ErrorBody,
-}
+def test_no_published_vocabulary_is_unknown_to_the_client(contract: Contract) -> None:
+    """A new enumeration in the description must be given a vocabulary here, not silently treated as text."""
+    published = {name for name, schema in contract.defs.items() if _words(schema) and "properties" not in schema}
+    structural = {
+        "NetworkIntent",
+        "RestoreTarget",
+        "AllowDestination",
+        "OperationResult",
+        "ReadResult",
+        "ResponseEnvelope",
+    }
+    published -= structural | {"ContainmentReason"}
+    assert published == {v.__name__ for v in VOCABULARIES}
 
 
-def wire_names(model: type[BaseModel]) -> set[str]:
+def test_identifier_grammars_are_the_published_ones(contract: Contract) -> None:
+    assert contract.defs["SandboxId"]["pattern"] == wire.SANDBOX_ID_PATTERN
+    assert contract.defs["SnapshotId"]["pattern"] == wire.SNAPSHOT_ID_PATTERN
+    assert contract.defs["RunId"]["pattern"] == wire.RUN_ID_PATTERN
+    assert contract.defs["OperationId"]["pattern"] == wire.OPERATION_ID_PATTERN
+    scope = contract.defs["OwnerScope"]
+    assert (scope["pattern"], scope["maxLength"]) == (wire.LABEL_PATTERN, wire.MAX_OWNER_SCOPE_CHARS)
+
+
+# ----------------------------------------------------------------------------- request types
+def _wire_fields(model: type[BaseModel]) -> set[str]:
     return {field.alias or name for name, field in model.model_fields.items()}
 
 
-def required_wire_names(model: type[BaseModel]) -> set[str]:
-    return {field.alias or name for name, field in model.model_fields.items() if field.is_required()}
-
-
-@pytest.mark.parametrize("def_name", sorted(MODELLED))
-def test_every_field_the_host_can_send_is_modelled(response_schema: dict[str, Any], def_name: str) -> None:
-    defn = response_schema["$defs"][def_name]
-    model = MODELLED[def_name]
-    assert wire_names(model) == set(defn["properties"]), (
-        f"{def_name}: the host and the client disagree about the fields; "
-        "model the new field (or remove the old one) in acf_cli/models.py"
+REQUEST_TYPES: dict[str, type[BaseModel]] = {
+    model.__name__: model
+    for model in (
+        rq.SandboxCreateParams,
+        rq.SandboxResources,
+        rq.SandboxTarget,
+        rq.SandboxSelector,
+        rq.ExecParams,
+        rq.CommandSpec,
+        rq.RunLimitsRequest,
+        rq.SecretRef,
+        rq.SnapshotCreateParams,
+        rq.SnapshotRestoreParams,
+        rq.SnapshotDeleteParams,
+        rq.SnapshotRef,
+        rq.OperationSelector,
+        rq.RunSelector,
+        rq.RunOutputParams,
+        rq.Cursor,
+        rq.ListParams,
+        rq.QuarantineReleaseParams,
+        rq.SetModeParams,
+        rq.AcknowledgeParams,
+        rq.AllowEntry,
     )
-
-
-@pytest.mark.parametrize("def_name", sorted(MODELLED))
-def test_the_client_never_requires_a_field_the_host_may_omit(response_schema: dict[str, Any], def_name: str) -> None:
-    defn = response_schema["$defs"][def_name]
-    extra = required_wire_names(MODELLED[def_name]) - set(defn.get("required", []))
-    assert not extra, f"{def_name}: the client requires {sorted(extra)} but the host may omit them"
-
-
-def test_the_response_body_variants_match(response_schema: dict[str, Any]) -> None:
-    host_types = {o["properties"]["type"]["const"] for o in response_schema["$defs"]["ResponseBody"]["oneOf"]}
-    union = typing.get_args(m.ResponseBody)[0]
-    client_types = set()
-    for cls in typing.get_args(union):
-        client_types |= set(typing.get_args(cls.model_fields["type"].annotation))
-    assert client_types == host_types
-
-
-def test_statuses_the_client_branches_on_match_the_schema(response_schema: dict[str, Any]) -> None:
-    assert {s.value for s in m.OperationStatus} == enum_values(response_schema["$defs"]["OperationStatus"])
-
-
-def test_failure_classes_the_client_branches_on_exist(response_schema: dict[str, Any]) -> None:
-    known = enum_values(response_schema["$defs"]["FailureClass"])
-    used = {"NOT_FOUND", "AUTHORIZATION", "ADMISSION_REJECTED", "STATE_CONFLICT", "VALIDATION"}
-    assert used <= known
-    assert all(_rejection_hint(c) is not None for c in used)
-    assert _rejection_hint("INTERNAL") is None
-
-
-def test_lifecycle_states_the_client_treats_as_live_exist(response_schema: dict[str, Any]) -> None:
-    assert set(LIVE_STATES) <= enum_values(response_schema["$defs"]["LifecycleState"])
-
-
-def test_string_vocabularies_the_renderer_compares_against_exist(response_schema: dict[str, Any]) -> None:
-    defs = response_schema["$defs"]
-    assert "COMPLETE" in enum_values(defs["OutputStatus"])
-    assert "SUCCEEDED" in enum_values(defs["RunOutcome"])
-
-
-# ----------------------------------------------------------------------------- factories are valid
-FACTORY_BODIES: dict[str, dict[str, Any]] = {
-    "host_info": f.body("host_info", f.host_info()),
-    "sandbox": f.body("sandbox", f.sandbox_view()),
-    "sandboxes": f.body("sandboxes", [f.sandbox_view(), f.sandbox_view(sandbox_id=f.OTHER_SANDBOX_ID, name="x")]),
-    "run": f.body("run", f.run_result()),
-    "snapshot": f.body("snapshot", f.snapshot_view()),
-    "snapshots": f.body("snapshots", [f.snapshot_view()]),
-    "operation": f.body("operation", f.operation_view()),
-    "metrics": f.body("metrics", {"counters": {"a": 1}, "gauges": {"live_sandboxes": 0}}),
-    "ack": f.body("ack"),
 }
 
 
-@pytest.mark.parametrize("kind", sorted(FACTORY_BODIES))
-def test_factories_are_valid_against_the_schema_and_parse_into_the_models(
-    response_schema: dict[str, Any], kind: str
-) -> None:
-    wire = respond({"request_id": "r"}, "SUCCEEDED", result=FACTORY_BODIES[kind])
-    schema_validator(response_schema).validate(wire)
-    parsed = m.ResponseEnvelope.model_validate(wire)
-    assert parsed.result is not None
-    assert parsed.result.type == kind
+@pytest.mark.parametrize("name", sorted(REQUEST_TYPES))
+def test_every_request_type_has_exactly_the_published_fields(contract: Contract, name: str) -> None:
+    schema = contract.defs[name]
+    model = REQUEST_TYPES[name]
+    assert _wire_fields(model) == set(schema["properties"]), name
+    required = {field.alias or n for n, field in model.model_fields.items() if field.is_required()}
+    assert required == set(schema.get("required", [])), f"{name}: required fields"
 
 
-def test_the_error_envelope_shape_is_valid_against_the_schema(response_schema: dict[str, Any]) -> None:
-    wire = respond(
-        {"request_id": "r", "operation_id": f.OP_ID},
-        "UNKNOWN",
-        error=error_body("TIMEOUT_UNKNOWN", "lost", side_effect="possible", outcome_unknown=True),
-    )
-    schema_validator(response_schema).validate(wire)
-    parsed = m.ResponseEnvelope.model_validate(wire)
-    assert parsed.error is not None
-    assert (parsed.error.error_class, parsed.error.outcome_unknown) == ("TIMEOUT_UNKNOWN", True)
+def test_the_request_envelope_has_the_published_fields_and_never_authority(contract: Contract) -> None:
+    schema = contract.defs["RequestEnvelope"]
+    assert _wire_fields(rq.RequestEnvelope) == set(schema["properties"]) - {"authority"}
+    required = {n for n, field in rq.RequestEnvelope.model_fields.items() if field.is_required()}
+    # `protocol` defaults to the one this client speaks; `request_id` is optional to the host, and
+    # this client always sends one, because it checks that an answer belongs to its request.
+    assert required == (set(schema["required"]) - {"protocol"}) | {"request_id"}
+    assert schema["additionalProperties"] is False
 
 
-# ----------------------------------------------------------------------------- tolerance rules
-def test_unknown_response_fields_are_ignored_so_an_additive_host_change_does_not_break_us() -> None:
-    wire = respond({"request_id": "r"}, "SUCCEEDED", result=f.body("sandbox", f.sandbox_view(brand_new_field=[1, 2])))
-    wire["also_new"] = True
-    parsed = m.ResponseEnvelope.model_validate(wire)
-    assert isinstance(parsed.body(), m.SandboxView)
+def test_every_parameter_type_of_every_method_is_covered(contract: Contract) -> None:
+    referenced = {_published_type(m["params"]) for m in contract.document["methods"]} - {None}
+    assert referenced <= set(REQUEST_TYPES)
 
 
-def test_an_unknown_status_is_not_tolerated_because_it_drives_control_flow() -> None:
-    with pytest.raises(ValidationError):
-        m.ResponseEnvelope.model_validate(respond({"request_id": "r"}, "MOSTLY_DONE"))
-
-
-def test_an_unknown_body_type_is_not_tolerated() -> None:
-    with pytest.raises(ValidationError):
-        m.ResponseEnvelope.model_validate(
-            respond({"request_id": "r"}, "SUCCEEDED", result={"type": "mystery", "data": 1})
-        )
-
-
-def test_a_generation_of_zero_from_the_host_is_a_contract_violation() -> None:
-    with pytest.raises(ValidationError):
-        m.SandboxView.model_validate(f.sandbox_view(generation=0))
-
-
-def test_is_final_matches_the_host_definition() -> None:
-    finals = {s for s in m.OperationStatus if s.is_final}
-    assert finals == {
-        m.OperationStatus.SUCCEEDED,
-        m.OperationStatus.FAILED,
-        m.OperationStatus.CANCELLED,
-        m.OperationStatus.CONFLICT,
-        m.OperationStatus.REJECTED,
+def test_the_tagged_request_shapes_are_the_published_ones(contract: Contract) -> None:
+    """``NetworkIntent``, ``RestoreTarget``, ``AllowDestination`` and ``PortRange``: unions, or renamed on the wire."""
+    intents = {
+        alt["properties"]["mode"]["const"]: set(alt["properties"]) for alt in contract.defs["NetworkIntent"]["oneOf"]
     }
-    assert not m.OperationStatus.UNKNOWN.is_final, "UNKNOWN is first-class and never final"
+    assert intents == {"none": _wire_fields(rq.NetworkNone), "allowlist": _wire_fields(rq.NetworkAllowlist)}
+    targets = {
+        alt["properties"]["kind"]["const"]: set(alt["properties"]) for alt in contract.defs["RestoreTarget"]["oneOf"]
+    }
+    assert targets == {"existing": _wire_fields(rq.RestoreExisting), "new": _wire_fields(rq.RestoreNew)}
+    destinations = [set(alt["properties"]) for alt in contract.defs["AllowDestination"]["oneOf"]]
+    assert destinations == [_wire_fields(rq.NameDestination), _wire_fields(rq.NetworkDestination)]
+    assert set(rq.PortRange(low=1, high=2).model_dump()) == set(contract.defs["PortRange"]["properties"])
 
 
-def test_the_cli_defaults_to_the_socket_the_host_defaults_to(host_config_schema: dict[str, Any]) -> None:
-    """A fresh install must work with no flags: client and server defaults are one fact, kept in two languages."""
-    paths = host_config_schema["$defs"]["Paths"]["properties"]
-    assert paths["socket_path"]["default"] == DEFAULT_SOCKET
+# ----------------------------------------------------------------------------- every request the client can build
+TARGET = rq.SandboxTarget(sandbox_id=f.SANDBOX_ID, expected_generation=3, if_revision=17)
+SNAPSHOT = rq.SnapshotRef(snapshot_id=f.SNAPSHOT_ID, snapshot_generation=1)
+ALLOWLIST = rq.NetworkAllowlist(
+    entries=[
+        rq.AllowEntry(destination=rq.NameDestination(name="pypi.org"), ports=[rq.PortRange(low=443, high=443)]),
+        rq.AllowEntry(
+            destination=rq.NetworkDestination(network="198.51.100.0/24"),
+            ports=[rq.PortRange(low=5432, high=5433), rq.PortRange(low=8443, high=8443)],
+        ),
+    ]
+)
+FULL_COMMAND = rq.CommandSpec(
+    argv=["python", "-c", "print('héllo')"],
+    env={"LANG": "C.UTF-8", "TZ": "UTC"},
+    secret_env={"API_TOKEN": rq.SecretRef(ref="ci-token_v2.prod")},
+    cwd="/workspace/job",
+    limits=rq.RunLimitsRequest(timeout_ms=90_000, max_pids=64, max_stdout_bytes=65_536, max_stderr_bytes=4_096),
+)
+CURSOR = rq.Cursor(lineage=f.LINEAGE, sequence=2**53)
+
+#: At least one call per method; several where a method has distinct shapes.
+CALLS: list[rq.Call] = [
+    rq.sandbox_create(
+        rq.SandboxCreateParams(
+            image="python",
+            resources=rq.SandboxResources(vcpus=1, memory_mib=128, disk_mib=64, network=rq.NetworkNone()),
+        )
+    ),
+    rq.sandbox_create(
+        rq.SandboxCreateParams(
+            name="job-7_a.b",
+            image="python",
+            resources=rq.SandboxResources(vcpus=4, memory_mib=4096, disk_mib=8192, network=ALLOWLIST),
+            lifetime_secs=7200,
+        )
+    ),
+    rq.sandbox_start(TARGET),
+    rq.sandbox_start(rq.SandboxTarget(sandbox_id=f.SANDBOX_ID, expected_generation=1)),
+    rq.exec_run(rq.ExecParams(sandbox_id=f.SANDBOX_ID, expected_generation=1, command=rq.CommandSpec(argv=["true"]))),
+    rq.exec_run(rq.ExecParams(sandbox_id=f.SANDBOX_ID, expected_generation=2, if_revision=9, command=FULL_COMMAND)),
+    rq.snapshot_create(rq.SnapshotCreateParams(sandbox_id=f.SANDBOX_ID, expected_generation=1)),
+    rq.snapshot_create(
+        rq.SnapshotCreateParams(sandbox_id=f.SANDBOX_ID, expected_generation=1, if_revision=4, name="base")
+    ),
+    rq.snapshot_restore(
+        rq.SnapshotRestoreParams(
+            snapshot=SNAPSHOT,
+            target=rq.RestoreExisting(sandbox_id=f.SANDBOX_ID, expected_generation=2, if_revision=31),
+        )
+    ),
+    rq.snapshot_restore(rq.SnapshotRestoreParams(snapshot=SNAPSHOT, target=rq.RestoreNew())),
+    rq.snapshot_restore(
+        rq.SnapshotRestoreParams(snapshot=SNAPSHOT, target=rq.RestoreNew(name="copy", lifetime_secs=600))
+    ),
+    rq.sandbox_stop(TARGET),
+    rq.sandbox_destroy(TARGET),
+    rq.snapshot_delete(SNAPSHOT),
+    rq.operation_cancel(f.OPERATION_ID),
+    rq.sandbox_inspect("box"),
+    rq.sandbox_inspect(f.SANDBOX_ID),
+    rq.sandbox_list(),
+    rq.sandbox_list(rq.ListParams(limit=1)),
+    rq.sandbox_list(rq.ListParams(changed_since=CURSOR, limit=1000)),
+    rq.snapshot_list(),
+    rq.snapshot_list(rq.ListParams(changed_since=CURSOR)),
+    rq.operation_get(f.OPERATION_ID),
+    rq.operation_list(),
+    rq.operation_list(rq.ListParams(changed_since=CURSOR, limit=50)),
+    rq.run_inspect(f.RUN_ID),
+    rq.run_output(rq.RunOutputParams(run_id=f.RUN_ID, stream=wire.OutputStream.STDOUT)),
+    rq.run_output(rq.RunOutputParams(run_id=f.RUN_ID, stream=wire.OutputStream.STDERR, offset=4096, max_bytes=1 << 20)),
+    rq.host_info(),
+    rq.host_metrics(),
+    rq.profile_reload(),
+    rq.quarantine_release(
+        rq.QuarantineReleaseParams(sandbox_id=f.SANDBOX_ID, generation=2, mode=wire.ReleaseMode.FORCE_DESTROY)
+    ),
+    rq.quarantine_release(
+        rq.QuarantineReleaseParams(sandbox_id=f.SANDBOX_ID, generation=2, mode=wire.ReleaseMode.DECLARE_ABSENT)
+    ),
+    rq.host_set_mode(wire.RequestedMode.DRAINING),
+    rq.host_set_mode(wire.RequestedMode.SERVING),
+    rq.host_acknowledge(wire.AckCondition.STORE_REGRESSION),
+]
+
+
+def _envelopes(call: rq.Call) -> list[rq.RequestEnvelope]:
+    """Every envelope the client wraps ``call`` in: plain, on behalf of someone, and — for operations — a retry."""
+    if not call.method.creates_operation:
+        return [
+            rq.read_envelope(call, owner_scope="default"),
+            rq.read_envelope(call, owner_scope="team-a/project_1:prod@eu=1+x", on_behalf_of="job:42"),
+        ]
+    op_id, issued = rq.new_operation_id(), rq.utc_timestamp()
+    return [
+        rq.operation_envelope(call, operation_id=op_id, issued_at=issued, owner_scope="default", wait_ms=20_000),
+        rq.operation_envelope(
+            call, operation_id=op_id, issued_at=issued, owner_scope="team-a", on_behalf_of="job:42", wait_ms=0
+        ),
+        rq.operation_envelope(
+            call, operation_id=op_id, issued_at=issued, owner_scope="team-a", retry=True, wait_ms=20_000
+        ),
+    ]
+
+
+def test_the_sample_calls_cover_every_method() -> None:
+    assert {call.method.name for call in CALLS} == set(rq.METHODS)
+
+
+@pytest.mark.parametrize("call", CALLS, ids=lambda c: c.method.name)
+def test_every_request_the_client_builds_is_valid(contract: Contract, call: rq.Call) -> None:
+    for envelope in _envelopes(call):
+        doc = json.loads(envelope.encode())
+        contract.check_request(doc)
+        assert doc["protocol"] == contract.document["protocol"]
+        assert "authority" not in doc
+        assert ("retry" in doc) == envelope.retry, "retry is sent only when it is asserted"
+
+
+def test_a_retry_differs_from_the_first_submission_only_in_the_flag_and_the_correlation_id() -> None:
+    first, _, again = (json.loads(e.encode()) for e in _envelopes(CALLS[0]))
+    first.pop("request_id")
+    again.pop("request_id")
+    assert again.pop("retry") is True
+    assert first.pop("owner_scope") == "default"
+    assert again.pop("owner_scope") == "team-a"
+    assert first == again, "same operation_id, same issued_at, same method, same params"
+
+
+def test_the_validator_would_catch_a_request_the_host_refuses(contract: Contract) -> None:
+    """The contract check is not vacuous: an unknown field, a bad id and a missing token are all rejected."""
+    good = json.loads(_envelopes(rq.sandbox_destroy(TARGET))[0].encode())
+    contract.check_request(good)
+    breakages: list[Callable[[dict[str, Any]], object]] = [
+        lambda d: d.update(sneaky=1),
+        lambda d: d["params"].update(force=True),
+        lambda d: d["params"].update(sandbox_id="sbx-../../etc"),
+        lambda d: d["params"].pop("expected_generation"),
+        lambda d: d.update(owner_scope="has space"),
+    ]
+    for mutate in breakages:
+        broken = json.loads(json.dumps(good))
+        mutate(broken)
+        with pytest.raises(SchemaError):
+            contract.check_request(broken)
+    unidentified = json.loads(json.dumps(good))
+    del unidentified["operation_id"]
+    with pytest.raises(AssertionError):
+        contract.check_request(unidentified)
+
+
+# ----------------------------------------------------------------------------- response types
+RESPONSE_TYPES: dict[str, type[BaseModel]] = {
+    "AsOf": rs.AsOf,
+    "Refusal": rs.Refusal,
+    "FailureInfo": rs.FailureInfo,
+    "Tags": rs.Tags,
+    "ProfileId": rs.ProfileId,
+    "ImageRef": rs.ImageRef,
+    "ProcessIdentity": rs.ProcessIdentity,
+    "SnapshotRef": rs.SnapshotRefView,
+    "Cursor": rs.CursorView,
+    "PortRange": rs.PortRangeView,
+    "AllowEntry": rs.AllowEntryView,
+    "SandboxResources": rs.SandboxResourcesView,
+    "SandboxView": rs.SandboxView,
+    "SnapshotView": rs.SnapshotView,
+    "ArtifactRef": rs.ArtifactRef,
+    "OutputCapture": rs.OutputCapture,
+    "RunMetrics": rs.RunMetrics,
+    "ResourceEvidence": rs.ResourceEvidence,
+    "RunResult": rs.RunResult,
+    "OutputChunk": rs.OutputChunk,
+    "HostChange": rs.HostChange,
+    "ProfileLimits": rs.ProfileLimits,
+    "CallerParameters": rs.CallerParameters,
+    "BackendIdentity": rs.BackendIdentity,
+    "CapabilityProfile": rs.CapabilityProfile,
+    "HostInfo": rs.HostInfo,
+    "OperationView": rs.OperationView,
+    "Page": rs.Page,
+}
+
+
+#: Fields the description requires of a host and this client nevertheless reads as optional.
+#: They describe the backend and drive nothing here, and they joined the capability profile after
+#: the first hosts of this protocol were built: a host that predates them must still be readable.
+OPTIONAL_HERE: dict[str, set[str]] = {"CapabilityProfile": {"identifier_slots", "stop_grace_ms"}}
+
+
+@pytest.mark.parametrize("name", sorted(RESPONSE_TYPES))
+def test_every_published_response_field_is_modelled(contract: Contract, name: str) -> None:
+    """Unknown fields are tolerated at run time; fields the contract *publishes* are all typed here."""
+    schema = contract.defs[name]
+    model = RESPONSE_TYPES[name]
+    assert _wire_fields(model) == set(schema["properties"]), name
+    required = {field.alias or n for n, field in model.model_fields.items() if field.is_required()}
+    expected = set(schema.get("required", [])) - OPTIONAL_HERE.get(name, set())
+    assert required == expected, f"{name}: a field the host always sends is required here"
+
+
+def test_the_result_types_are_the_published_ones(contract: Contract) -> None:
+    def kinds(name: str) -> set[str]:
+        return {alt["properties"]["type"]["const"] for alt in contract.defs[name]["oneOf"]}
+
+    assert kinds("OperationResult") == {"sandbox", "snapshot", "run", "host"}
+    assert kinds("ReadResult") == {
+        "host_info",
+        "metrics",
+        "sandbox",
+        "sandboxes",
+        "snapshots",
+        "operation",
+        "operations",
+        "run",
+        "output",
+    }
+    answers = {alt["properties"]["answer"]["const"] for alt in contract.defs["ResponseEnvelope"]["oneOf"]}
+    assert answers == {a.value for a in wire.Answer}
+
+
+# ----------------------------------------------------------------------------- recorded answers of the real host
+def _recorded() -> list[dict[str, Any]]:
+    document = json.loads(RECORDED.read_text(encoding="utf-8"))
+    exchanges = document["exchanges"]
+    assert isinstance(exchanges, list)
+    return exchanges
+
+
+RECORDED_EXCHANGES = _recorded()
+
+
+def _label(exchange: dict[str, Any]) -> str:
+    answer = exchange["response"]
+    detail = (
+        answer.get("refusal", {}).get("class")
+        or (answer.get("operation") or {}).get("state")
+        or (answer.get("result") or {}).get("type")
+    )
+    return f"{exchange['request']['method']}:{answer['answer']}:{detail}"
+
+
+def test_the_recording_covers_every_method_and_every_answer(contract: Contract) -> None:
+    recorded = {e["request"]["method"] for e in RECORDED_EXCHANGES}
+    # `host.info` describes the host build itself. Recorded from a host older than the published
+    # description, its answer does not validate, and the recorder leaves such an answer out; the
+    # shape is then proven by the generated `host_info` answer further down instead.
+    assert set(contract.methods) - recorded <= {"host.info"}
+    assert "result-host-info" in GENERATED
+    assert {e["response"]["answer"] for e in RECORDED_EXCHANGES} == {"REFUSED", "OPERATION", "RESULT"}
+    results = {e["response"]["result"]["type"] for e in RECORDED_EXCHANGES if e["response"]["answer"] == "RESULT"}
+    assert results >= {"metrics", "sandbox", "sandboxes", "snapshots", "operation", "operations", "run", "output"}
+    operation_results = {
+        (e["response"]["operation"]["result"] or {}).get("type")
+        for e in RECORDED_EXCHANGES
+        if e["response"]["answer"] == "OPERATION"
+    }
+    assert operation_results >= {"sandbox", "snapshot", "run", "host"}
+
+
+@pytest.mark.parametrize("exchange", RECORDED_EXCHANGES, ids=_label)
+def test_recorded_requests_and_answers_are_valid_and_survive_the_models_unchanged(
+    contract: Contract, exchange: dict[str, Any]
+) -> None:
+    contract.check_request(exchange["request"])
+    answer = exchange["response"]
+    contract.check_response(answer)
+    envelope = ResponseEnvelope.model_validate(answer)
+    assert to_wire(envelope) == answer, "the models keep every field and add none"
+    assert not any(isinstance(v, wire.Unrecognized) for v in _leaves(envelope)), "nothing the host said was unknown"
+    assert envelope.request_id == exchange["request"]["request_id"]
+
+
+def _leaves(model: BaseModel) -> list[object]:
+    """Every scalar value reachable from ``model``."""
+    found: list[object] = []
+    stack: list[object] = [model]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, BaseModel):
+            stack.extend(getattr(item, name) for name in type(item).model_fields)
+        elif isinstance(item, dict):
+            stack.extend(item.values())
+        elif isinstance(item, list | tuple):
+            stack.extend(item)
+        else:
+            found.append(item)
+    return found
+
+
+# ----------------------------------------------------------------------------- generated answers
+GENERATED: dict[str, dict[str, Any]] = {
+    "refusal": refused("STATE_CONFLICT", "busy", "AFTER_CHANGE"),
+    "refusal-before-any-state": refused("AUTHENTICATION_FAILED", "not enrolled", as_of=None),
+    "operation-sandbox": accepted(f.operation_view(result=f.sandbox_body())),
+    "operation-allowlist": accepted(
+        f.operation_view(
+            result=f.sandbox_body(resources={**f.sandbox_view()["resources"], "network": f.network_allowlist()})
+        )
+    ),
+    "operation-snapshot": accepted(f.operation_view(operation_type="snapshot.create", result=f.snapshot_body())),
+    "operation-run": accepted(f.operation_view(operation_type="exec.run", result=f.run_body(), run_id=f.RUN_ID)),
+    "operation-run-artifacts": accepted(
+        f.operation_view(
+            operation_type="exec.run",
+            result=f.run_body(stdout=b"x" * 6, artifacts=[f.artifact()]),
+            run_id=f.RUN_ID,
+        )
+    ),
+    "operation-host": accepted(
+        f.operation_view(
+            operation_type="host.set_mode", target="host", sandbox=None, result=f.host_change_body(mode="DRAINING")
+        )
+    ),
+    "operation-in-progress": accepted(f.operation_view("IN_PROGRESS")),
+    "operation-accepted": accepted(f.operation_view("ACCEPTED", step=None)),
+    "operation-recovering": accepted(f.operation_view("RECOVERING")),
+    "operation-failed": accepted(f.operation_view("FAILED")),
+    "operation-failed-pending": accepted(f.operation_view("FAILED", cleanup="PENDING", effect="MAY_BE_APPLIED")),
+    "operation-cancelled": accepted(f.operation_view("CANCELLED", cancelled_by="SUPERSEDED", effect="MAY_BE_APPLIED")),
+    "operation-unknown": accepted(f.operation_view("UNKNOWN")),
+    "result-host-info": answered("host_info", f.host_info()),
+    "result-host-info-containment": answered(
+        "host_info",
+        f.host_info(mode="CONTAINMENT", containment_reasons=[{"reason": "store_regression", "detail": "marker ahead"}]),
+    ),
+    "result-metrics": answered("metrics", f.metrics()),
+    "result-sandbox": answered("sandbox", f.sandbox_view()),
+    "result-sandboxes": answered(
+        "sandboxes", f.page([f.sandbox_view(), f.sandbox_view(sandbox_id=f.OTHER_SANDBOX_ID)], more=True)
+    ),
+    "result-snapshots": answered("snapshots", f.page([f.snapshot_view(incompatible=["another backend"])])),
+    "result-operation": answered("operation", f.operation_view()),
+    "result-operations": answered("operations", f.page([f.operation_view(), f.operation_view("FAILED")])),
+    "result-run": answered("run", f.run_result()),
+    "result-output": answered("output", f.output_chunk()),
+}
+
+
+@pytest.mark.parametrize("name", sorted(GENERATED))
+def test_generated_answers_are_valid_and_survive_the_models_unchanged(contract: Contract, name: str) -> None:
+    answer = {"protocol": wire.PROTOCOL, "request_id": "req-1", **GENERATED[name]}
+    contract.check_response(answer)
+    assert to_wire(ResponseEnvelope.model_validate(answer)) == answer
+
+
+def test_the_response_validator_is_not_vacuous(contract: Contract) -> None:
+    good = {"protocol": wire.PROTOCOL, "request_id": "req-1", **accepted(f.operation_view())}
+    contract.check_response(good)
+    breakages: list[Callable[[dict[str, Any]], object]] = [
+        lambda d: d["operation"].pop("state"),
+        lambda d: d["operation"].update(state="DONE"),
+        lambda d: d.update(answer="MAYBE"),
+        lambda d: d.pop("operation"),
+    ]
+    for mutate in breakages:
+        broken = json.loads(json.dumps(good))
+        mutate(broken)
+        with pytest.raises(SchemaError):
+            contract.check_response(broken)

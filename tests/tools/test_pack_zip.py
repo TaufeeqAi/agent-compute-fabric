@@ -110,6 +110,8 @@ def test_the_archive_file_is_readable_by_whoever_receives_it(tmp_path: Path) -> 
     [
         "target/debug/acf-host",
         "dist/x.zip",
+        "artifacts/plan.md",
+        "docs/artifacts/notes.md",
         ".git/config",
         "a/__pycache__/m.cpython-313.pyc",
         "m.pyc",
@@ -393,13 +395,14 @@ def test_the_repository_packs_with_executables_intact_and_no_build_output(repo: 
             ".github/workflows/ci.yml",
             "docs/ARCHITECTURE.md",
             "tools/pack_zip.py",
-            "tools/zip_to_markdown.py",
+            "scripts/host-setup.sh",
+            "deploy/systemd/acf-lifetime.service",
         ):
             assert must_have in by_name, must_have
         junk = [
             n
             for n in by_name
-            if n.startswith(("target/", "dist/", ".git/")) or "__pycache__" in n or n.endswith(".pyc")
+            if n.startswith(("target/", "dist/", ".git/", "artifacts/")) or "__pycache__" in n or n.endswith(".pyc")
         ]
         assert not junk
         for name, info in by_name.items():

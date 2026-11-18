@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The event envelope (`execution/contracts/event-schema.json`). Field set: §24.2.",
+  "properties": {
+    "activation_epoch": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "attempt": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "commit_seq": {
+      "description": "Commit sequence of the committed change this event describes, if it describes one.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "detail": {
+      "description": "Small structured detail. Never output, secrets or host paths (OB-7)."
+    },
+    "failure_class": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "generation": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "host_id": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string"
+    },
+    "latency_ms": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "lineage": {
+      "description": "Store lineage: qualifies `commit_seq`.",
+      "type": "string"
+    },
+    "operation_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "operation_type": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "outcome": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "owner_scope": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "peer_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "request_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "sandbox_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "schema_version": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "seq": {
+      "description": "Strictly increasing within the activation. A gap means events were lost.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "side_effect": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "step": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "timestamp": {
+      "description": "Wall-clock timestamp (a label, never an ordering).",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "host_id",
+    "lineage",
+    "activation_epoch",
+    "seq",
+    "timestamp",
+    "kind",
+    "detail"
+  ],
+  "title": "Event",
+  "type": "object"
+}

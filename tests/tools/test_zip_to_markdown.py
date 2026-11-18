@@ -540,7 +540,7 @@ def test_the_repository_converts_completely_and_losslessly(repo: Path, tmp_path:
     with zipfile.ZipFile(archive) as zf:
         names = [n.removeprefix(f"{PREFIX}/") for n in zf.namelist()]
     assert written.pages == len(names)
-    assert len(names) > 150  # the whole phase, not a stub
+    assert len(names) > 150  # the whole tree, not a stub
 
     bundle_text = bundle.read_text(encoding="utf-8")
     for rel in names:

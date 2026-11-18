@@ -1,22 +1,28 @@
-# Creates the cgroup v2 parent under which the Firecracker jailer places one child cgroup per VM,
-# with the cpu, memory and pids controllers delegated to those children.
+# Creates the cgroup v2 parent that every sandbox's control groups live under, with the cpu, memory
+# and pids controllers delegated to its children:
 #
-# cgroup directories do not survive a reboot, so this runs on every boot, before acf-host.service.
-# It is idempotent (re-running it changes nothing) and it never removes anything.
+#   <cgroup_root>/acf/<jail-id>       one per VM, created by the Firecracker jailer
+#   <cgroup_root>/acf/<jail-id>-net   one per sandbox in network mode `allowlist`, created by the core
+#                                     for that sandbox's guest-traffic process
+#
+# cgroup directories do not survive a reboot, so this runs on every boot, before the lifetime enforcer
+# and the core. It is idempotent (re-running it changes nothing) and it never removes anything.
 #
 # Install:  install -m 0644 deploy/systemd/acf-cgroup.service /etc/systemd/system/
 #
-# Design note (ADR-0004): the parent is a top-level cgroup (/sys/fs/cgroup/acf) created by this
-# oneshot, outside systemd's own accounting tree. The systemd-native alternative is to run the host
-# agent under Delegate=yes and let it manage a subtree beneath its own cgroup; that needs the agent
-# to move itself into a leaf first (the "no internal processes" rule) and is deferred to Phase 2.
+# Design note: the parent is a top-level cgroup (/sys/fs/cgroup/acf) created by this oneshot, outside
+# systemd's own tree, and that is deliberate. A process placed beneath it is no longer a member of
+# acf-host.service, which is what lets VMs and guest-traffic processes outlive a stop or restart of
+# the core (see KillMode in acf-host.service). The systemd-native alternative, Delegate=yes and a
+# subtree beneath the service's own cgroup, would keep them members of the unit: stopping the core
+# would then end every sandbox.
 
 [Unit]
-Description=ACF cgroup v2 parent for sandbox VMs
+Description=ACF cgroup v2 parent for sandbox VMs and their guest-traffic processes
 Documentation=https://github.com/OWNER/agent-compute-fabric/blob/main/docs/OPERATIONS.md
 DefaultDependencies=yes
 After=local-fs.target
-Before=acf-host.service
+Before=acf-lifetime.service acf-host.service
 
 [Service]
 Type=oneshot

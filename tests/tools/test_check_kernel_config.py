@@ -69,10 +69,32 @@ def test_x86_64_needs_one_way_to_discover_virtio_mmio_devices(
         assert any("virtio-mmio" in m for m in report.missing)
 
 
-def test_virtio_net_is_noted_as_unneeded_but_never_fatal() -> None:
-    report = kc.evaluate(kc.parse_config(config_text(X86_REQUIRED, extra=("CONFIG_VIRTIO_NET=y",))))
-    assert report.ok
-    assert [u for u in report.unneeded if u.startswith("CONFIG_VIRTIO_NET")]
+def test_what_only_network_mode_allowlist_needs_is_noted_and_never_fatal() -> None:
+    """In that mode the guest has a network device and is given its address on the kernel command line."""
+    bare = kc.evaluate(kc.parse_config(config_text(X86_REQUIRED)))
+    assert bare.ok, "a kernel without a network driver still runs every sandbox in network mode `none`"
+    assert [line.split(":")[0] for line in bare.no_allowlist] == ["CONFIG_VIRTIO_NET", "CONFIG_IP_PNP"]
+
+    built_in = kc.evaluate(kc.parse_config(config_text(X86_REQUIRED, extra=("CONFIG_VIRTIO_NET=y", "CONFIG_IP_PNP=y"))))
+    assert built_in.ok
+    assert built_in.no_allowlist == []
+
+    as_module = kc.evaluate(
+        kc.parse_config(config_text(X86_REQUIRED, extra=("CONFIG_VIRTIO_NET=m", "CONFIG_IP_PNP=y")))
+    )
+    assert [line.split(":")[0] for line in as_module.no_allowlist] == ["CONFIG_VIRTIO_NET"], (
+        "the guest loads no modules"
+    )
+
+
+def test_the_note_names_the_mode_that_would_not_work(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    c = tmp_path / ".config"
+    c.write_text(config_text(X86_REQUIRED))
+    assert kc.main(["--config", str(c)]) == 0, "still a pass"
+    err = capsys.readouterr().err
+    assert "note    network mode `allowlist` needs CONFIG_VIRTIO_NET" in err
+    assert "note    network mode `allowlist` needs CONFIG_IP_PNP" in err
+    assert "has every required option built in" in err
 
 
 def test_a_config_for_neither_architecture_is_refused() -> None:

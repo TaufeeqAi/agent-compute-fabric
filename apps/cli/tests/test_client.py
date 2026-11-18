@@ -1,554 +1,705 @@
-"""The caller's half of the operation protocol: **observe, never repeat**.
+"""The caller's half of the operation protocol, against a scripted in-process transport.
 
-Each test scripts a real Unix-socket host (see ``support.py``) and a fake clock, and then asserts
-two things: what the client *returned or raised*, and — just as important — which requests it
-*sent*. "Sent the mutation exactly once" is the property that keeps a lost response from turning
-into a duplicate sandbox, a duplicate snapshot or a second run.
+What is under test is *what the client sends next* after each thing a host — or a broken
+connection — can do, and what it reports at the end:
+
+* one ``operation_id`` and one ``issued_at`` per intent, on every request about it;
+* a lost response is resolved by the same id with ``retry: true``, never by a new id;
+* a refused retry is not believed until ``operation.get`` has been asked;
+* a non-terminal operation is followed with ``operation.get``;
+* ``UNKNOWN`` is reported as unknown — not success, not failure.
+
+Every request the client sends here is also validated against the published API description.
 """
 
 from __future__ import annotations
 
-import os
-import re
-import socket
+import json
 from collections.abc import Callable
-from pathlib import Path
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 
 import factories as f
-from acf_cli import models as m
+from acf_cli import requests as rq
 from acf_cli.client import (
+    MAX_SUBMISSIONS_NEVER_RECORDED,
     ClientConfig,
     HostClient,
-    exit_code_for_status,
-    new_operation_id,
-    raise_for_status,
+    Outcome,
+    answer_document,
+    exit_code_for,
+    parse_response,
+    require_success,
 )
 from acf_cli.errors import (
     ExitCode,
     HostUnreachable,
-    InvalidArgument,
     MutationInterrupted,
+    NotFinished,
     OperationFailed,
     OutcomeUnknown,
+    OutcomeUnresolved,
     ProtocolViolation,
-    Rejected,
-    TransportError,
+    Refused,
+    ResponseLost,
 )
-from support import (
-    HEADER,
-    ClosedBeforeRead,
-    DenyUnread,
-    FakeClock,
-    Lost,
-    Partial,
-    RawBytes,
-    Reply,
-    ScriptedHost,
-    Stall,
-    bind_unix,
-    error_body,
-    respond,
-)
+from acf_cli.responses import OperationView, SandboxBody
+from acf_cli.wire import PROTOCOL, FailureClass, OperationState
+from support import FakeClock, ScriptedConnection, accepted, answered, op, refused
 
-HostFactory = Callable[..., ScriptedHost]
+Scripted = Callable[..., ScriptedConnection]
+ClientFor = Callable[[ScriptedConnection], HostClient]
 
-CREATE = m.SandboxCreateRequest(
-    params=m.SandboxCreateParams(
-        image="python", resources=m.SandboxResources(vcpus=1, memory_mib=512, disk_mib=1024, network="none")
-    )
-)
-INSPECT = m.SandboxInspectRequest(params=m.SandboxSelector(sandbox="work"))
-UNKNOWN_ERROR = error_body("TIMEOUT_UNKNOWN", "the host deadline passed", side_effect="possible", outcome_unknown=True)
+TARGET = rq.SandboxTarget(sandbox_id=f.SANDBOX_ID, expected_generation=1)
+START = rq.sandbox_start(TARGET)
+LOST = ResponseLost("the host closed the connection without answering")
+DOWN = HostUnreachable("nothing is listening")
+NOT_KNOWN = refused("NOT_FOUND", "operation is not known to this host; a retry is never treated as a new request")
 
 
-# ----------------------------------------------------------------------------- scripted answers
-def sandbox_ok(**over: Any) -> Reply:
-    return Reply(lambda req: respond(req, "SUCCEEDED", result=f.body("sandbox", f.sandbox_view(**over))))
-
-
-def answer(status: str, **kw: Any) -> Reply:
-    """Answer a *mutation* with ``status``."""
-    return Reply(lambda req: respond(req, status, **kw))
-
-
-def observed(status: str, **kw: Any) -> Reply:
-    """Answer an ``operation_get`` for whatever operation it asks about."""
-    return Reply(lambda req: respond(req, status, operation_id=req["body"]["params"]["operation_id"], **kw))
-
-
-def never_heard_of_it() -> Reply:
-    return observed("REJECTED", error=error_body("NOT_FOUND", "operation does not exist"))
-
-
-def sandbox_result() -> dict[str, Any]:
-    return f.body("sandbox", f.sandbox_view())
+def identities(connection: ScriptedConnection) -> set[tuple[str, str]]:
+    """The ``(operation_id, issued_at)`` pairs of every operation-creating request that was sent."""
+    return {(r["operation_id"], r["issued_at"]) for r in connection.requests if "operation_id" in r}
 
 
 # ----------------------------------------------------------------------------- reads
-def test_a_read_is_one_round_trip_with_a_well_formed_envelope(client: HostClient, host_factory: HostFactory) -> None:
-    host = host_factory(sandbox_ok())
-    env = client.read(INSPECT)
-    assert isinstance(env.body(), m.SandboxView)
-    (req,) = host.requests
-    assert req["protocol"] == "acf.host/1"
-    assert re.fullmatch(r"req-[0-9a-f]{12}", req["request_id"])
-    assert "operation_id" not in req, "a read does not create an operation"
-    assert req["body"] == {"method": "sandbox_inspect", "params": {"sandbox": "work"}}
+def test_a_read_is_one_round_trip_without_operation_identity(scripted: Scripted, client_for: ClientFor) -> None:
+    connection = scripted(answered("host_info", f.host_info()))
+    answer = client_for(connection).read(rq.host_info())
+    assert answer.result is not None
+    (request,) = connection.requests
+    assert request["method"] == "host.info"
+    assert request["protocol"] == PROTOCOL
+    assert request["owner_scope"] == "team-a", "the configured owner scope is on every request"
+    assert not {"operation_id", "issued_at", "retry", "wait_ms", "authority"} & set(request)
 
 
-def test_a_refused_read_raises_with_the_failure_class_and_an_actionable_hint(
-    client: HostClient, host_factory: HostFactory
-) -> None:
-    host_factory(answer("REJECTED", error=error_body("NOT_FOUND", "no sandbox `work`")))
-    with pytest.raises(Rejected) as caught:
-        client.read(INSPECT)
-    assert caught.value.failure_class == "NOT_FOUND"
-    assert caught.value.exit_code == ExitCode.REJECTED
-    assert caught.value.hint is not None
-    assert "list" in caught.value.hint
-
-
-def test_mutate_refuses_a_non_mutating_request(client: HostClient) -> None:
-    with pytest.raises(ValueError, match="not a mutating request"):
-        client.mutate(INSPECT)
-
-
-def test_operation_ids_fit_the_hosts_grammar_and_are_unique() -> None:
-    ids = {new_operation_id() for _ in range(500)}
-    assert len(ids) == 500
-    assert all(re.fullmatch(r"[A-Za-z0-9-]{8,64}", i) for i in ids)
-    assert all(m.OperationSelector(operation_id=i) for i in ids)
-
-
-# ----------------------------------------------------------------------------- the happy mutation
-def test_a_mutation_announces_its_operation_id_before_it_is_sent_and_sends_it(
-    client: HostClient, host_factory: HostFactory
-) -> None:
-    host = host_factory(sandbox_ok())
-    announced: list[tuple[str, int]] = []
-    env = client.mutate(CREATE, on_operation=lambda op: announced.append((op, len(host.requests))))
-    assert env.status == m.OperationStatus.SUCCEEDED
-    (op_id, requests_seen_at_announcement) = announced[0]
-    assert requests_seen_at_announcement == 0, (
-        "an interrupt handler must learn the id before anything can have happened"
-    )
-    assert host.requests[0]["operation_id"] == op_id
-
-
-class _CtrlC(HostClient):
-    """A client whose user presses Ctrl-C while a request is on the wire."""
-
-    def roundtrip(
-        self, body: m.Body, *, operation_id: str | None = None, io_timeout_s: float | None = None
-    ) -> m.ResponseEnvelope:
-        raise KeyboardInterrupt
-
-
-def test_ctrl_c_during_a_mutation_is_still_a_keyboard_interrupt_but_names_the_operation() -> None:
-    announced: list[str] = []
-    with pytest.raises(KeyboardInterrupt) as caught:
-        _CtrlC(ClientConfig(socket_path=Path("/nonexistent"))).mutate(CREATE, on_operation=announced.append)
-    assert isinstance(caught.value, MutationInterrupted), "the handler must learn which operation was in flight"
-    assert caught.value.operation_id == announced[0], "the id it reports is the one that was announced (and sent)"
-
-
-def test_ctrl_c_during_a_read_stays_a_plain_keyboard_interrupt() -> None:
-    with pytest.raises(KeyboardInterrupt) as caught:
-        _CtrlC(ClientConfig(socket_path=Path("/nonexistent"))).read(m.SandboxListRequest())
-    assert not isinstance(caught.value, MutationInterrupted), (
-        "a read creates no operation, so there is nothing to observe"
-    )
-
-
-def test_a_caller_supplied_operation_id_is_used_verbatim(client: HostClient, host_factory: HostFactory) -> None:
-    host = host_factory(sandbox_ok())
-    client.mutate(CREATE, operation_id="op-fixed-0001")
-    assert host.requests[0]["operation_id"] == "op-fixed-0001"
-
-
-@pytest.mark.parametrize("status", ["FAILED", "CANCELLED", "REJECTED", "CONFLICT"])
-def test_any_final_status_is_returned_as_is_and_not_retried(
-    client: HostClient, host_factory: HostFactory, status: str
-) -> None:
-    host = host_factory(answer(status, error=error_body("STATE_CONFLICT", "nope")))
-    env = client.mutate(CREATE)
-    assert env.status.value == status
-    assert host.methods == ["sandbox_create"]
-
-
-# ----------------------------------------------------------------------------- lost responses
-def test_a_lost_response_is_resolved_by_asking_not_by_repeating(client: HostClient, host_factory: HostFactory) -> None:
-    host = host_factory(Lost(), observed("SUCCEEDED", result=sandbox_result()))
-    env = client.mutate(CREATE)
-    assert env.status == m.OperationStatus.SUCCEEDED
-    assert host.methods == ["sandbox_create", "operation_get"], "the mutation must be sent exactly once"
-    assert host.requests[1]["body"]["params"]["operation_id"] == host.requests[0]["operation_id"]
-
-
-def test_a_lost_response_to_a_running_operation_keeps_observing_until_it_finishes(
-    client: HostClient, host_factory: HostFactory, clock: FakeClock
-) -> None:
-    host = host_factory(
-        Lost(), observed("IN_PROGRESS"), observed("IN_PROGRESS"), observed("SUCCEEDED", result=sandbox_result())
-    )
-    env = client.mutate(CREATE)
-    assert env.status == m.OperationStatus.SUCCEEDED
-    assert host.methods.count("sandbox_create") == 1
-    assert clock.sleeps == sorted(clock.sleeps), "polling backs off, it does not hammer the host"
-    assert max(clock.sleeps) <= client.config.poll_max_s
-
-
-def test_only_when_the_host_has_never_heard_of_it_is_the_request_submitted_again_with_the_same_id(
-    client: HostClient, host_factory: HostFactory
-) -> None:
-    host = host_factory(Lost(), never_heard_of_it(), sandbox_ok())
-    env = client.mutate(CREATE)
-    assert env.status == m.OperationStatus.SUCCEEDED
-    assert host.methods == ["sandbox_create", "operation_get", "sandbox_create"]
-    first, _, second = host.requests
-    assert first["operation_id"] == second["operation_id"], "same id: the host's atomic begin makes this idempotent"
-    assert first["body"] == second["body"]
-    assert "retry" not in second, "a resubmission is a fresh begin, not a 'retry' (which the host would reject)"
-
-
-def test_resubmission_happens_at_most_once(client: HostClient, host_factory: HostFactory) -> None:
-    host = host_factory(Lost(), never_heard_of_it(), Lost(), default=never_heard_of_it())
-    with pytest.raises(OutcomeUnknown) as caught:
-        client.mutate(CREATE)
-    assert host.methods.count("sandbox_create") == 2, "one submission plus one resubmission, never a third"
-    assert caught.value.operation_id == host.requests[0]["operation_id"]
-    assert caught.value.hint is not None
-    assert "do NOT re-run" in caught.value.hint
-    assert caught.value.exit_code == ExitCode.UNKNOWN
-
-
-def test_observation_survives_the_host_restarting_mid_way(client: HostClient, host_factory: HostFactory) -> None:
-    host = host_factory(Lost(), ClosedBeforeRead(), observed("SUCCEEDED", result=sandbox_result()))
-    env = client.mutate(CREATE)
-    assert env.status == m.OperationStatus.SUCCEEDED
-    assert host.methods.count("sandbox_create") == 1
-
-
-def test_a_host_that_never_comes_back_ends_in_unknown_with_the_id_to_look_up_later(
-    config: ClientConfig, clock: FakeClock, host_factory: HostFactory
-) -> None:
-    host_factory(Lost(), default=ClosedBeforeRead())
-    client = HostClient(config, sleep=clock.sleep, monotonic=clock.monotonic)
-    with pytest.raises(OutcomeUnknown) as caught:
-        client.mutate(CREATE, resolve_deadline_s=5)
-    assert caught.value.operation_id is not None
-    assert caught.value.operation_id in (caught.value.hint or "")
-    assert clock.now - 1000.0 >= 5
-
-
-def test_a_host_that_stops_answering_mid_request_is_a_lost_response_not_a_failure(
-    socket_path: Path, clock: FakeClock, host_factory: HostFactory
-) -> None:
-    host = host_factory(Stall(1.0), observed("SUCCEEDED", result=sandbox_result()))
+def test_on_behalf_of_is_sent_when_configured(scripted: Scripted, clock: FakeClock) -> None:
+    connection = scripted(answered("metrics", {}), op("SUCCEEDED", f.sandbox_body()))
     client = HostClient(
-        ClientConfig(socket_path=socket_path, io_timeout_s=0.2), sleep=clock.sleep, monotonic=clock.monotonic
+        ClientConfig(owner_scope="team-a", on_behalf_of="job:42"),
+        connection=connection,
+        sleep=clock.sleep,
+        monotonic=clock.monotonic,
     )
-    env = client.mutate(CREATE)
-    assert env.status == m.OperationStatus.SUCCEEDED
-    assert host.methods.count("sandbox_create") == 1
+    client.read(rq.host_metrics())
+    client.submit(START)
+    assert [r["on_behalf_of"] for r in connection.requests] == ["job:42", "job:42"]
 
 
-def test_slow_operations_get_the_generous_timeout(
-    socket_path: Path, clock: FakeClock, host_factory: HostFactory
-) -> None:
-    host = host_factory(Reply(lambda req: respond(req, "SUCCEEDED", result=sandbox_result()), delay=0.5))
-    cfg = ClientConfig(socket_path=socket_path, io_timeout_s=0.1, slow_op_timeout_s=5.0)
-    env = HostClient(cfg, sleep=clock.sleep, monotonic=clock.monotonic).mutate_slow(CREATE)
-    assert env.status == m.OperationStatus.SUCCEEDED
-    assert host.methods == ["sandbox_create"], "a 0.5s answer is not 'lost' under a 5s slow-operation timeout"
+def test_a_read_whose_answer_is_lost_is_asked_again_once(scripted: Scripted, client_for: ClientFor) -> None:
+    connection = scripted(LOST, answered("metrics", {"counters": {}}))
+    assert client_for(connection).read(rq.host_metrics()).result is not None
+    assert connection.methods == ["host.metrics", "host.metrics"]
+    first, second = connection.requests
+    assert first["request_id"] != second["request_id"]
 
 
-# ----------------------------------------------------------------------------- UNKNOWN is first-class
-def test_unknown_is_observed_for_a_grace_period_then_surfaced_never_retried_never_failed(
-    client: HostClient, host_factory: HostFactory
-) -> None:
-    host = host_factory(answer("UNKNOWN", error=UNKNOWN_ERROR), default=observed("UNKNOWN", error=UNKNOWN_ERROR))
-    env = client.mutate(CREATE)
-    assert env.status == m.OperationStatus.UNKNOWN
-    assert host.methods[0] == "sandbox_create"
-    assert set(host.methods[1:]) == {"operation_get"}
-    with pytest.raises(OutcomeUnknown) as caught:
-        raise_for_status(env)
-    assert caught.value.exit_code == ExitCode.UNKNOWN
-    assert int(caught.value.exit_code) != int(ExitCode.FAILED), "UNKNOWN must never be reported as FAILED"
-    assert "do NOT re-run" in (caught.value.hint or "")
-    assert caught.value.operation_id == host.requests[0]["operation_id"]
+def test_a_read_that_is_lost_twice_is_a_transport_failure(scripted: Scripted, client_for: ClientFor) -> None:
+    connection = scripted(LOST, LOST)
+    with pytest.raises(ResponseLost) as caught:
+        client_for(connection).read(rq.host_metrics())
+    assert caught.value.exit_code is ExitCode.TRANSPORT
 
 
-def test_unknown_that_the_host_later_resolves_is_reported_as_what_it_became(
-    client: HostClient, host_factory: HostFactory
-) -> None:
-    host = host_factory(
-        answer("UNKNOWN", error=UNKNOWN_ERROR),
-        observed("UNKNOWN", error=UNKNOWN_ERROR),
-        observed("SUCCEEDED", result=sandbox_result()),
-    )
-    env = client.mutate(CREATE)
-    assert env.status == m.OperationStatus.SUCCEEDED
-    assert host.methods.count("sandbox_create") == 1
-
-
-def test_an_operation_still_running_elsewhere_is_observed_not_started_twice(
-    client: HostClient, host_factory: HostFactory
-) -> None:
-    host = host_factory(
-        answer("IN_PROGRESS"),
-        observed("IN_PROGRESS"),
-        observed("FAILED", error=error_body("BACKEND_CRASH", "vmm died")),
-    )
-    env = client.mutate(CREATE)
-    assert env.status == m.OperationStatus.FAILED
-    assert host.methods.count("sandbox_create") == 1
-
-
-# ----------------------------------------------------------------------------- transport & connection
-def test_a_missing_socket_is_unreachable_and_says_how_to_point_elsewhere(client: HostClient) -> None:
-    with pytest.raises(HostUnreachable) as caught:
-        client.read(INSPECT)
-    assert caught.value.exit_code == ExitCode.UNREACHABLE
-    assert "--socket" in (caught.value.hint or "")
-
-
-def test_a_stale_socket_file_is_reported_as_nothing_listening(config: ClientConfig, client: HostClient) -> None:
-    stale = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    bind_unix(stale, config.socket_path)  # bound but never listen()ed: connect() gets ECONNREFUSED
-    try:
-        with pytest.raises(HostUnreachable) as caught:
-            client.read(INSPECT)
-    finally:
-        stale.close()
-    assert "nothing is listening" in caught.value.message
-    assert "systemctl" in (caught.value.hint or "")
-
-
-def test_permission_denied_on_the_socket_explains_the_group_requirement(
-    client: HostClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    def deny(self: socket.socket, address: object) -> None:
-        raise PermissionError(13, "Permission denied")
-
-    monkeypatch.setattr(socket.socket, "connect", deny)
-    with pytest.raises(HostUnreachable) as caught:
-        client.read(INSPECT)
-    assert "permission denied" in caught.value.message
-    assert "group" in (caught.value.hint or "")
-
-
-def test_an_unreachable_host_means_nothing_was_sent_so_a_mutation_does_not_enter_observation(
-    client: HostClient, clock: FakeClock
-) -> None:
+def test_an_unreachable_host_fails_a_read_at_once(scripted: Scripted, client_for: ClientFor) -> None:
+    connection = scripted(DOWN)
     with pytest.raises(HostUnreachable):
-        client.mutate(CREATE)
-    assert clock.sleeps == [], "nothing was sent, so there is nothing to observe"
+        client_for(connection).read(rq.host_info())
+    assert len(connection.requests) == 1
 
 
-def test_a_socket_path_longer_than_sun_path_still_works(tmp_path: Path, clock: FakeClock) -> None:
-    deep = tmp_path / "long"
-    while len(os.fsencode(deep / "acf.sock")) < 120:
-        deep = deep / "a-deliberately-long-directory-name"
-    deep.mkdir(parents=True)
-    path = deep / "acf.sock"
-    assert len(os.fsencode(path)) > 108
-    host = ScriptedHost(path, [sandbox_ok()])
-    host.start()
-    try:
-        client = HostClient(ClientConfig(socket_path=path), sleep=clock.sleep, monotonic=clock.monotonic)
-        assert isinstance(client.read(INSPECT).body(), m.SandboxView)
-    finally:
-        host.stop()
-    host.assert_clean()
+def test_a_refused_read_is_returned_by_read_and_raised_by_result(scripted: Scripted, client_for: ClientFor) -> None:
+    connection = scripted(refused("NOT_FOUND", "no such sandbox"), refused("NOT_FOUND", "no such sandbox"))
+    client = client_for(connection)
+    answer = client.read(rq.sandbox_inspect("ghost"))
+    assert answer.refusal is not None
+    assert answer.refusal.failure_class is FailureClass.NOT_FOUND
+    with pytest.raises(Refused) as caught:
+        client.result(rq.sandbox_inspect("ghost"))
+    assert caught.value.exit_code is ExitCode.REFUSED
+    assert "NOT_FOUND: no such sandbox" in caught.value.message
+    assert caught.value.envelope.refusal is not None
 
 
-def test_a_request_over_the_limit_is_refused_locally_without_connecting(
-    socket_path: Path, host_factory: HostFactory
+def test_read_and_submit_refuse_the_wrong_kind_of_method(scripted: Scripted, client_for: ClientFor) -> None:
+    client = client_for(scripted())
+    with pytest.raises(ValueError, match="creates an operation"):
+        client.read(START)
+    with pytest.raises(ValueError, match="is a read"):
+        client.submit(rq.host_info())
+
+
+# ----------------------------------------------------------------------------- submit: answered at once
+def test_a_terminal_answer_is_final_and_nothing_else_is_sent(scripted: Scripted, client_for: ClientFor) -> None:
+    connection = scripted(op("SUCCEEDED", f.sandbox_body()))
+    outcome = client_for(connection).submit(START)
+    view = require_success(outcome)
+    assert isinstance(view.result, SandboxBody)
+    assert outcome.submissions == 1
+    assert str(outcome.as_of) == f"{f.LINEAGE}:41"
+    (request,) = connection.requests
+    assert request["method"] == "sandbox.start"
+    assert request["params"] == {"sandbox_id": f.SANDBOX_ID, "expected_generation": 1}
+    assert request["operation_id"] == outcome.operation_id
+    assert "retry" not in request, "a first submission does not claim to be a retry"
+    assert "authority" not in request
+
+
+def test_the_operation_id_is_generated_by_the_caller_and_announced_before_sending(
+    scripted: Scripted, client_for: ClientFor
 ) -> None:
-    host = host_factory()  # an empty script: any connection at all would be recorded as a problem
-    client = HostClient(ClientConfig(socket_path=socket_path, max_request_bytes=256))
-    big = m.ExecRequest(
-        params=m.ExecParams(
-            sandbox_id=f.SANDBOX_ID, expected_generation=1, command=m.CommandSpec(argv=["echo", "x" * 1000])
-        )
+    seen: list[tuple[str, int]] = []
+    connection = scripted(op("SUCCEEDED", f.sandbox_body()))
+    outcome = client_for(connection).submit(
+        START, on_operation=lambda op_id: seen.append((op_id, len(connection.requests)))
     )
-    with pytest.raises(InvalidArgument) as caught:
-        client.mutate(big)
-    assert "at most 256" in caught.value.message
-    assert host.requests == []
+    assert seen == [(outcome.operation_id, 0)], "known before the first byte is sent"
+    assert outcome.operation_id.startswith("op-")
 
 
-def test_a_truncated_response_to_a_read_is_a_transport_error(client: HostClient, host_factory: HostFactory) -> None:
-    host_factory(Partial(b'{"protocol":"acf.host/1","status":"SUCCEEDED"}', delivered=10))
-    with pytest.raises(TransportError) as caught:
-        client.read(INSPECT)
-    assert caught.value.request_sent is True
+def test_an_explicit_operation_id_is_used_verbatim(scripted: Scripted, client_for: ClientFor) -> None:
+    connection = scripted(op("SUCCEEDED", f.sandbox_body()))
+    outcome = client_for(connection).submit(START, operation_id="deploy-2026-11-18-a")
+    assert connection.requests[0]["operation_id"] == "deploy-2026-11-18-a" == outcome.operation_id
 
 
-# ----------------------------------------------------------------------------- an untrusted peer
-def test_an_oversize_response_is_rejected_before_the_payload_is_read(
-    socket_path: Path, host_factory: HostFactory
+def test_issued_at_is_the_wall_clock_in_utc(scripted: Scripted, clock: FakeClock) -> None:
+    connection = scripted(op("SUCCEEDED", f.sandbox_body()))
+    client = HostClient(
+        ClientConfig(),
+        connection=connection,
+        sleep=clock.sleep,
+        monotonic=clock.monotonic,
+        wall_clock=lambda: datetime(2026, 11, 18, 10, 0, 0, 250_000, tzinfo=UTC),
+    )
+    client.submit(START)
+    assert connection.requests[0]["issued_at"] == "2026-11-18T10:00:00.250Z"
+
+
+def test_a_refusal_is_final_nothing_was_applied_and_nothing_is_asked(scripted: Scripted, client_for: ClientFor) -> None:
+    connection = scripted(refused("STATE_CONFLICT", "sandbox is busy with `exec.run`", "AFTER_CHANGE"))
+    outcome = client_for(connection).submit(START)
+    assert outcome.operation is None
+    assert outcome.refusal is not None
+    assert len(connection.requests) == 1
+    with pytest.raises(Refused) as caught:
+        require_success(outcome)
+    assert caught.value.exit_code is ExitCode.REFUSED
+    assert caught.value.operation_id == outcome.operation_id
+    assert caught.value.envelope.refusal is not None
+    assert caught.value.envelope.refusal.retry == "AFTER_CHANGE"
+
+
+UNEXPLAINED = refused(
+    "INTERNAL_ERROR", "the core did not answer; resolve the operation by its id", "AFTER_CHANGE", as_of=None
+)
+
+
+def test_a_refusal_the_host_cannot_explain_is_checked_against_the_record_and_the_operation_may_exist(
+    scripted: Scripted, client_for: ClientFor
 ) -> None:
-    host_factory(RawBytes(HEADER.pack(1 << 30)))  # announces 1 GiB, sends nothing
-    client = HostClient(ClientConfig(socket_path=socket_path, max_response_bytes=1024))
-    with pytest.raises(ProtocolViolation, match="oversize"):
-        client.read(INSPECT)
+    """A host that does not know what went wrong may not know that it had accepted the request either."""
+    connection = scripted(UNEXPLAINED, op("IN_PROGRESS"), op("SUCCEEDED", f.sandbox_body()))
+    outcome = client_for(connection).submit(START)
+    assert require_success(outcome).succeeded
+    assert connection.methods == ["sandbox.start", "operation.get", "operation.get"]
+    assert connection.requests[1]["params"] == {"operation_id": outcome.operation_id}
+
+
+def test_a_refusal_the_host_cannot_explain_stands_once_the_host_confirms_it_holds_no_record(
+    scripted: Scripted, client_for: ClientFor
+) -> None:
+    connection = scripted(UNEXPLAINED, refused("NOT_FOUND", "operation does not exist"))
+    outcome = client_for(connection).submit(START)
+    assert outcome.refusal is not None
+    assert outcome.refusal.failure_class is FailureClass.INTERNAL_ERROR
+    assert connection.methods == ["sandbox.start", "operation.get"]
+    assert len(identities(connection)) == 1, "it is not submitted again"
+
+
+@pytest.mark.parametrize("lookup", [DOWN, LOST, refused("AUTHENTICATION_FAILED", "no longer enrolled")])
+def test_a_refusal_the_host_cannot_explain_and_cannot_be_asked_about_is_not_reported_as_nothing_applied(
+    scripted: Scripted, client_for: ClientFor, lookup: Any
+) -> None:
+    connection = scripted(UNEXPLAINED, lookup, default=lookup)
+    with pytest.raises(OutcomeUnresolved) as caught:
+        client_for(connection).submit(START)
+    assert caught.value.exit_code is ExitCode.UNRESOLVED
+    assert "INTERNAL_ERROR" in caught.value.message
+    assert caught.value.operation_id == connection.requests[0]["operation_id"]
+    assert "may have been accepted" in (caught.value.hint or "")
+
+
+def test_every_other_refusal_of_a_first_submission_is_believed_without_asking(
+    scripted: Scripted, client_for: ClientFor
+) -> None:
+    for failure_class in (
+        "INVALID_REQUEST",
+        "SAFETY_CONTROL_DENIED",
+        "NOT_FOUND",
+        "RESOURCE_EXHAUSTED",
+        "QUOTA_EXCEEDED",
+    ):
+        connection = scripted(refused(failure_class, "no"))
+        outcome = client_for(connection).submit(START)
+        assert outcome.refusal is not None
+        assert connection.methods == ["sandbox.start"], failure_class
+
+
+def test_the_wait_asked_of_the_host_and_the_time_the_client_listens(scripted: Scripted, client_for: ClientFor) -> None:
+    connection = scripted(op("SUCCEEDED", f.sandbox_body()))
+    client_for(connection).submit(START)
+    assert connection.requests[0]["wait_ms"] == 20_000
+    assert connection.read_timeouts == [30.0], "the wait that was asked for, plus a margin"
+
+
+# ----------------------------------------------------------------------------- submit: following an operation
+def test_a_non_terminal_answer_is_followed_with_operation_get_until_terminal(
+    scripted: Scripted, client_for: ClientFor, clock: FakeClock
+) -> None:
+    connection = scripted(
+        op("ACCEPTED", step=None),
+        op("IN_PROGRESS"),
+        op("RECOVERING"),
+        op("SUCCEEDED", f.sandbox_body(), revision=20),
+    )
+    outcome = client_for(connection).submit(START)
+    view = require_success(outcome)
+    assert view.revision == 20
+    assert connection.methods == ["sandbox.start", "operation.get", "operation.get", "operation.get"]
+    polled = {r["params"]["operation_id"] for r in connection.requests[1:]}
+    assert polled == {outcome.operation_id}, "the operation is observed by the id it was submitted under"
+    assert clock.sleeps == [0.1, 0.2, 0.4], "polls are spaced out, starting short"
+    assert outcome.submissions == 1, "observing is not submitting"
+
+
+def test_polling_backs_off_to_a_ceiling(scripted: Scripted, client_for: ClientFor, clock: FakeClock) -> None:
+    connection = scripted(op("IN_PROGRESS"), *[op("IN_PROGRESS")] * 7, op("SUCCEEDED", f.sandbox_body()))
+    require_success(client_for(connection).submit(START))
+    assert clock.sleeps == [0.1, 0.2, 0.4, 0.8, 1.6, 2.0, 2.0, 2.0]
+
+
+def test_the_client_stops_following_at_its_timeout_and_reports_the_last_state(
+    scripted: Scripted, client_for: ClientFor, clock: FakeClock
+) -> None:
+    connection = scripted(op("IN_PROGRESS"), default=op("IN_PROGRESS", step="launch"))
+    outcome = client_for(connection).submit(START, timeout_s=5.0)
+    assert outcome.operation is not None
+    assert outcome.operation.state is OperationState.IN_PROGRESS
+    assert sum(clock.sleeps) == pytest.approx(5.0), "it waited exactly as long as it was told to"
+    with pytest.raises(NotFinished) as caught:
+        require_success(outcome)
+    assert caught.value.exit_code is ExitCode.UNRESOLVED
+    assert f"acf-local operation get {outcome.operation_id} --wait" in (caught.value.hint or "")
+
+
+def test_the_wait_asked_of_the_host_never_exceeds_the_time_the_caller_has(
+    scripted: Scripted, client_for: ClientFor
+) -> None:
+    connection = scripted(op("SUCCEEDED", f.sandbox_body()))
+    client_for(connection).submit(START, timeout_s=3.0)
+    assert connection.requests[0]["wait_ms"] == 3_000
+    assert connection.read_timeouts == [13.0]
+
+
+def test_no_wait_asks_the_host_to_answer_at_once_and_does_not_follow(scripted: Scripted, client_for: ClientFor) -> None:
+    connection = scripted(op("ACCEPTED", step=None))
+    outcome = client_for(connection).submit(START, wait=False)
+    assert connection.requests[0]["wait_ms"] == 0
+    assert connection.methods == ["sandbox.start"], "no operation.get follows"
+    assert outcome.operation is not None
+    assert not outcome.operation.is_terminal
+    assert exit_code_for(outcome.operation) is ExitCode.UNRESOLVED
+
+
+def test_no_wait_still_reports_an_operation_that_ended_immediately(scripted: Scripted, client_for: ClientFor) -> None:
+    connection = scripted(op("SUCCEEDED", f.sandbox_body()))
+    assert require_success(client_for(connection).submit(START, wait=False)).succeeded
+
+
+def test_the_host_being_away_while_following_is_ridden_out(
+    scripted: Scripted, client_for: ClientFor, clock: FakeClock
+) -> None:
+    connection = scripted(op("IN_PROGRESS"), DOWN, LOST, DOWN, op("SUCCEEDED", f.sandbox_body()))
+    outcome = client_for(connection).submit(START)
+    assert require_success(outcome).succeeded
+    assert connection.methods == ["sandbox.start", *["operation.get"] * 4]
+    assert outcome.submissions == 1, "the operation is durable: it is observed again, never submitted again"
+
+
+def test_following_gives_up_when_the_host_stays_away_and_says_the_operation_continues(
+    scripted: Scripted, client_for: ClientFor, clock: FakeClock
+) -> None:
+    connection = scripted(op("IN_PROGRESS"), default=DOWN)
+    with pytest.raises(OutcomeUnresolved) as caught:
+        client_for(connection).submit(START)
+    assert caught.value.exit_code is ExitCode.UNRESOLVED
+    assert caught.value.operation_id == connection.requests[0]["operation_id"]
+    assert "operation get" in (caught.value.hint or "")
+    assert 60.0 <= sum(clock.sleeps) < 65.0, "it tried for the outage patience, not forever"
+    assert set(connection.methods[1:]) == {"operation.get"}
+
+
+def test_a_rate_limited_poll_is_simply_asked_again(scripted: Scripted, client_for: ClientFor) -> None:
+    busy = refused("RESOURCE_EXHAUSTED", "read rate limit reached for this peer", "SAME_REQUEST_LATER")
+    connection = scripted(op("IN_PROGRESS"), busy, busy, op("SUCCEEDED", f.sandbox_body()))
+    assert require_success(client_for(connection).submit(START)).succeeded
+
+
+def test_a_poll_the_host_refuses_for_good_leaves_the_outcome_unresolved(
+    scripted: Scripted, client_for: ClientFor
+) -> None:
+    connection = scripted(op("IN_PROGRESS"), refused("AUTHENTICATION_FAILED", "this peer is no longer enrolled"))
+    with pytest.raises(OutcomeUnresolved, match="AUTHENTICATION_FAILED"):
+        client_for(connection).submit(START)
+
+
+# ----------------------------------------------------------------------------- submit: a lost response
+def test_a_lost_response_is_resolved_with_the_same_id_and_retry_true(
+    scripted: Scripted, client_for: ClientFor, clock: FakeClock
+) -> None:
+    connection = scripted(LOST, op("SUCCEEDED", f.sandbox_body()))
+    outcome = client_for(connection).submit(START)
+    assert require_success(outcome).succeeded
+    first, again = connection.requests
+    assert again["method"] == "sandbox.start", "the same request, not a different question"
+    assert again["retry"] is True
+    assert "retry" not in first
+    assert again["operation_id"] == first["operation_id"] == outcome.operation_id
+    assert again["issued_at"] == first["issued_at"], "issued_at is when the caller FIRST issued it"
+    assert again["params"] == first["params"]
+    assert again["request_id"] != first["request_id"], "only the correlation id is new"
+    assert outcome.submissions == 2
+    assert clock.sleeps == [0.1], "it paused before asking again"
+
+
+def test_every_request_about_one_intent_carries_one_identity_however_long_it_takes(
+    scripted: Scripted, client_for: ClientFor
+) -> None:
+    connection = scripted(LOST, DOWN, LOST, DOWN, op("IN_PROGRESS"), op("SUCCEEDED", f.sandbox_body()))
+    outcome = client_for(connection).submit(START)
+    assert require_success(outcome).succeeded
+    assert len(identities(connection)) == 1, "never a new operation id, never a new issued_at"
+    assert [r.get("retry", False) for r in connection.requests[:5]] == [False, True, True, True, True]
+    assert connection.methods == [*["sandbox.start"] * 5, "operation.get"]
+
+
+def test_a_retry_that_finds_the_operation_still_running_follows_it(scripted: Scripted, client_for: ClientFor) -> None:
+    connection = scripted(LOST, op("IN_PROGRESS"), op("SUCCEEDED", f.sandbox_body()))
+    assert require_success(client_for(connection).submit(START)).succeeded
+    assert connection.methods == ["sandbox.start", "sandbox.start", "operation.get"]
+
+
+def test_a_retry_the_host_has_never_heard_of_was_never_accepted_and_is_submitted_afresh_under_the_same_id(
+    scripted: Scripted, client_for: ClientFor
+) -> None:
+    """The response was lost because the request never arrived. The host says so twice; then it is submitted afresh."""
+    connection = scripted(
+        LOST, NOT_KNOWN, refused("NOT_FOUND", "operation does not exist"), op("SUCCEEDED", f.sandbox_body())
+    )
+    outcome = client_for(connection).submit(START)
+    assert require_success(outcome).succeeded
+    assert connection.methods == ["sandbox.start", "sandbox.start", "operation.get", "sandbox.start"]
+    assert [r.get("retry", False) for r in connection.requests] == [False, True, False, False]
+    assert len(identities(connection)) == 1, "afresh, but under the same operation id and issued_at"
+
+
+def test_a_refused_retry_is_not_believed_when_the_operation_exists(scripted: Scripted, client_for: ClientFor) -> None:
+    """The host checks its mode before it looks for the record: draining refuses the retry of an accepted create."""
+    draining = refused(
+        "HOST_NOT_SERVING", "the host is Draining and does not serve `sandbox.start`", "SAME_REQUEST_LATER"
+    )
+    connection = scripted(LOST, draining, op("SUCCEEDED", f.sandbox_body()))
+    outcome = client_for(connection).submit(START)
+    assert require_success(outcome).succeeded, "the operation had been accepted; the refusal was about the retry"
+    assert connection.methods == ["sandbox.start", "sandbox.start", "operation.get"]
+
+
+def test_a_refused_retry_is_the_answer_once_the_host_confirms_it_holds_no_record(
+    scripted: Scripted, client_for: ClientFor
+) -> None:
+    expired = refused("EXPIRED_REQUEST", "issued_at is outside the acceptance horizon")
+    connection = scripted(LOST, expired, refused("NOT_FOUND", "operation does not exist"))
+    outcome = client_for(connection).submit(START)
+    assert outcome.refusal is not None
+    assert outcome.refusal.failure_class is FailureClass.EXPIRED_REQUEST
+    assert connection.methods == ["sandbox.start", "sandbox.start", "operation.get"]
+    assert len(identities(connection)) == 1, "an expired request is not re-stamped and sent again"
+    with pytest.raises(Refused):
+        require_success(outcome)
+
+
+def test_a_lookup_the_host_will_not_answer_leaves_the_outcome_unresolved(
+    scripted: Scripted, client_for: ClientFor
+) -> None:
+    gone = refused("AUTHENTICATION_FAILED", "this peer is no longer enrolled on this host", as_of=None)
+    connection = scripted(LOST, gone, gone)
+    with pytest.raises(OutcomeUnresolved) as caught:
+        client_for(connection).submit(START)
+    assert caught.value.exit_code is ExitCode.UNRESOLVED
+    assert "would not say whether" in caught.value.message
+    assert caught.value.operation_id == connection.requests[0]["operation_id"]
+
+
+def test_a_rate_limited_lookup_is_asked_again(scripted: Scripted, client_for: ClientFor) -> None:
+    busy = refused("RESOURCE_EXHAUSTED", "read rate limit", "SAME_REQUEST_LATER")
+    connection = scripted(LOST, NOT_KNOWN, busy, NOT_KNOWN, op("SUCCEEDED", f.sandbox_body()))
+    assert require_success(client_for(connection).submit(START)).succeeded
+    assert connection.methods == ["sandbox.start", "sandbox.start", "operation.get", "sandbox.start", "operation.get"]
+
+
+def test_contact_lost_for_good_is_unresolved_never_success_and_never_a_new_id(
+    scripted: Scripted, client_for: ClientFor, clock: FakeClock
+) -> None:
+    connection = scripted(LOST, default=DOWN)
+    with pytest.raises(OutcomeUnresolved) as caught:
+        client_for(connection).submit(START)
+    error = caught.value
+    assert error.exit_code is ExitCode.UNRESOLVED
+    assert error.operation_id == connection.requests[0]["operation_id"]
+    assert "may have been accepted" in (error.hint or "")
+    assert "new id" in (error.hint or "")
+    assert len(identities(connection)) == 1
+    assert all(r.get("retry") is True for r in connection.requests[1:])
+    assert 60.0 <= sum(clock.sleeps) < 65.0
+
+
+def test_the_callers_timeout_also_bounds_the_resolution(
+    scripted: Scripted, client_for: ClientFor, clock: FakeClock
+) -> None:
+    connection = scripted(LOST, default=DOWN)
+    with pytest.raises(OutcomeUnresolved):
+        client_for(connection).submit(START, timeout_s=3.0)
+    assert sum(clock.sleeps) == pytest.approx(3.0)
+
+
+def test_a_first_submission_that_never_left_is_a_plain_transport_failure(
+    scripted: Scripted, client_for: ClientFor
+) -> None:
+    connection = scripted(DOWN)
+    with pytest.raises(HostUnreachable) as caught:
+        client_for(connection).submit(START)
+    assert caught.value.exit_code is ExitCode.TRANSPORT
+    assert len(connection.requests) == 1, "nothing was sent, so there is nothing to resolve"
+
+
+def test_submissions_the_host_never_recorded_are_bounded_and_end_as_nothing_applied(
+    scripted: Scripted, client_for: ClientFor
+) -> None:
+    never = [LOST, NOT_KNOWN, refused("NOT_FOUND", "operation does not exist")]
+    connection = scripted(*never * MAX_SUBMISSIONS_NEVER_RECORDED)
+    with pytest.raises(HostUnreachable) as caught:
+        client_for(connection).submit(START)
+    assert "Nothing was applied" in caught.value.message
+    assert caught.value.exit_code is ExitCode.TRANSPORT
+    assert len(identities(connection)) == 1
+    first_submissions = [r for r in connection.requests if r["method"] == "sandbox.start" and "retry" not in r]
+    assert len(first_submissions) == MAX_SUBMISSIONS_NEVER_RECORDED
+
+
+def test_an_unusable_answer_to_an_operation_says_it_may_have_been_accepted(
+    scripted: Scripted, client_for: ClientFor
+) -> None:
+    connection = scripted(b"this is not json")
+    with pytest.raises(ProtocolViolation) as caught:
+        client_for(connection).submit(START)
+    assert caught.value.exit_code is ExitCode.PROTOCOL
+    assert caught.value.operation_id == connection.requests[0]["operation_id"]
+    assert "may have been accepted" in (caught.value.hint or "")
+
+
+def test_a_read_result_in_answer_to_an_operation_is_a_violation(scripted: Scripted, client_for: ClientFor) -> None:
+    connection = scripted(answered("sandbox", f.sandbox_view()))
+    with pytest.raises(ProtocolViolation, match="with a read result"):
+        client_for(connection).submit(START)
+
+
+def test_an_operation_in_answer_to_a_read_is_a_violation(scripted: Scripted, client_for: ClientFor) -> None:
+    connection = scripted(accepted(f.operation_view()))
+    with pytest.raises(ProtocolViolation, match="with an operation"):
+        client_for(connection).read(rq.host_info())
+
+
+def test_ctrl_c_in_flight_is_reported_with_the_operation_id(scripted: Scripted, client_for: ClientFor) -> None:
+    connection = scripted(KeyboardInterrupt())
+    with pytest.raises(MutationInterrupted) as caught:
+        client_for(connection).submit(START)
+    assert caught.value.operation_id == connection.requests[0]["operation_id"]
+    assert isinstance(caught.value, KeyboardInterrupt)
+
+
+# ----------------------------------------------------------------------------- observe and follow
+def test_observe_asks_once_and_reports_whatever_the_host_says(scripted: Scripted, client_for: ClientFor) -> None:
+    connection = scripted(op("IN_PROGRESS"), refused("NOT_FOUND", "operation does not exist"))
+    client = client_for(connection)
+    seen = client.observe(f.OPERATION_ID)
+    assert seen.operation is not None
+    assert seen.operation.state is OperationState.IN_PROGRESS
+    missing = client.observe(f.OPERATION_ID)
+    assert missing.refusal is not None
+    assert connection.methods == ["operation.get", "operation.get"]
+    assert connection.requests[0]["params"] == {"operation_id": f.OPERATION_ID}
+
+
+def test_follow_observes_until_terminal(scripted: Scripted, client_for: ClientFor) -> None:
+    connection = scripted(op("IN_PROGRESS"), op("IN_PROGRESS"), op("FAILED"))
+    outcome = client_for(connection).follow(f.OPERATION_ID)
+    assert outcome.operation is not None
+    assert outcome.operation.state is OperationState.FAILED
+    assert connection.methods == ["operation.get"] * 3
+
+
+def test_follow_of_an_operation_the_host_does_not_hold_is_a_refusal(scripted: Scripted, client_for: ClientFor) -> None:
+    connection = scripted(refused("NOT_FOUND", "operation does not exist"))
+    outcome = client_for(connection).follow(f.OPERATION_ID)
+    assert outcome.refusal is not None
+    assert len(connection.requests) == 1
+
+
+# ----------------------------------------------------------------------------- what an outcome means
+def view_of(state: str, **over: Any) -> OperationView:
+    return OperationView.model_validate(f.operation_view(state, **over))
 
 
 @pytest.mark.parametrize(
-    ("payload", "needle"),
+    ("state", "code"),
     [
-        (b"this is not json", "malformed response"),
-        (b'{"protocol":"acf.host/1"}', "malformed response"),  # no status
-        (b'{"protocol":"acf.host/1","status":"MOSTLY_DONE"}', "malformed response"),
-        (b'{"protocol":"acf.host/1","status":"SUCCEEDED","result":{"type":"mystery","data":1}}', "malformed response"),
-        (b'{"protocol":"acf.host/2","status":"SUCCEEDED"}', "acf.host/2"),
+        ("SUCCEEDED", ExitCode.OK),
+        ("FAILED", ExitCode.FAILED),
+        ("CANCELLED", ExitCode.FAILED),
+        ("UNKNOWN", ExitCode.UNKNOWN),
+        ("ACCEPTED", ExitCode.UNRESOLVED),
+        ("IN_PROGRESS", ExitCode.UNRESOLVED),
+        ("RECOVERING", ExitCode.UNRESOLVED),
     ],
 )
-def test_a_peer_that_does_not_speak_the_protocol_is_a_protocol_violation(
-    client: HostClient, host_factory: HostFactory, payload: bytes, needle: str
-) -> None:
-    host_factory(Reply(payload))
-    with pytest.raises(ProtocolViolation, match=needle) as caught:
-        client.read(INSPECT)
-    assert caught.value.exit_code == ExitCode.PROTOCOL
+def test_the_exit_code_states_the_operation_condition(state: str, code: ExitCode) -> None:
+    assert exit_code_for(view_of(state)) is code
 
 
-def test_a_response_to_a_different_request_is_rejected(client: HostClient, host_factory: HostFactory) -> None:
-    host_factory(Reply(lambda req: {**respond(req, "SUCCEEDED"), "request_id": "req-someone-else"}))
-    with pytest.raises(ProtocolViolation, match="request_id"):
-        client.read(INSPECT)
-
-
-def test_a_protocol_violation_in_the_answer_to_a_mutation_points_at_the_operation_to_look_up(
-    client: HostClient, host_factory: HostFactory
-) -> None:
-    host = host_factory(Reply(b"garbage"))
-    with pytest.raises(ProtocolViolation) as caught:
-        client.mutate(CREATE)
-    assert caught.value.operation_id == host.requests[0]["operation_id"]
-    assert "do NOT re-run" in (caught.value.hint or "")
-    assert "operation get" in (caught.value.hint or "")
-
-
-# ----------------------------------------------------------------------------- authorization denial
-DENIAL = respond(None, "REJECTED", error=error_body("AUTHORIZATION", "uid 1000 is not permitted to use this host"))
-
-
-def test_a_denial_sent_before_the_host_reads_the_request_is_still_reported_as_a_denial(
-    client: HostClient, host_factory: HostFactory
-) -> None:
-    host_factory(DenyUnread(DENIAL))
-    with pytest.raises(Rejected) as caught:
-        client.read(INSPECT)
-    assert caught.value.failure_class == "AUTHORIZATION"
-    assert "not permitted" in caught.value.message
-
-
-def test_a_denial_is_reported_even_when_the_request_is_too_big_to_have_been_buffered(
-    socket_path: Path, host_factory: HostFactory
-) -> None:
-    host_factory(DenyUnread(DENIAL))
-    client = HostClient(ClientConfig(socket_path=socket_path, max_request_bytes=8 * 1024 * 1024, io_timeout_s=5))
-    huge = m.ExecRequest(
-        params=m.ExecParams(
-            sandbox_id=f.SANDBOX_ID,
-            expected_generation=1,
-            command=m.CommandSpec(argv=["echo", "x" * (4 * 1024 * 1024)]),
-        )
-    )
-    with pytest.raises((Rejected, HostUnreachable)) as caught:
-        raise_for_status(client.mutate(huge))
-    # Either the denial was read (preferred) or the failed send is reported as "did not act on it".
-    assert caught.value.exit_code in {ExitCode.REJECTED, ExitCode.UNREACHABLE}
-    if isinstance(caught.value, Rejected):
-        assert caught.value.failure_class == "AUTHORIZATION"
-    else:
-        assert "did not act on it" in caught.value.message
-
-
-# ----------------------------------------------------------------------------- cancel / wait_final
-def test_cancel_sends_a_plain_request_for_the_named_operation(client: HostClient, host_factory: HostFactory) -> None:
-    host = host_factory(observed("IN_PROGRESS"))
-    env = client.cancel(f.OP_ID)
-    assert env.status == m.OperationStatus.IN_PROGRESS
-    assert host.requests[0]["body"] == {"method": "operation_cancel", "params": {"operation_id": f.OP_ID}}
-    assert "operation_id" not in host.requests[0], "cancel acts on another operation; it does not create one"
-
-
-def test_wait_final_polls_until_the_operation_ends(client: HostClient, host_factory: HostFactory) -> None:
-    host = host_factory(observed("IN_PROGRESS"), observed("IN_PROGRESS"), observed("CANCELLED"))
-    assert client.wait_final(f.OP_ID, timeout_s=30).status == m.OperationStatus.CANCELLED
-    assert host.methods == ["operation_get"] * 3
-
-
-def test_wait_final_gives_back_the_last_answer_when_time_runs_out(
-    client: HostClient, host_factory: HostFactory
-) -> None:
-    host_factory(default=observed("IN_PROGRESS"))
-    env = client.wait_final(f.OP_ID, timeout_s=3)
-    assert env.status == m.OperationStatus.IN_PROGRESS
-
-
-def test_wait_final_with_a_dead_host_ends_in_unknown_not_a_hang(client: HostClient, host_factory: HostFactory) -> None:
-    host_factory(default=ClosedBeforeRead())
-    with pytest.raises(OutcomeUnknown):
-        client.wait_final(f.OP_ID, timeout_s=3)
-
-
-# ----------------------------------------------------------------------------- status -> exit code
-def envelope_with(status: str) -> m.ResponseEnvelope:
-    error = None if status == "SUCCEEDED" else error_body("INTERNAL", "boom")
-    return m.ResponseEnvelope.model_validate(respond({"request_id": "r", "operation_id": f.OP_ID}, status, error=error))
-
-
-@pytest.mark.parametrize("status", [s.value for s in m.OperationStatus])
-def test_exit_codes_for_statuses_agree_with_the_exceptions_raised(status: str) -> None:
-    env = envelope_with(status)
-    code = exit_code_for_status(env.status)
-    if status == "SUCCEEDED":
-        assert raise_for_status(env) is env
-        assert code == ExitCode.OK
-        return
-    with pytest.raises((Rejected, OperationFailed, OutcomeUnknown)) as caught:
-        raise_for_status(env)
-    assert caught.value.exit_code == code
-
-
-def test_the_exit_code_vocabulary_by_status() -> None:
-    assert int(exit_code_for_status(m.OperationStatus.REJECTED)) == 3
-    assert int(exit_code_for_status(m.OperationStatus.CONFLICT)) == 3
-    assert int(exit_code_for_status(m.OperationStatus.FAILED)) == 4
-    assert int(exit_code_for_status(m.OperationStatus.CANCELLED)) == 4
-    for undecided in (m.OperationStatus.UNKNOWN, m.OperationStatus.ACCEPTED, m.OperationStatus.IN_PROGRESS):
-        assert int(exit_code_for_status(undecided)) == 5
-
-
-def test_raise_for_status_carries_the_failure_details() -> None:
-    env = m.ResponseEnvelope.model_validate(
-        respond(
-            {"request_id": "r", "operation_id": f.OP_ID},
-            "REJECTED",
-            error=error_body("ADMISSION_REJECTED", "memory 99999 MiB exceeds the policy ceiling", retryable=True),
-        )
-    )
-    with pytest.raises(Rejected) as caught:
-        raise_for_status(env)
-    assert caught.value.retryable is True
-    assert caught.value.failure_class == "ADMISSION_REJECTED"
-    assert caught.value.operation_id == f.OP_ID
-    assert "policy ceiling" in caught.value.message
-    assert "ceiling" in (caught.value.hint or "")
-
-
-def test_a_still_running_operation_is_never_reported_as_success_or_failure() -> None:
-    env = m.ResponseEnvelope.model_validate(respond({"request_id": "r", "operation_id": f.OP_ID}, "IN_PROGRESS"))
+def test_unknown_is_reported_as_unknown(scripted: Scripted, client_for: ClientFor) -> None:
+    connection = scripted(op("UNKNOWN", failure=f.failure("UNKNOWN_OUTCOME", "no result could be obtained")))
+    outcome = client_for(connection).submit(START)
+    assert len(connection.requests) == 1, "UNKNOWN is terminal: nothing is retried and nothing is polled"
     with pytest.raises(OutcomeUnknown) as caught:
-        raise_for_status(env)
-    assert "still in progress" in (caught.value.hint or "")
-    assert f.OP_ID in (caught.value.hint or "")
+        require_success(outcome)
+    error = caught.value
+    assert error.exit_code is ExitCode.UNKNOWN
+    assert not isinstance(error, OperationFailed), "not a failure"
+    assert "UNKNOWN" in error.message
+    assert "neither as success nor as failure" in (error.hint or "")
+    assert error.envelope.operation is not None
+    assert error.envelope.operation.effect == "MAY_BE_APPLIED"
+
+
+def test_failed_and_cancelled_are_failures_that_carry_the_operation(scripted: Scripted, client_for: ClientFor) -> None:
+    for state in ("FAILED", "CANCELLED"):
+        connection = scripted(op(state, failure=f.failure("TIMEOUT", "deadline passed")))
+        with pytest.raises(OperationFailed) as caught:
+            require_success(client_for(connection).submit(START))
+        assert caught.value.exit_code is ExitCode.FAILED
+        assert f"ended {state}" in caught.value.message
+        assert "TIMEOUT: deadline passed" in caught.value.message
+        assert caught.value.envelope.operation is not None
+
+
+def test_a_state_this_client_does_not_know_is_never_success(scripted: Scripted, client_for: ClientFor) -> None:
+    ended = scripted(op("ABANDONED", effect="NOT_APPLIED", cleanup="COMPLETE"))
+    with pytest.raises(OutcomeUnknown) as caught:
+        require_success(client_for(ended).submit(START))
+    assert "ABANDONED" in caught.value.message
+    pending = scripted(op("SUSPENDED", effect=None), default=op("SUSPENDED", effect=None))
+    with pytest.raises(NotFinished):
+        require_success(client_for(pending).submit(START, timeout_s=1.0))
+
+
+def test_an_outcome_is_a_refusal_or_an_operation_never_both_never_neither() -> None:
+    with pytest.raises(ValueError, match="either a refusal or an operation"):
+        Outcome("op-12345678")
+
+
+def test_an_outcome_serialises_as_the_answer_it_is(scripted: Scripted, client_for: ClientFor) -> None:
+    connection = scripted(op("IN_PROGRESS"), op("SUCCEEDED", f.sandbox_body()), refused("STATE_CONFLICT", "busy"))
+    client = client_for(connection)
+    followed = client.submit(START).to_wire()
+    assert followed["answer"] == "OPERATION", "even when the last word came from operation.get"
+    assert followed["operation"]["state"] == "SUCCEEDED"
+    assert followed["as_of"] == f.AS_OF
+    assert "request_id" not in followed
+    refusal = client.submit(START).to_wire()
+    assert (refusal["answer"], refusal["refusal"]["class"]) == ("REFUSED", "STATE_CONFLICT")
+
+
+# ----------------------------------------------------------------------------- answers, one frame at a time
+def frame(body: dict[str, Any], *, request_id: str | None = "req-1", protocol: str = PROTOCOL) -> bytes:
+    return json.dumps({"protocol": protocol, "request_id": request_id, **body}).encode()
+
+
+def test_an_answer_must_belong_to_the_request() -> None:
+    assert parse_response(frame(accepted(f.operation_view())), "req-1").operation is not None
+    with pytest.raises(ProtocolViolation, match="request_id mismatch"):
+        parse_response(frame(accepted(f.operation_view()), request_id="req-other"), "req-1")
+    with pytest.raises(ProtocolViolation, match="no request_id"):
+        parse_response(frame(answered("metrics", {}), request_id=None), "req-1")
+
+
+def test_a_refusal_issued_before_any_request_was_read_is_still_a_refusal() -> None:
+    early = parse_response(
+        frame(refused("AUTHENTICATION_FAILED", "not enrolled", as_of=None), request_id=None), "req-1"
+    )
+    assert early.refusal is not None
+    assert early.refusal.failure_class is FailureClass.AUTHENTICATION_FAILED
+
+
+def test_a_refusal_from_a_host_of_another_protocol_version_is_reported_as_the_refusal_it_is() -> None:
+    answer = parse_response(
+        frame(refused("PROTOCOL_ERROR", "this host speaks `acf.host/3`"), protocol="acf.host/3"), "req-1"
+    )
+    assert answer.refusal is not None
+    assert answer.refusal.failure_class is FailureClass.PROTOCOL_ERROR
+
+
+def test_a_non_refusal_in_another_protocol_version_is_a_violation() -> None:
+    with pytest.raises(ProtocolViolation, match=r"speaks 'acf\.host/3'"):
+        parse_response(frame(answered("metrics", {}), protocol="acf.host/3"), "req-1")
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b"",
+        b"not json",
+        b"[]",
+        b'{"protocol": "acf.host/2"}',
+        json.dumps({"protocol": PROTOCOL, "request_id": "req-1", "answer": "OPERATION"}).encode(),
+        json.dumps({"protocol": PROTOCOL, "request_id": "req-1", **accepted({"operation_id": "x"})}).encode(),
+    ],
+)
+def test_a_malformed_answer_is_a_violation_that_does_not_echo_the_payload(raw: bytes) -> None:
+    with pytest.raises(ProtocolViolation) as caught:
+        parse_response(raw, "req-1")
+    assert caught.value.exit_code is ExitCode.PROTOCOL
+    assert "not a valid acf.host/2 response" in caught.value.message
+    assert raw.decode() not in caught.value.message or not raw
+
+
+def test_an_answer_kind_this_client_does_not_know_is_a_violation_that_names_it() -> None:
+    with pytest.raises(ProtocolViolation, match="DEFERRED"):
+        parse_response(frame({"answer": "DEFERRED"}), "req-1")
+
+
+def test_an_answer_document_is_the_answer_without_the_correlation_id() -> None:
+    answer = parse_response(frame(answered("sandbox", f.sandbox_view())), "req-1")
+    document = answer_document(answer)
+    assert "request_id" not in document
+    assert document["result"]["data"]["sandbox_id"] == f.SANDBOX_ID
+    assert document["as_of"] == f.AS_OF
+
+
+def test_closing_the_client_closes_its_connection(scripted: Scripted, client_for: ClientFor) -> None:
+    connection = scripted()
+    client_for(connection).close()
+    assert connection.closed == 1

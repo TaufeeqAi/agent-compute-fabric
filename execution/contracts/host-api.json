@@ -1,0 +1,3424 @@
+{
+  "$defs": {
+    "AckCondition": {
+      "description": "A condition an operator can acknowledge (LN-2).",
+      "oneOf": [
+        {
+          "const": "store_regression",
+          "description": "\"The store is older than the system it describes, and I accept it as authoritative.\"",
+          "type": "string"
+        }
+      ]
+    },
+    "AcknowledgeParams": {
+      "additionalProperties": false,
+      "properties": {
+        "condition": {
+          "$ref": "#/$defs/AckCondition"
+        }
+      },
+      "required": [
+        "condition"
+      ],
+      "type": "object"
+    },
+    "AllowDestination": {
+      "description": "AL-1: the destination is an exact DNS name or an IPv4 network.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "An exact DNS name: permits TLS whose server name equals it, to an address the host resolver\nreturned for it (AL-4).",
+          "properties": {
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An IPv4 network in CIDR form: permits TCP to its addresses (AL-5).",
+          "properties": {
+            "network": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "network"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "AllowEntry": {
+      "additionalProperties": false,
+      "description": "AL-1: a destination and a non-empty set of ports.",
+      "properties": {
+        "destination": {
+          "$ref": "#/$defs/AllowDestination"
+        },
+        "ports": {
+          "items": {
+            "$ref": "#/$defs/PortRange"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "destination",
+        "ports"
+      ],
+      "type": "object"
+    },
+    "ArtifactId": {
+      "pattern": "^art-[0-9a-f]{32}$",
+      "type": "string"
+    },
+    "ArtifactKind": {
+      "enum": [
+        "stdout",
+        "stderr",
+        "evidence",
+        "snapshot_vmstate",
+        "snapshot_memory",
+        "snapshot_disk",
+        "snapshot_manifest"
+      ],
+      "type": "string"
+    },
+    "ArtifactRef": {
+      "properties": {
+        "artifact_id": {
+          "$ref": "#/$defs/ArtifactId"
+        },
+        "byte_size": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "content_digest": {
+          "description": "`sha256:<hex>`; present once the artifact is materialised.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/ArtifactKind"
+        },
+        "logical_name": {
+          "type": "string"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sandbox_id": {
+          "$ref": "#/$defs/SandboxId"
+        },
+        "schema_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "source_operation_id": {
+          "$ref": "#/$defs/OperationId"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "kind",
+        "logical_name",
+        "schema_version",
+        "source_operation_id",
+        "sandbox_id"
+      ],
+      "type": "object"
+    },
+    "AsOf": {
+      "description": "The committed state an answer reflects (API-10): a store lineage and a commit sequence.",
+      "properties": {
+        "lineage": {
+          "type": "string"
+        },
+        "sequence": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "lineage",
+        "sequence"
+      ],
+      "type": "object"
+    },
+    "BackendIdentity": {
+      "description": "What this backend *is*, recorded in the runtime manifest and in every snapshot manifest\n(contract §26.2, IS-2): a snapshot is only restorable by a backend with an equivalent identity.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "profile": {
+          "description": "Human-auditable detail behind `security_profile_id`."
+        },
+        "security_profile_id": {
+          "description": "Stable digest of the isolation profile (seccomp, cgroups, namespaces, uid policy, …).",
+          "type": "string"
+        },
+        "version": {
+          "description": "Exact VMM version, e.g. `v1.17.0`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "security_profile_id",
+        "profile"
+      ],
+      "type": "object"
+    },
+    "CallerParameters": {
+      "description": "Parameters a caller depends on (PR-3).",
+      "properties": {
+        "acceptance_horizon_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "allowlist_max_entries": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "ceilings": {
+          "$ref": "#/$defs/ProfileLimits",
+          "description": "The profile's ceilings (PR-3)."
+        },
+        "change_retention_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "clock_skew_tolerance_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_request_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "operation_retention_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "output_retention_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sandbox_lifetime_default_secs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sandbox_lifetime_max_secs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "wait_max_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "acceptance_horizon_ms",
+        "clock_skew_tolerance_ms",
+        "operation_retention_ms",
+        "change_retention_ms",
+        "output_retention_ms",
+        "wait_max_ms",
+        "max_request_bytes",
+        "ceilings",
+        "sandbox_lifetime_default_secs",
+        "sandbox_lifetime_max_secs",
+        "allowlist_max_entries"
+      ],
+      "type": "object"
+    },
+    "CancelledBy": {
+      "description": "Who ended a `CANCELLED` operation.",
+      "oneOf": [
+        {
+          "const": "CALLER",
+          "description": "`operation.cancel`.",
+          "type": "string"
+        },
+        {
+          "const": "SUPERSEDED",
+          "description": "A containment operation on the same sandbox (CC-3).",
+          "type": "string"
+        }
+      ]
+    },
+    "CapabilityProfile": {
+      "description": "What the backend declares it can do (contract §26.3). A request that needs an undeclared\ncapability is refused with `UNSUPPORTED` before BEGIN; it is never silently skipped (BK-5).",
+      "properties": {
+        "backend": {
+          "type": "string"
+        },
+        "guest_exec": {
+          "type": "boolean"
+        },
+        "identifier_slots": {
+          "description": "Size of the identifier pool: how many generations can hold distinct identifiers at once (RS-3).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "incremental_output": {
+          "description": "Reading captured output while an execution is in flight (OU-5).",
+          "type": "boolean"
+        },
+        "max_vcpus": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "network_modes": {
+          "items": {
+            "$ref": "#/$defs/NetworkMode"
+          },
+          "type": "array"
+        },
+        "pause_resume": {
+          "description": "Used only inside a snapshot; never caller-visible.",
+          "type": "boolean"
+        },
+        "per_runtime_overhead_mib": {
+          "description": "Memory the runtime itself needs beyond guest memory; counted in admission (RS-1).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "restore": {
+          "type": "boolean"
+        },
+        "restore_reseeds_entropy": {
+          "description": "Whether a restore reseeds guest entropy (RE-7). Evidence only.",
+          "type": "boolean"
+        },
+        "runtime_depends_on_image": {
+          "description": "Whether a running generation still depends on the image store after provisioning (IM-4).",
+          "type": "boolean"
+        },
+        "runtime_depends_on_snapshot": {
+          "description": "Whether a running generation still depends on files of the snapshot it was restored from\n(RF-1). If it does, the snapshot stays referenced while the generation lives.",
+          "type": "boolean"
+        },
+        "secret_injection": {
+          "description": "Delivery of secret material to a guest at execution time (§22).",
+          "type": "boolean"
+        },
+        "snapshot": {
+          "type": "boolean"
+        },
+        "stop_grace_ms": {
+          "description": "How long the backend lets a runtime end by itself before it ends it by force.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "backend",
+        "pause_resume",
+        "snapshot",
+        "restore",
+        "guest_exec",
+        "network_modes",
+        "max_vcpus",
+        "secret_injection",
+        "incremental_output",
+        "restore_reseeds_entropy",
+        "runtime_depends_on_snapshot",
+        "runtime_depends_on_image",
+        "per_runtime_overhead_mib",
+        "identifier_slots",
+        "stop_grace_ms"
+      ],
+      "type": "object"
+    },
+    "Cleanup": {
+      "description": "Whether what a `FAILED` or `CANCELLED` operation created is gone (OP-7, FS-8).",
+      "oneOf": [
+        {
+          "enum": [
+            "QUARANTINED"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "COMPLETE",
+          "description": "Everything the operation created is proven removed.",
+          "type": "string"
+        },
+        {
+          "const": "PENDING",
+          "description": "A `FAILED` generation or an `INVALID` snapshot remains and holds its lease.",
+          "type": "string"
+        }
+      ]
+    },
+    "CommandSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "argv": {
+          "description": "Executed directly: an argument vector, never a shell string (EX-1). Use\n`[\"/bin/sh\",\"-c\",\"...\"]` to opt into a shell *inside the guest*.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "type": "object"
+        },
+        "limits": {
+          "$ref": "#/$defs/RunLimitsRequest",
+          "default": {
+            "max_pids": null,
+            "max_stderr_bytes": null,
+            "max_stdout_bytes": null,
+            "timeout_ms": null
+          }
+        },
+        "secret_env": {
+          "additionalProperties": {
+            "$ref": "#/$defs/SecretRef"
+          },
+          "description": "Environment variables whose values are delivered from the host's secret provider (§22).\nRequires the `secret_injection` capability of the profile and of the backend.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "argv"
+      ],
+      "type": "object"
+    },
+    "ContainmentReason": {
+      "description": "Why the host is in `CONTAINMENT`. Reasons accumulate; the mode holds while any remains.",
+      "oneOf": [
+        {
+          "description": "A mandatory startup check failed (configuration relation of §30, preflight, trust anchors).\nCleared only by fixing the cause and restarting.",
+          "properties": {
+            "detail": {
+              "type": "string"
+            },
+            "reason": {
+              "const": "mandatory_check",
+              "type": "string"
+            }
+          },
+          "required": [
+            "reason",
+            "detail"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The safety profile could not be loaded or validated at startup.",
+          "properties": {
+            "detail": {
+              "type": "string"
+            },
+            "reason": {
+              "const": "invalid_profile",
+              "type": "string"
+            }
+          },
+          "required": [
+            "reason",
+            "detail"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "An ownership marker on disk is newer than the store (LN-2). Cleared by `host.acknowledge`.",
+          "properties": {
+            "detail": {
+              "type": "string"
+            },
+            "reason": {
+              "const": "store_regression",
+              "type": "string"
+            }
+          },
+          "required": [
+            "reason",
+            "detail"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The lifetime enforcer cannot be confirmed to be running (PD-4). Clears when it is seen again.",
+          "properties": {
+            "detail": {
+              "type": "string"
+            },
+            "reason": {
+              "const": "lifetime_enforcer_unavailable",
+              "type": "string"
+            }
+          },
+          "required": [
+            "reason",
+            "detail"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Cursor": {
+      "additionalProperties": false,
+      "description": "A position in one store's history (ID-4): meaningful only with its lineage.",
+      "properties": {
+        "lineage": {
+          "type": "string"
+        },
+        "sequence": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "lineage",
+        "sequence"
+      ],
+      "type": "object"
+    },
+    "Effect": {
+      "description": "What a terminal operation did (API-9). A caller may issue a *new* operation for the same intent\nsafely only after `NOT_APPLIED`.",
+      "enum": [
+        "APPLIED",
+        "NOT_APPLIED",
+        "MAY_BE_APPLIED"
+      ],
+      "type": "string"
+    },
+    "EvidenceStatus": {
+      "description": "Whether the evidence attached to a terminal result is whole (contract OU-2).",
+      "enum": [
+        "COMPLETE",
+        "INCOMPLETE",
+        "TRUNCATED",
+        "UNKNOWN"
+      ],
+      "type": "string"
+    },
+    "ExecParams": {
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "$ref": "#/$defs/CommandSpec"
+        },
+        "expected_generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "if_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "sandbox_id": {
+          "$ref": "#/$defs/SandboxId"
+        }
+      },
+      "required": [
+        "sandbox_id",
+        "expected_generation",
+        "command"
+      ],
+      "type": "object"
+    },
+    "FailureClass": {
+      "description": "Contract §10.5. The wire names are the SCREAMING_SNAKE_CASE forms.",
+      "oneOf": [
+        {
+          "const": "INVALID_REQUEST",
+          "description": "Malformed; unknown field or method; bound exceeded; raw secret material.",
+          "type": "string"
+        },
+        {
+          "const": "AUTHENTICATION_FAILED",
+          "description": "Peer not authenticated or not enrolled.",
+          "type": "string"
+        },
+        {
+          "const": "AUTHORIZATION_DENIED",
+          "description": "The peer's role does not permit the method.",
+          "type": "string"
+        },
+        {
+          "const": "SAFETY_CONTROL_DENIED",
+          "description": "The safety profile forbids or caps the request. Never clamped.",
+          "type": "string"
+        },
+        {
+          "const": "NOT_FOUND",
+          "description": "Target absent or outside the caller's tags; `retry` for an unknown operation.",
+          "type": "string"
+        },
+        {
+          "const": "STATE_CONFLICT",
+          "description": "Illegal for the current state; sandbox busy; equal or stronger containment in flight.",
+          "type": "string"
+        },
+        {
+          "const": "REVISION_CONFLICT",
+          "description": "Stale generation or revision precondition.",
+          "type": "string"
+        },
+        {
+          "const": "IDEMPOTENCY_CONFLICT",
+          "description": "Same operation id, different request.",
+          "type": "string"
+        },
+        {
+          "const": "EXPIRED_REQUEST",
+          "description": "`issued_at` is outside the acceptance horizon.",
+          "type": "string"
+        },
+        {
+          "const": "RESOURCE_EXHAUSTED",
+          "description": "Host capacity, quota or rate limit.",
+          "type": "string"
+        },
+        {
+          "const": "HOST_NOT_SERVING",
+          "description": "The host mode refuses this class of method.",
+          "type": "string"
+        },
+        {
+          "const": "UNSUPPORTED",
+          "description": "A capability the backend, guest or host does not offer.",
+          "type": "string"
+        },
+        {
+          "const": "QUARANTINED",
+          "description": "The target generation is quarantined.",
+          "type": "string"
+        },
+        {
+          "const": "CURSOR_EXPIRED",
+          "description": "A list cursor is older than the change retention window, or from another lineage.",
+          "type": "string"
+        },
+        {
+          "const": "PROTOCOL_ERROR",
+          "description": "Protocol major mismatch or framing violation, caller ↔ host or host ↔ guest.",
+          "type": "string"
+        },
+        {
+          "const": "INTEGRITY_FAILURE",
+          "description": "Artifact or manifest digest mismatch; an input that fails the trusted-input rule.",
+          "type": "string"
+        },
+        {
+          "const": "INCOMPATIBLE_RUNTIME",
+          "description": "Snapshot, image or guest agent incompatible with this host.",
+          "type": "string"
+        },
+        {
+          "const": "TIMEOUT",
+          "description": "The operation's deadline passed.",
+          "type": "string"
+        },
+        {
+          "const": "DEPENDENCY_UNAVAILABLE",
+          "description": "Backend, guest or secret provider unavailable.",
+          "type": "string"
+        },
+        {
+          "const": "SECURITY_CONTROL_FAILURE",
+          "description": "A mandatory isolation control was missing at launch or later.",
+          "type": "string"
+        },
+        {
+          "const": "PARTIAL_COMPLETION",
+          "description": "The operation failed and what it created is not yet proven removed.",
+          "type": "string"
+        },
+        {
+          "const": "UNKNOWN_OUTCOME",
+          "description": "The operation ended `UNKNOWN`.",
+          "type": "string"
+        },
+        {
+          "const": "INTERNAL_ERROR",
+          "description": "None of the above.",
+          "type": "string"
+        }
+      ]
+    },
+    "FailureInfo": {
+      "properties": {
+        "class": {
+          "$ref": "#/$defs/FailureClass"
+        },
+        "message": {
+          "type": "string"
+        },
+        "side_effect": {
+          "$ref": "#/$defs/SideEffect"
+        }
+      },
+      "required": [
+        "class",
+        "message",
+        "side_effect"
+      ],
+      "type": "object"
+    },
+    "Generation": {
+      "description": "Monotonic per-sandbox incarnation counter (contract ID-1). Starts at 1; never reused.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "HostChange": {
+      "description": "What the host changed for an operator method.",
+      "properties": {
+        "mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HostMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "profile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProfileId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "HostInfo": {
+      "properties": {
+        "activation_epoch": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "backend": {
+          "$ref": "#/$defs/BackendIdentity"
+        },
+        "capabilities": {
+          "$ref": "#/$defs/CapabilityProfile"
+        },
+        "containment_reasons": {
+          "description": "Why the host is in `CONTAINMENT`, when it is.",
+          "items": {
+            "$ref": "#/$defs/ContainmentReason"
+          },
+          "type": "array"
+        },
+        "features": {
+          "description": "Features this host offers. A request using an unlisted feature is refused (VR-3).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "host_id": {
+          "type": "string"
+        },
+        "instance_id": {
+          "type": "string"
+        },
+        "lineage": {
+          "type": "string"
+        },
+        "live_sandboxes": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mode": {
+          "$ref": "#/$defs/HostMode"
+        },
+        "operations_in_flight": {
+          "description": "Operations that have not ended (what a drain waits for).",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "parameters": {
+          "$ref": "#/$defs/CallerParameters"
+        },
+        "profile": {
+          "$ref": "#/$defs/ProfileId"
+        },
+        "protocols": {
+          "description": "Protocol identifiers this host accepts (VR-3).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "quarantined": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "read_only_reason": {
+          "description": "Why the host is in `READ_ONLY`, when it is.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "snapshots": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "store_integrity": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "version",
+        "host_id",
+        "protocols",
+        "features",
+        "mode",
+        "containment_reasons",
+        "lineage",
+        "activation_epoch",
+        "instance_id",
+        "backend",
+        "capabilities",
+        "profile",
+        "parameters",
+        "store_integrity",
+        "live_sandboxes",
+        "snapshots",
+        "quarantined",
+        "operations_in_flight"
+      ],
+      "type": "object"
+    },
+    "HostMode": {
+      "oneOf": [
+        {
+          "const": "STARTING",
+          "description": "From process start until startup recovery ends. No endpoint is open.",
+          "type": "string"
+        },
+        {
+          "const": "SERVING",
+          "description": "Recovery complete and every mandatory check passed.",
+          "type": "string"
+        },
+        {
+          "const": "DRAINING",
+          "description": "An operator asked for it (planned restart): no new privilege, everything else served.",
+          "type": "string"
+        },
+        {
+          "const": "CONTAINMENT",
+          "description": "A mandatory check failed, the safety profile is invalid, or the store is older than the\nsystem it describes: no new privilege, everything else served.",
+          "type": "string"
+        },
+        {
+          "const": "READ_ONLY",
+          "description": "The store cannot be written or interpreted: reads only.",
+          "type": "string"
+        }
+      ]
+    },
+    "ImageRef": {
+      "description": "Immutable execution identity. The alias is a *mutable human label* and is never sufficient\non its own (contract IM-1): `image_id` is the digest of the image manifest.",
+      "properties": {
+        "alias": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "architecture": {
+          "type": "string"
+        },
+        "image_id": {
+          "description": "`sha256:<hex>` of the canonical image manifest.",
+          "type": "string"
+        },
+        "kernel_identity": {
+          "description": "`sha256:<hex>` of the kernel file's bytes.",
+          "type": "string"
+        },
+        "manifest_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "provenance_reference": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rootfs_identity": {
+          "description": "`sha256:<hex>` of the rootfs file's bytes.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "image_id",
+        "architecture",
+        "kernel_identity",
+        "rootfs_identity",
+        "manifest_version"
+      ],
+      "type": "object"
+    },
+    "Issuer": {
+      "description": "Who caused an operation: an enrolled peer, or the host acting on an observation (OP-24).",
+      "enum": [
+        "PEER",
+        "HOST"
+      ],
+      "type": "string"
+    },
+    "LifecycleState": {
+      "enum": [
+        "REQUESTED",
+        "PROVISIONING",
+        "READY",
+        "RUNNING",
+        "PAUSED",
+        "COMPLETED",
+        "FAILED",
+        "STOPPING",
+        "STOPPED",
+        "DESTROYED"
+      ],
+      "type": "string"
+    },
+    "ListParams": {
+      "additionalProperties": false,
+      "properties": {
+        "changed_since": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Cursor"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Return only records that changed after this position, including tombstones (API-11)."
+        },
+        "limit": {
+          "description": "Page size, 1..=1000.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "NetworkIntent": {
+      "description": "What connectivity a sandbox is given. Recorded on the generation; never widened afterwards.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "No network device exists in the guest.",
+          "properties": {
+            "mode": {
+              "const": "none",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Outbound TCP to listed destinations only, through the host's resolver and relay.",
+          "properties": {
+            "entries": {
+              "items": {
+                "$ref": "#/$defs/AllowEntry"
+              },
+              "type": "array"
+            },
+            "mode": {
+              "const": "allowlist",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "entries"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "NetworkMode": {
+      "description": "The mode vocabulary. Any other word is refused with `UNSUPPORTED` before the request is decoded\nany further (§20.1, `api::command`): a mode this host does not know is a capability it does not\noffer. A known mode that the backend does not support is `UNSUPPORTED` too, and one that the\nsafety profile does not list is `SAFETY_CONTROL_DENIED`.",
+      "oneOf": [
+        {
+          "const": "none",
+          "description": "No network device exists in the guest.",
+          "type": "string"
+        },
+        {
+          "const": "allowlist",
+          "description": "Outbound TCP to listed destinations only, through the host's resolver and relay.",
+          "type": "string"
+        }
+      ]
+    },
+    "OperationId": {
+      "pattern": "^[A-Za-z0-9-]{8,64}$",
+      "type": "string"
+    },
+    "OperationResult": {
+      "description": "The typed result of an operation.",
+      "oneOf": [
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/SandboxView"
+            },
+            "type": {
+              "const": "sandbox",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/SnapshotView"
+            },
+            "type": {
+              "const": "snapshot",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/RunResult"
+            },
+            "type": {
+              "const": "run",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/HostChange"
+            },
+            "type": {
+              "const": "host",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "OperationSelector": {
+      "additionalProperties": false,
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/OperationId"
+        }
+      },
+      "required": [
+        "operation_id"
+      ],
+      "type": "object"
+    },
+    "OperationState": {
+      "description": "Contract §11.3.",
+      "oneOf": [
+        {
+          "const": "ACCEPTED",
+          "description": "BEGIN is durable; no step has run.",
+          "type": "string"
+        },
+        {
+          "const": "IN_PROGRESS",
+          "description": "A step is declared or running.",
+          "type": "string"
+        },
+        {
+          "const": "RECOVERING",
+          "description": "Inherited from an earlier activation, or a step's outcome is uncertain: the host is\nestablishing the outcome.",
+          "type": "string"
+        },
+        {
+          "const": "SUCCEEDED",
+          "description": "The operation's effect is in place.",
+          "type": "string"
+        },
+        {
+          "const": "FAILED",
+          "description": "The effect is not in place.",
+          "type": "string"
+        },
+        {
+          "const": "CANCELLED",
+          "description": "Ended by `operation.cancel` or by a containment operation.",
+          "type": "string"
+        },
+        {
+          "const": "UNKNOWN",
+          "description": "The effect may have happened and the host cannot establish it. Executions only.",
+          "type": "string"
+        }
+      ]
+    },
+    "OperationType": {
+      "description": "The type of a durable operation. Every method that is not a read has one; `sandbox.fail`\nexists only as an operation the host issues itself (OP-24) and is not a wire method.",
+      "enum": [
+        "sandbox.create",
+        "sandbox.start",
+        "exec.run",
+        "snapshot.create",
+        "snapshot.restore",
+        "sandbox.stop",
+        "sandbox.destroy",
+        "sandbox.fail",
+        "snapshot.delete",
+        "operation.cancel",
+        "profile.reload",
+        "quarantine.release",
+        "host.set_mode",
+        "host.acknowledge"
+      ],
+      "type": "string"
+    },
+    "OperationView": {
+      "description": "An operation as of the response (API-6). Terminal only if it ended within the caller's `wait`.",
+      "properties": {
+        "activation_epoch": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cancelled_by": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CancelledBy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cleanup": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Cleanup"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present on a `FAILED` or `CANCELLED` operation (OP-7). Derived from committed state at the\ntime of the response, so it becomes `COMPLETE` when what the operation left is later removed."
+        },
+        "created": {
+          "type": "string"
+        },
+        "effect": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Effect"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present once terminal (API-9)."
+        },
+        "failure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FailureInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "issued_at": {
+          "type": "string"
+        },
+        "issuer": {
+          "$ref": "#/$defs/Issuer"
+        },
+        "on_behalf_of": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operation_id": {
+          "$ref": "#/$defs/OperationId"
+        },
+        "operation_type": {
+          "$ref": "#/$defs/OperationType"
+        },
+        "profile_id": {
+          "$ref": "#/$defs/ProfileId",
+          "description": "The safety profile the operation was admitted under (SP-2)."
+        },
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OperationResult"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sandbox": {
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "$ref": "#/$defs/SandboxId"
+            },
+            {
+              "$ref": "#/$defs/Generation"
+            }
+          ],
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "snapshot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SnapshotRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/OperationState"
+        },
+        "step": {
+          "description": "The last privileged step declared.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tags": {
+          "$ref": "#/$defs/Tags"
+        },
+        "target": {
+          "description": "`sbx-…`, `snp-…` or `host`.",
+          "type": "string"
+        },
+        "updated": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation_id",
+        "operation_type",
+        "state",
+        "issuer",
+        "tags",
+        "target",
+        "profile_id",
+        "activation_epoch",
+        "issued_at",
+        "created",
+        "updated",
+        "revision"
+      ],
+      "type": "object"
+    },
+    "OutputCapture": {
+      "properties": {
+        "artifact": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "data_b64": {
+          "description": "Base64 of the kept bytes — binary-safe, and bounded by the run's output budget.",
+          "type": "string"
+        },
+        "kept_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "status": {
+          "$ref": "#/$defs/OutputStatus"
+        },
+        "total_bytes": {
+          "description": "Bytes the workload produced (>= `kept_bytes` when truncated).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "status",
+        "total_bytes",
+        "kept_bytes",
+        "data_b64"
+      ],
+      "type": "object"
+    },
+    "OutputChunk": {
+      "description": "A slice of one stream of an execution's stored output (OU-4).",
+      "properties": {
+        "completeness": {
+          "$ref": "#/$defs/OutputStatus"
+        },
+        "data_b64": {
+          "type": "string"
+        },
+        "eof": {
+          "description": "No stored byte follows this slice.",
+          "type": "boolean"
+        },
+        "offset": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "produced_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "run_id": {
+          "$ref": "#/$defs/RunId"
+        },
+        "stored_bytes": {
+          "description": "Bytes stored for the stream, and bytes the workload produced (OU-2).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "stream": {
+          "$ref": "#/$defs/OutputStream"
+        }
+      },
+      "required": [
+        "run_id",
+        "stream",
+        "offset",
+        "data_b64",
+        "stored_bytes",
+        "produced_bytes",
+        "completeness",
+        "eof"
+      ],
+      "type": "object"
+    },
+    "OutputStatus": {
+      "description": "State of one captured stream (contract OU-1, OU-2).",
+      "enum": [
+        "COMPLETE",
+        "TRUNCATED",
+        "INCOMPLETE"
+      ],
+      "type": "string"
+    },
+    "OutputStream": {
+      "enum": [
+        "stdout",
+        "stderr"
+      ],
+      "type": "string"
+    },
+    "OwnerScope": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9._:/@=+-]+$",
+      "type": "string"
+    },
+    "Page": {
+      "description": "One page of a list (API-11). `items` are in ascending revision order. Continue from `next`; when\n`more` is false, `next` is the position the listing is complete up to.",
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/SandboxView"
+          },
+          "type": "array"
+        },
+        "more": {
+          "type": "boolean"
+        },
+        "next": {
+          "$ref": "#/$defs/Cursor"
+        }
+      },
+      "required": [
+        "items",
+        "more",
+        "next"
+      ],
+      "type": "object"
+    },
+    "Page2": {
+      "description": "One page of a list (API-11). `items` are in ascending revision order. Continue from `next`; when\n`more` is false, `next` is the position the listing is complete up to.",
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/SnapshotView"
+          },
+          "type": "array"
+        },
+        "more": {
+          "type": "boolean"
+        },
+        "next": {
+          "$ref": "#/$defs/Cursor"
+        }
+      },
+      "required": [
+        "items",
+        "more",
+        "next"
+      ],
+      "type": "object"
+    },
+    "Page3": {
+      "description": "One page of a list (API-11). `items` are in ascending revision order. Continue from `next`; when\n`more` is false, `next` is the position the listing is complete up to.",
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/OperationView"
+          },
+          "type": "array"
+        },
+        "more": {
+          "type": "boolean"
+        },
+        "next": {
+          "$ref": "#/$defs/Cursor"
+        }
+      },
+      "required": [
+        "items",
+        "more",
+        "next"
+      ],
+      "type": "object"
+    },
+    "PeerId": {
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9._:/@=+-]+$",
+      "type": "string"
+    },
+    "PortRange": {
+      "additionalProperties": false,
+      "description": "One inclusive port range. `from` and `to` are 1..=65535 and `from <= to`.",
+      "properties": {
+        "from": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "to": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "type": "object"
+    },
+    "ProcessIdentity": {
+      "description": "Stronger-than-PID process identity (RC-1).\n\n`(pid, start_time_ticks, boot_id)` is stable for the life of one process and cannot be\nreproduced by a different process that merely reuses the pid.",
+      "properties": {
+        "boot_id": {
+          "type": "string"
+        },
+        "pid": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "start_time_ticks": {
+          "description": "Field 22 of /proc/<pid>/stat (clock ticks since boot).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "pid",
+        "start_time_ticks",
+        "boot_id"
+      ],
+      "type": "object"
+    },
+    "ProfileId": {
+      "description": "Identity of the safety profile in force when an operation was admitted (SP-1, SP-2).",
+      "properties": {
+        "digest": {
+          "description": "sha256 of the exact bytes that were verified and parsed. This is the identity.",
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "digest"
+      ],
+      "type": "object"
+    },
+    "ProfileLimits": {
+      "additionalProperties": false,
+      "description": "Ceilings (§9.4, \"Items the profile sets\"). Every one is finite (N9).",
+      "properties": {
+        "max_allowlist_entries": {
+          "description": "Most allowlist entries one sandbox may have (AL-1).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_argv_bytes": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_argv_items": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_disk_mib": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_env_entries": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_lifetime_secs": {
+          "description": "Longest sandbox lifetime a request may ask for (LT-1).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_memory_mib": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_pids": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_runtime_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_stderr_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_stdout_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_vcpus": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "max_vcpus",
+        "max_memory_mib",
+        "max_disk_mib",
+        "max_runtime_ms",
+        "max_pids",
+        "max_stdout_bytes",
+        "max_stderr_bytes",
+        "max_argv_items",
+        "max_argv_bytes",
+        "max_env_entries",
+        "max_lifetime_secs",
+        "max_allowlist_entries"
+      ],
+      "type": "object"
+    },
+    "QuarantineReleaseParams": {
+      "additionalProperties": false,
+      "properties": {
+        "generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "mode": {
+          "$ref": "#/$defs/ReleaseMode"
+        },
+        "sandbox_id": {
+          "$ref": "#/$defs/SandboxId"
+        }
+      },
+      "required": [
+        "sandbox_id",
+        "generation",
+        "mode"
+      ],
+      "type": "object"
+    },
+    "ReadResult": {
+      "oneOf": [
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/HostInfo"
+            },
+            "type": {
+              "const": "host_info",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": true,
+            "type": {
+              "const": "metrics",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/SandboxView"
+            },
+            "type": {
+              "const": "sandbox",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/Page"
+            },
+            "type": {
+              "const": "sandboxes",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/Page2"
+            },
+            "type": {
+              "const": "snapshots",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/OperationView"
+            },
+            "type": {
+              "const": "operation",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/Page3"
+            },
+            "type": {
+              "const": "operations",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/RunResult"
+            },
+            "type": {
+              "const": "run",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/OutputChunk"
+            },
+            "type": {
+              "const": "output",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "data"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Refusal": {
+      "description": "`REFUSED {class, retry}` (API-5): nothing was applied, and nothing was recorded.",
+      "properties": {
+        "class": {
+          "$ref": "#/$defs/FailureClass"
+        },
+        "message": {
+          "type": "string"
+        },
+        "retry": {
+          "$ref": "#/$defs/RetryAdvice"
+        }
+      },
+      "required": [
+        "class",
+        "retry",
+        "message"
+      ],
+      "type": "object"
+    },
+    "ReleaseMode": {
+      "description": "QR-2: what the operator asserts when releasing a quarantined generation.",
+      "oneOf": [
+        {
+          "const": "FORCE_DESTROY",
+          "description": "\"The generation's recorded resources belong to this host.\" The host tears them down and\nverifies absence.",
+          "type": "string"
+        },
+        {
+          "const": "DECLARE_ABSENT",
+          "description": "\"Nothing remains.\" The host only verifies that nothing recorded for the generation exists.",
+          "type": "string"
+        }
+      ]
+    },
+    "RequestEnvelope": {
+      "additionalProperties": false,
+      "properties": {
+        "authority": {
+          "description": "Reserved for a signed decision (AU-11). A host that does not advertise `signed_decision`\nrefuses any request that carries it. It never ignores it."
+        },
+        "issued_at": {
+          "description": "When the caller first issued the request: `YYYY-MM-DDTHH:MM:SS[.fff]Z`. Required wherever\n`operation_id` is.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "method": {
+          "description": "One of the methods of §10.3.",
+          "type": "string"
+        },
+        "on_behalf_of": {
+          "description": "Opaque label; recorded and never compared.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operation_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OperationId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Caller-generated idempotency identity. Required for every granting, containment and\noperator method (INV-005)."
+        },
+        "owner_scope": {
+          "$ref": "#/$defs/OwnerScope",
+          "description": "Opaque owner scope (AU-7). Stored and compared for equality; never interpreted."
+        },
+        "params": true,
+        "protocol": {
+          "description": "Protocol identifier with a major version, e.g. `acf.host/2`.",
+          "type": "string"
+        },
+        "request_id": {
+          "description": "Caller correlation; echoed; never an identity.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "retry": {
+          "default": false,
+          "description": "\"I already submitted this operation.\" If the host has no record the answer is `NOT_FOUND`;\nthe request is never treated as new.",
+          "type": "boolean"
+        },
+        "wait_ms": {
+          "description": "How long the caller is willing to wait for the operation to end before the host answers with\nits current state (API-6). Capped at `wait_max`; absent means `wait_max`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "protocol",
+        "owner_scope",
+        "method"
+      ],
+      "type": "object"
+    },
+    "RequestedMode": {
+      "description": "The two modes an operator may ask for (§12.6). Every other mode is entered by the host itself.",
+      "enum": [
+        "DRAINING",
+        "SERVING"
+      ],
+      "type": "string"
+    },
+    "ResourceEvidence": {
+      "description": "Per-resource enforcement record (contract RS-2).",
+      "properties": {
+        "action_taken": {
+          "type": "string"
+        },
+        "configured": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "effective": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "mechanism": {
+          "description": "The mechanism that actually enforced it — never claim a stronger one than was applied.",
+          "type": "string"
+        },
+        "observed_peak": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "resource": {
+          "type": "string"
+        },
+        "violated": {
+          "description": "The limit was reached and enforced.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "resource",
+        "violated",
+        "action_taken",
+        "mechanism"
+      ],
+      "type": "object"
+    },
+    "ResponseEnvelope": {
+      "oneOf": [
+        {
+          "description": "The request was not accepted. No operation record, no reservation, no effect.",
+          "properties": {
+            "answer": {
+              "const": "REFUSED",
+              "type": "string"
+            },
+            "refusal": {
+              "$ref": "#/$defs/Refusal"
+            }
+          },
+          "required": [
+            "answer",
+            "refusal"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The request was accepted. A durable operation record exists.",
+          "properties": {
+            "answer": {
+              "const": "OPERATION",
+              "type": "string"
+            },
+            "operation": {
+              "$ref": "#/$defs/OperationView"
+            }
+          },
+          "required": [
+            "answer",
+            "operation"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A read, served from committed state.",
+          "properties": {
+            "answer": {
+              "const": "RESULT",
+              "type": "string"
+            },
+            "result": {
+              "$ref": "#/$defs/ReadResult"
+            }
+          },
+          "required": [
+            "answer",
+            "result"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {
+        "as_of": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AsOf"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The committed state this answer reflects. Absent only on a refusal that consulted no state."
+        },
+        "protocol": {
+          "type": "string"
+        },
+        "request_id": {
+          "description": "Echo of the request's `request_id`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "protocol"
+      ],
+      "type": "object"
+    },
+    "RestoreTarget": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Restore in place: a **new generation** of the same sandbox (RE-3). Keeps the sandbox's expiry.",
+          "properties": {
+            "expected_generation": {
+              "$ref": "#/$defs/Generation"
+            },
+            "if_revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "existing",
+              "type": "string"
+            },
+            "sandbox_id": {
+              "$ref": "#/$defs/SandboxId"
+            }
+          },
+          "required": [
+            "kind",
+            "sandbox_id",
+            "expected_generation"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Restore as a brand-new sandbox, generation 1.",
+          "properties": {
+            "kind": {
+              "const": "new",
+              "type": "string"
+            },
+            "lifetime_secs": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RetryAdvice": {
+      "description": "The `retry` field of a refusal (API-5).",
+      "enum": [
+        "SAME_REQUEST_LATER",
+        "AFTER_CHANGE",
+        "NEVER"
+      ],
+      "type": "string"
+    },
+    "RunId": {
+      "pattern": "^run-[0-9a-f]{32}$",
+      "type": "string"
+    },
+    "RunLimitsRequest": {
+      "additionalProperties": false,
+      "description": "Limits a caller may *ask for*. Anything omitted takes the profile default; anything above a\nprofile ceiling is refused (never silently clamped, N4).",
+      "properties": {
+        "max_pids": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_stderr_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_stdout_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "timeout_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "RunMetrics": {
+      "properties": {
+        "cpu_usage_usec": {
+          "description": "Host-cgroup CPU time consumed by the VMM during the run (delta).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "memory_peak_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "wall_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "wall_ms"
+      ],
+      "type": "object"
+    },
+    "RunOutputParams": {
+      "additionalProperties": false,
+      "properties": {
+        "max_bytes": {
+          "description": "At most this many bytes (capped by the host).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "offset": {
+          "default": 0,
+          "description": "Byte offset into the stored output of the stream.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "run_id": {
+          "$ref": "#/$defs/RunId"
+        },
+        "stream": {
+          "$ref": "#/$defs/OutputStream"
+        }
+      },
+      "required": [
+        "run_id",
+        "stream"
+      ],
+      "type": "object"
+    },
+    "RunResult": {
+      "properties": {
+        "artifacts": {
+          "items": {
+            "$ref": "#/$defs/ArtifactRef"
+          },
+          "type": "array",
+          "x-provenance": "HOST_OBSERVED"
+        },
+        "evidence_status": {
+          "$ref": "#/$defs/EvidenceStatus",
+          "x-provenance": "HOST_OBSERVED"
+        },
+        "exit_code": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-provenance": "GUEST_REPORTED"
+        },
+        "generation": {
+          "$ref": "#/$defs/Generation",
+          "x-provenance": "HOST_OBSERVED"
+        },
+        "guest_containment": {
+          "type": "string",
+          "x-provenance": "GUEST_REPORTED"
+        },
+        "guest_duration_ms": {
+          "description": "In-guest duration and the in-guest containment mechanism are the guest's statements.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer",
+          "x-provenance": "GUEST_REPORTED"
+        },
+        "host_backstop_fired": {
+          "description": "The host's own deadline passed without a result and the host ended the runtime (EX-5).",
+          "type": "boolean",
+          "x-provenance": "HOST_OBSERVED"
+        },
+        "image_id": {
+          "type": "string",
+          "x-provenance": "HOST_OBSERVED"
+        },
+        "metrics": {
+          "$ref": "#/$defs/RunMetrics",
+          "x-provenance": "HOST_OBSERVED"
+        },
+        "note": {
+          "description": "Honest note when the status is `UNKNOWN` or the runtime was ended for infrastructure reasons.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-provenance": "HOST_OBSERVED"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/OperationId",
+          "x-provenance": "HOST_OBSERVED"
+        },
+        "profile_id": {
+          "$ref": "#/$defs/ProfileId",
+          "x-provenance": "HOST_OBSERVED"
+        },
+        "resource_evidence": {
+          "items": {
+            "$ref": "#/$defs/ResourceEvidence"
+          },
+          "type": "array",
+          "x-provenance": "HOST_OBSERVED"
+        },
+        "run_id": {
+          "$ref": "#/$defs/RunId",
+          "x-provenance": "HOST_OBSERVED"
+        },
+        "runtime_ended": {
+          "description": "The runtime was ended by the host as part of this execution.",
+          "type": "boolean",
+          "x-provenance": "HOST_OBSERVED"
+        },
+        "sandbox_id": {
+          "$ref": "#/$defs/SandboxId",
+          "x-provenance": "HOST_OBSERVED"
+        },
+        "signal": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-provenance": "GUEST_REPORTED"
+        },
+        "status": {
+          "$ref": "#/$defs/RunStatus",
+          "description": "Guest-reported unless `host_backstop_fired` or `runtime_ended` is set.",
+          "x-provenance": "GUEST_REPORTED"
+        },
+        "stderr": {
+          "$ref": "#/$defs/OutputCapture",
+          "x-provenance": "GUEST_REPORTED"
+        },
+        "stdout": {
+          "$ref": "#/$defs/OutputCapture",
+          "x-provenance": "GUEST_REPORTED"
+        }
+      },
+      "required": [
+        "run_id",
+        "operation_id",
+        "sandbox_id",
+        "generation",
+        "status",
+        "stdout",
+        "stderr",
+        "guest_duration_ms",
+        "guest_containment",
+        "host_backstop_fired",
+        "runtime_ended",
+        "metrics",
+        "evidence_status",
+        "resource_evidence",
+        "artifacts",
+        "profile_id",
+        "image_id"
+      ],
+      "type": "object"
+    },
+    "RunSelector": {
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "$ref": "#/$defs/RunId"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "type": "object"
+    },
+    "RunStatus": {
+      "description": "Status of one execution (contract §18.2, \"Run status\"). A non-zero exit is a *result*, not an\noperation failure: it is `EXITED` with its exit code.",
+      "oneOf": [
+        {
+          "const": "EXITED",
+          "description": "The command ended by itself with an exit code.",
+          "type": "string"
+        },
+        {
+          "const": "SIGNALED",
+          "description": "The command was ended by a signal.",
+          "type": "string"
+        },
+        {
+          "const": "TIMED_OUT",
+          "description": "The guest ended it at the guest deadline, or the host backstop fired.",
+          "type": "string"
+        },
+        {
+          "const": "SPAWN_FAILED",
+          "description": "The guest could not start it.",
+          "type": "string"
+        },
+        {
+          "const": "CANCELLED",
+          "description": "Ended by `operation.cancel` or by a containment operation.",
+          "type": "string"
+        },
+        {
+          "const": "UNKNOWN",
+          "description": "No result could be obtained. Never reported as success or failure.",
+          "type": "string"
+        }
+      ]
+    },
+    "SandboxCreateParams": {
+      "additionalProperties": false,
+      "properties": {
+        "image": {
+          "description": "Image alias (the safety profile lists which are allowed). The resolved identity is recorded.",
+          "type": "string"
+        },
+        "lifetime_secs": {
+          "description": "Lifetime in seconds from creation (LT-1). Absent: the profile's default. Above the profile's\nceiling: refused, never clamped.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "An alias, unique among the caller's own live sandboxes. Never an identity (ID-5).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resources": {
+          "$ref": "#/$defs/SandboxResources"
+        }
+      },
+      "required": [
+        "image",
+        "resources"
+      ],
+      "type": "object"
+    },
+    "SandboxId": {
+      "pattern": "^sbx-[0-9a-f]{32}$",
+      "type": "string"
+    },
+    "SandboxResources": {
+      "additionalProperties": false,
+      "description": "What a sandbox is *given*. Immutable for the life of a generation (NW-3, RS-4).",
+      "properties": {
+        "disk_mib": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "memory_mib": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "network": {
+          "$ref": "#/$defs/NetworkIntent"
+        },
+        "vcpus": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "vcpus",
+        "memory_mib",
+        "disk_mib",
+        "network"
+      ],
+      "type": "object"
+    },
+    "SandboxSelector": {
+      "additionalProperties": false,
+      "properties": {
+        "sandbox": {
+          "description": "Sandbox id **or** alias. Read-only lookups only.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sandbox"
+      ],
+      "type": "object"
+    },
+    "SandboxTarget": {
+      "additionalProperties": false,
+      "description": "The target token of a lifecycle-changing method (CC-2).",
+      "properties": {
+        "expected_generation": {
+          "$ref": "#/$defs/Generation",
+          "description": "Must be the sandbox's current generation, or the request is refused with `REVISION_CONFLICT`."
+        },
+        "if_revision": {
+          "description": "Optional stronger precondition: the sandbox's revision must equal this (§10.3).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "sandbox_id": {
+          "$ref": "#/$defs/SandboxId"
+        }
+      },
+      "required": [
+        "sandbox_id",
+        "expected_generation"
+      ],
+      "type": "object"
+    },
+    "SandboxView": {
+      "properties": {
+        "expires_at": {
+          "description": "When the sandbox ends (LT-1), wall clock, for display. The host enforces the monotonic one.",
+          "type": "string"
+        },
+        "failure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FailureInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "image": {
+          "$ref": "#/$defs/ImageRef"
+        },
+        "last_run": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "notes": {
+          "default": [],
+          "description": "Honest caveats attached to this view (for example restore uniqueness).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "process": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProcessIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "quarantined": {
+          "description": "The condition `QUARANTINED`, with its reason.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resources": {
+          "$ref": "#/$defs/SandboxResources"
+        },
+        "revision": {
+          "description": "Commit sequence of the last change to the sandbox's caller-visible state (ID-3).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sandbox_id": {
+          "$ref": "#/$defs/SandboxId"
+        },
+        "secret_bearing": {
+          "description": "Secret material was delivered to this generation (SC-5).",
+          "type": "boolean"
+        },
+        "security_profile_id": {
+          "type": "string"
+        },
+        "source_snapshot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SnapshotRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/LifecycleState"
+        },
+        "tags": {
+          "$ref": "#/$defs/Tags",
+          "description": "Tags of the request that created the sandbox (AU-8)."
+        },
+        "updated": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sandbox_id",
+        "generation",
+        "state",
+        "resources",
+        "image",
+        "tags",
+        "expires_at",
+        "security_profile_id",
+        "secret_bearing",
+        "updated",
+        "revision"
+      ],
+      "type": "object"
+    },
+    "SecretRef": {
+      "additionalProperties": false,
+      "description": "A secret named by reference (SC-1). The only shape a request may use: there is no field that\ncarries material, so raw material in a request cannot be expressed and is refused by the schema.",
+      "properties": {
+        "ref": {
+          "description": "Name of a secret the operator provisioned on the host. `[A-Za-z0-9._-]`, 1..=64.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ref"
+      ],
+      "type": "object"
+    },
+    "SetModeParams": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/RequestedMode"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "type": "object"
+    },
+    "SideEffect": {
+      "description": "Whether the failed step may already have changed host state (FS-2). The default is `Possible`:\na backend reports `None` only when it can rule out any change to the host.",
+      "oneOf": [
+        {
+          "const": "NONE",
+          "description": "Failed before any mutation: the effect is definitely absent.",
+          "type": "string"
+        },
+        {
+          "const": "POSSIBLE",
+          "description": "The mutation may or may not have happened. Must be settled by observation.",
+          "type": "string"
+        }
+      ]
+    },
+    "SnapshotCreateParams": {
+      "additionalProperties": false,
+      "properties": {
+        "expected_generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "if_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "An alias, unique among the caller's own snapshots.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sandbox_id": {
+          "$ref": "#/$defs/SandboxId"
+        }
+      },
+      "required": [
+        "sandbox_id",
+        "expected_generation"
+      ],
+      "type": "object"
+    },
+    "SnapshotDeleteParams": {
+      "additionalProperties": false,
+      "properties": {
+        "snapshot": {
+          "$ref": "#/$defs/SnapshotRef"
+        }
+      },
+      "required": [
+        "snapshot"
+      ],
+      "type": "object"
+    },
+    "SnapshotId": {
+      "pattern": "^snp-[0-9a-f]{32}$",
+      "type": "string"
+    },
+    "SnapshotRef": {
+      "properties": {
+        "snapshot_generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "snapshot_id": {
+          "$ref": "#/$defs/SnapshotId"
+        }
+      },
+      "required": [
+        "snapshot_id",
+        "snapshot_generation"
+      ],
+      "type": "object"
+    },
+    "SnapshotRestoreParams": {
+      "additionalProperties": false,
+      "properties": {
+        "snapshot": {
+          "$ref": "#/$defs/SnapshotRef"
+        },
+        "target": {
+          "$ref": "#/$defs/RestoreTarget"
+        }
+      },
+      "required": [
+        "snapshot",
+        "target"
+      ],
+      "type": "object"
+    },
+    "SnapshotState": {
+      "description": "Snapshot artifact state (contract §12.3).",
+      "enum": [
+        "REQUESTED",
+        "SNAPSHOTTING",
+        "VERIFYING",
+        "READY",
+        "INVALID",
+        "DELETED"
+      ],
+      "type": "string"
+    },
+    "SnapshotView": {
+      "properties": {
+        "created": {
+          "type": "string"
+        },
+        "failure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FailureInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "incompatible": {
+          "default": [],
+          "description": "Why this snapshot cannot be restored on this host as it is now (§21.6). Empty: compatible.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "manifest_digest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "restore_count": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "secret_refs": {
+          "default": [],
+          "description": "References of the secrets live in the sandbox at capture (SC-5). Never material.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "size_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/SnapshotRef"
+        },
+        "source_sandbox": {
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "$ref": "#/$defs/SandboxId"
+            },
+            {
+              "$ref": "#/$defs/Generation"
+            }
+          ],
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/SnapshotState"
+        },
+        "tags": {
+          "$ref": "#/$defs/Tags"
+        }
+      },
+      "required": [
+        "snapshot",
+        "state",
+        "tags",
+        "size_bytes",
+        "restore_count",
+        "created",
+        "revision"
+      ],
+      "type": "object"
+    },
+    "Tags": {
+      "description": "`(peer_id, owner_scope)` of the request that created a record (AU-8).",
+      "properties": {
+        "owner_scope": {
+          "$ref": "#/$defs/OwnerScope"
+        },
+        "peer_id": {
+          "$ref": "#/$defs/PeerId"
+        }
+      },
+      "required": [
+        "peer_id",
+        "owner_scope"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "urn:acf:host-api:2",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Generated from the host agent's types. Do not edit: run `acf-host schema`.",
+  "failure_classes": [
+    {
+      "class": "INVALID_REQUEST",
+      "may_fail_operation": false,
+      "may_refuse": true,
+      "retry": "NEVER"
+    },
+    {
+      "class": "AUTHENTICATION_FAILED",
+      "may_fail_operation": false,
+      "may_refuse": true,
+      "retry": "NEVER"
+    },
+    {
+      "class": "AUTHORIZATION_DENIED",
+      "may_fail_operation": false,
+      "may_refuse": true,
+      "retry": "NEVER"
+    },
+    {
+      "class": "SAFETY_CONTROL_DENIED",
+      "may_fail_operation": false,
+      "may_refuse": true,
+      "retry": "AFTER_CHANGE"
+    },
+    {
+      "class": "NOT_FOUND",
+      "may_fail_operation": false,
+      "may_refuse": true,
+      "retry": "NEVER"
+    },
+    {
+      "class": "STATE_CONFLICT",
+      "may_fail_operation": false,
+      "may_refuse": true,
+      "retry": "AFTER_CHANGE"
+    },
+    {
+      "class": "REVISION_CONFLICT",
+      "may_fail_operation": false,
+      "may_refuse": true,
+      "retry": "AFTER_CHANGE"
+    },
+    {
+      "class": "IDEMPOTENCY_CONFLICT",
+      "may_fail_operation": false,
+      "may_refuse": true,
+      "retry": "NEVER"
+    },
+    {
+      "class": "EXPIRED_REQUEST",
+      "may_fail_operation": false,
+      "may_refuse": true,
+      "retry": "NEVER"
+    },
+    {
+      "class": "RESOURCE_EXHAUSTED",
+      "may_fail_operation": true,
+      "may_refuse": true,
+      "retry": "SAME_REQUEST_LATER"
+    },
+    {
+      "class": "HOST_NOT_SERVING",
+      "may_fail_operation": false,
+      "may_refuse": true,
+      "retry": "SAME_REQUEST_LATER"
+    },
+    {
+      "class": "UNSUPPORTED",
+      "may_fail_operation": false,
+      "may_refuse": true,
+      "retry": "AFTER_CHANGE"
+    },
+    {
+      "class": "QUARANTINED",
+      "may_fail_operation": true,
+      "may_refuse": true,
+      "retry": "AFTER_CHANGE"
+    },
+    {
+      "class": "CURSOR_EXPIRED",
+      "may_fail_operation": false,
+      "may_refuse": true,
+      "retry": "AFTER_CHANGE"
+    },
+    {
+      "class": "PROTOCOL_ERROR",
+      "may_fail_operation": true,
+      "may_refuse": true,
+      "retry": "NEVER"
+    },
+    {
+      "class": "INTEGRITY_FAILURE",
+      "may_fail_operation": true,
+      "may_refuse": true,
+      "retry": "AFTER_CHANGE"
+    },
+    {
+      "class": "INCOMPATIBLE_RUNTIME",
+      "may_fail_operation": true,
+      "may_refuse": true,
+      "retry": "AFTER_CHANGE"
+    },
+    {
+      "class": "TIMEOUT",
+      "may_fail_operation": true,
+      "may_refuse": false,
+      "retry": "SAME_REQUEST_LATER"
+    },
+    {
+      "class": "DEPENDENCY_UNAVAILABLE",
+      "may_fail_operation": true,
+      "may_refuse": false,
+      "retry": "SAME_REQUEST_LATER"
+    },
+    {
+      "class": "SECURITY_CONTROL_FAILURE",
+      "may_fail_operation": true,
+      "may_refuse": false,
+      "retry": "AFTER_CHANGE"
+    },
+    {
+      "class": "PARTIAL_COMPLETION",
+      "may_fail_operation": true,
+      "may_refuse": false,
+      "retry": "AFTER_CHANGE"
+    },
+    {
+      "class": "UNKNOWN_OUTCOME",
+      "may_fail_operation": true,
+      "may_refuse": false,
+      "retry": "AFTER_CHANGE"
+    },
+    {
+      "class": "INTERNAL_ERROR",
+      "may_fail_operation": true,
+      "may_refuse": true,
+      "retry": "AFTER_CHANGE"
+    }
+  ],
+  "features": [
+    "allowlist_network",
+    "change_cursor",
+    "host_modes",
+    "operation_list",
+    "quarantine_release",
+    "scope_tags"
+  ],
+  "host_modes": [
+    "STARTING",
+    "SERVING",
+    "DRAINING",
+    "CONTAINMENT",
+    "READ_ONLY"
+  ],
+  "lifecycle_states": [
+    "REQUESTED",
+    "PROVISIONING",
+    "READY",
+    "RUNNING",
+    "PAUSED",
+    "COMPLETED",
+    "FAILED",
+    "STOPPING",
+    "STOPPED",
+    "DESTROYED"
+  ],
+  "methods": [
+    {
+      "answer": "OPERATION",
+      "class": "granting",
+      "creates_operation": true,
+      "name": "sandbox.create",
+      "params": {
+        "$ref": "#/$defs/SandboxCreateParams"
+      },
+      "params_required": true,
+      "roles": [
+        "caller",
+        "operator"
+      ]
+    },
+    {
+      "answer": "OPERATION",
+      "class": "granting",
+      "creates_operation": true,
+      "name": "sandbox.start",
+      "params": {
+        "$ref": "#/$defs/SandboxTarget"
+      },
+      "params_required": true,
+      "roles": [
+        "caller",
+        "operator"
+      ]
+    },
+    {
+      "answer": "OPERATION",
+      "class": "granting",
+      "creates_operation": true,
+      "name": "exec.run",
+      "params": {
+        "$ref": "#/$defs/ExecParams"
+      },
+      "params_required": true,
+      "roles": [
+        "caller",
+        "operator"
+      ]
+    },
+    {
+      "answer": "OPERATION",
+      "class": "granting",
+      "creates_operation": true,
+      "name": "snapshot.create",
+      "params": {
+        "$ref": "#/$defs/SnapshotCreateParams"
+      },
+      "params_required": true,
+      "roles": [
+        "caller",
+        "operator"
+      ]
+    },
+    {
+      "answer": "OPERATION",
+      "class": "granting",
+      "creates_operation": true,
+      "name": "snapshot.restore",
+      "params": {
+        "$ref": "#/$defs/SnapshotRestoreParams"
+      },
+      "params_required": true,
+      "roles": [
+        "caller",
+        "operator"
+      ]
+    },
+    {
+      "answer": "OPERATION",
+      "class": "containment",
+      "creates_operation": true,
+      "name": "sandbox.stop",
+      "params": {
+        "$ref": "#/$defs/SandboxTarget"
+      },
+      "params_required": true,
+      "roles": [
+        "caller",
+        "operator"
+      ]
+    },
+    {
+      "answer": "OPERATION",
+      "class": "containment",
+      "creates_operation": true,
+      "name": "sandbox.destroy",
+      "params": {
+        "$ref": "#/$defs/SandboxTarget"
+      },
+      "params_required": true,
+      "roles": [
+        "caller",
+        "operator"
+      ]
+    },
+    {
+      "answer": "OPERATION",
+      "class": "containment",
+      "creates_operation": true,
+      "name": "snapshot.delete",
+      "params": {
+        "$ref": "#/$defs/SnapshotDeleteParams"
+      },
+      "params_required": true,
+      "roles": [
+        "caller",
+        "operator"
+      ]
+    },
+    {
+      "answer": "OPERATION",
+      "class": "containment",
+      "creates_operation": true,
+      "name": "operation.cancel",
+      "params": {
+        "$ref": "#/$defs/OperationSelector"
+      },
+      "params_required": true,
+      "roles": [
+        "caller",
+        "operator"
+      ]
+    },
+    {
+      "answer": "RESULT",
+      "class": "read",
+      "creates_operation": false,
+      "name": "sandbox.inspect",
+      "params": {
+        "$ref": "#/$defs/SandboxSelector"
+      },
+      "params_required": true,
+      "roles": [
+        "caller",
+        "operator"
+      ]
+    },
+    {
+      "answer": "RESULT",
+      "class": "read",
+      "creates_operation": false,
+      "name": "sandbox.list",
+      "params": {
+        "$ref": "#/$defs/ListParams"
+      },
+      "params_required": false,
+      "roles": [
+        "caller",
+        "operator"
+      ]
+    },
+    {
+      "answer": "RESULT",
+      "class": "read",
+      "creates_operation": false,
+      "name": "snapshot.list",
+      "params": {
+        "$ref": "#/$defs/ListParams"
+      },
+      "params_required": false,
+      "roles": [
+        "caller",
+        "operator"
+      ]
+    },
+    {
+      "answer": "RESULT",
+      "class": "read",
+      "creates_operation": false,
+      "name": "operation.get",
+      "params": {
+        "$ref": "#/$defs/OperationSelector"
+      },
+      "params_required": true,
+      "roles": [
+        "caller",
+        "operator"
+      ]
+    },
+    {
+      "answer": "RESULT",
+      "class": "read",
+      "creates_operation": false,
+      "name": "operation.list",
+      "params": {
+        "$ref": "#/$defs/ListParams"
+      },
+      "params_required": false,
+      "roles": [
+        "caller",
+        "operator"
+      ]
+    },
+    {
+      "answer": "RESULT",
+      "class": "read",
+      "creates_operation": false,
+      "name": "run.inspect",
+      "params": {
+        "$ref": "#/$defs/RunSelector"
+      },
+      "params_required": true,
+      "roles": [
+        "caller",
+        "operator"
+      ]
+    },
+    {
+      "answer": "RESULT",
+      "class": "read",
+      "creates_operation": false,
+      "name": "run.output",
+      "params": {
+        "$ref": "#/$defs/RunOutputParams"
+      },
+      "params_required": true,
+      "roles": [
+        "caller",
+        "operator"
+      ]
+    },
+    {
+      "answer": "RESULT",
+      "class": "read",
+      "creates_operation": false,
+      "name": "host.info",
+      "params": null,
+      "params_required": false,
+      "roles": [
+        "observer",
+        "caller",
+        "operator"
+      ]
+    },
+    {
+      "answer": "RESULT",
+      "class": "read",
+      "creates_operation": false,
+      "name": "host.metrics",
+      "params": null,
+      "params_required": false,
+      "roles": [
+        "observer",
+        "caller",
+        "operator"
+      ]
+    },
+    {
+      "answer": "OPERATION",
+      "class": "operator",
+      "creates_operation": true,
+      "name": "profile.reload",
+      "params": null,
+      "params_required": false,
+      "roles": [
+        "operator"
+      ]
+    },
+    {
+      "answer": "OPERATION",
+      "class": "operator",
+      "creates_operation": true,
+      "name": "quarantine.release",
+      "params": {
+        "$ref": "#/$defs/QuarantineReleaseParams"
+      },
+      "params_required": true,
+      "roles": [
+        "operator"
+      ]
+    },
+    {
+      "answer": "OPERATION",
+      "class": "operator",
+      "creates_operation": true,
+      "name": "host.set_mode",
+      "params": {
+        "$ref": "#/$defs/SetModeParams"
+      },
+      "params_required": true,
+      "roles": [
+        "operator"
+      ]
+    },
+    {
+      "answer": "OPERATION",
+      "class": "operator",
+      "creates_operation": true,
+      "name": "host.acknowledge",
+      "params": {
+        "$ref": "#/$defs/AcknowledgeParams"
+      },
+      "params_required": true,
+      "roles": [
+        "operator"
+      ]
+    }
+  ],
+  "operation_states": [
+    "ACCEPTED",
+    "IN_PROGRESS",
+    "RECOVERING",
+    "SUCCEEDED",
+    "FAILED",
+    "CANCELLED",
+    "UNKNOWN"
+  ],
+  "operation_types": [
+    "sandbox.create",
+    "sandbox.start",
+    "exec.run",
+    "snapshot.create",
+    "snapshot.restore",
+    "sandbox.stop",
+    "sandbox.destroy",
+    "sandbox.fail",
+    "snapshot.delete",
+    "operation.cancel",
+    "profile.reload",
+    "quarantine.release",
+    "host.set_mode",
+    "host.acknowledge"
+  ],
+  "protocol": "acf.host/2",
+  "request": {
+    "$ref": "#/$defs/RequestEnvelope"
+  },
+  "response": {
+    "$ref": "#/$defs/ResponseEnvelope"
+  },
+  "title": "Agent Compute Fabric host API"
+}

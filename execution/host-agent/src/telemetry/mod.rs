@@ -1,17 +1,18 @@
-//! BND-11 — Telemetry and evidence plumbing (spec §23).
+//! Observability (contract §24, boundary B16). It owns emission and correlation, and no decision.
 //!
-//! Three classes, three failure behaviours:
-//! * `REQUIRED_EXECUTION_EVIDENCE` (output, exit status) — failure to capture is surfaced on the
-//!   result as `evidence_status != COMPLETE`; it never silently disappears.
-//! * `SECURITY_EVIDENCE` (posture, network verdict) — failure to obtain it **fails closed** at the
-//!   call site (see `FirecrackerBackend::launch_vmm`).
-//! * `DIAGNOSTIC_TELEMETRY` (this module's event log and counters) — best effort. A full disk or a
-//!   dead log file increments a counter and **never** changes lifecycle truth.
+//! Three classes of information, three reliabilities (§24.1):
+//!
+//! * **Committed state** — durable and authoritative. It is *read* through the API (§10.6); nothing
+//!   here is needed to learn it (OB-4).
+//! * **Security evidence** (confinement posture, network verdict, restore oracle) — obtained, or the
+//!   operation fails closed at the call site (PA-3). It never passes through this module.
+//! * **Diagnostic telemetry** (this module's events and counters) — best effort. A full disk or a
+//!   dead log file increments a counter and **never** changes an operation's outcome (OB-6).
 
 pub mod events;
 pub mod metrics;
 
-pub use events::{Event, EventSink};
+pub use events::{Event, EventDraft, EventIdentity, EventSink};
 pub use metrics::Metrics;
 
 use std::{path::Path, sync::Arc};

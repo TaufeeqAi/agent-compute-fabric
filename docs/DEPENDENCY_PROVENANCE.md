@@ -1,187 +1,234 @@
 # Dependency provenance
 
-Where every version in this repository came from, how it was checked, when, and what could **not** be checked.
+Where every version in this repository came from, how it was checked, when, and what could not be checked. It
+also records the upstream guidance and the prior art that shaped the design, with the place each was taken from.
 
-The rule for this phase was: *resolve versions from the registries at write time; do not default to whatever the author
-remembers.* A model's memory of "the latest" is stale by construction, so the repository records its evidence instead of
-asking you to trust it.
+The rule: *resolve versions from the registries at write time, not from memory.* A model's or an author's memory of
+"the latest" is stale by construction, so the repository records its evidence.
 
-Three kinds of statement are kept apart below:
+Three kinds of statement are kept apart:
 
 | Label | Meaning |
 |---|---|
-| **Verified** | Read from the authoritative registry or git remote on the stated date, by a command that is described here. |
-| **Exercised** | Compiled and tested in this repository on the stated date (see [VERIFICATION_STATUS.md](VERIFICATION_STATUS.md)). |
-| **Unverified** | Could not be reached or checked from the environment this was written in. Listed in full in §7. |
+| **Verified** | Read from the authoritative registry or git remote on the stated date, by the method described. |
+| **Exercised** | Compiled and tested in this repository on the stated date ([VERIFICATION_STATUS.md](VERIFICATION_STATUS.md)). |
+| **Unverified** | Could not be reached or checked from the environment this was written in. Listed in §8. |
 
 ## 1. Method
 
 | Ecosystem | Authority used | How the newest release was chosen |
 |---|---|---|
-| Rust crates | crates.io sparse index (`https://index.crates.io/<prefix>/<name>`) | Newest version that is neither yanked nor a pre-release. |
-| Python packages | PyPI JSON API (`https://pypi.org/pypi/<name>/json`) | Newest version that is neither yanked nor a pre-release, and whose files are not all yanked. |
-| GitHub Actions, Firecracker | `git ls-remote --tags` on the project's repository | Newest stable semver tag; an annotated tag is **peeled** (`refs/tags/<tag>^{}`) to the commit it points at. |
-| Rust toolchain | `rustc --version` of the installed stable channel | Equal to `rust-toolchain.toml`. |
+| Rust crates | crates.io registry API (`https://crates.io/api/v1/crates/<name>`) | `max_stable_version`: newest version that is neither yanked nor a pre-release |
+| Rust toolchain | `https://static.rust-lang.org/dist/channel-rust-stable.toml` | the stable channel's `pkg.rust` version and manifest date |
+| Python packages | PyPI JSON API (`https://pypi.org/pypi/<name>/json`), and `pip index versions` | `info.version` |
+| GitHub Actions | `git ls-remote` on the action's repository | newest `vX.Y.Z` tag; an annotated tag is peeled (`refs/tags/<tag>^{}`) to its commit |
+| Firecracker | GitHub releases API of `firecracker-microvm/firecracker` | newest release; asset `digest` compared with the published `<tarball>.sha256.txt` |
 
-Manifests carry **floors** (`>=` for Python, caret requirements for crates), the committed locks (`Cargo.lock`,
-`uv.lock`, `apps/cli/uv.lock`) carry the **exact** resolution, and every `cargo` and `uv run` invocation in the Makefile
-and the workflows passes `--locked`, which fails instead of silently re-resolving. A floor is the oldest version the code was tested against; the lock is what was
-actually built.
+Every request used a generic client name and public URLs only.
+
+Manifests carry floors, the committed lock files (`Cargo.lock`, `uv.lock`, `apps/cli/uv.lock`) carry the exact
+resolution, and builds use `--locked`, which fails instead of silently resolving again. A floor is the oldest
+version the code was tested against; the lock is what was built.
 
 ## 2. Resolution log
 
 | Date | What was resolved or re-checked |
 |---|---|
-| 2026-10-09 | Rust crates (first resolution); Firecracker tag and changelog. |
-| 2026-10-13 | Python packages. |
-| 2026-10-14 | GitHub Action release tags; `cargo-audit`; `pip-audit`. |
-| 2026-10-17 | **Everything re-checked** (drift found, see §3); lock files regenerated; all gates re-run. |
-| 2026-10-18 | Action tags re-resolved to commit SHAs with `git ls-remote`; workflows now pin the SHAs. |
+| 2026-10-09 – 2026-10-18 | First resolutions and one full re-check for the previous delivery: crates, Python packages, action tags and commits |
+| 2026-11-18 | **Everything re-checked for this delivery**: the Rust toolchain, every direct crate, every Python floor, the action tags and commits, the CI tool versions, and the Firecracker releases with their digests. Lock files regenerated. |
 
-## 3. Drift found by the re-check (2026-10-09 → 2026-10-17)
+## 3. Drift found by the 2026-11-18 re-check
 
-Eleven pins had moved in eight days. This is the reason the re-check exists: a version that was "latest" when first
-resolved is not latest when the phase ships.
+A month had moved more than twenty pins. This is why the re-check exists.
 
 | Pin | Before | After | Note |
 |---|---|---|---|
-| `proptest` | 1.11.0 | 1.12.0 | dev only |
-| `schemars` | 1.2.2 | 1.2.3 | JSON-schema generation |
-| `serde_json` | 1.0.151 | 1.0.154 | |
-| `serde-saphyr` | 1.3.0 | **2.0.0** | **Major bump.** YAML loader for config and policy. The upstream changelog could not be fetched, so the upgrade was judged empirically: the workspace compiles, and every Rust test (including the shipped config/policy parsing and the trusted-file loader) passes. |
-| `sha2` | 0.11.0 | 0.11.1 | image and policy digests |
-| `tokio` | 1.53.2 | 1.53.3 | |
-| `tokio-util` | 0.7.19 | 0.7.20 | |
-| `uuid` | 1.27.0 | 1.28.0 | UUID v7 operation/run identifiers |
-| `ruff` | 0.17.0 | 0.17.1 | dev tool |
-| `pydantic` | 2.14.0 | 2.14.1 | CLI response models |
-| `uv` (CI `setup-uv` input) | 0.13.0 | 0.13.1 | |
+| Rust toolchain | 1.97.0 | **1.100.0** | stable channel manifest dated 2026-11-12; `rust-version` follows |
+| `clap` | 4.6.7 | 4.6.8 | |
+| `crc32fast` | 1.5.2 | 1.5.5 | journal checksums |
+| `rustix` | 1.1.5 | 1.1.6 | feature `net` added: socket options, descriptor passing |
+| `serde-saphyr` | 2.0.0 | 2.1.1 | YAML for configuration, profile and enrolment |
+| `tokio` | 1.53.3 | 1.54.1 | |
+| `uuid` | 1.28.0 | 1.29.3 | |
+| `vsock` | 0.5.4 | 0.5.5 | guest agent transport |
+| `typer` | 0.27.3 | 0.29.1 | client; the cap moved to `<0.30` |
+| `pydantic` | 2.14.1 | 2.14.3 | client models |
+| `pytest` | 9.1.1 | 9.2.0 | |
+| `mypy` | 2.4.0 | 2.4.1 | |
+| `ruff` | 0.17.1 | 0.17.5 | |
+| `hatchling` | 1.32.4 | 1.33.0 | client build backend |
+| `astral-sh/setup-uv` | v10.3.0 | v10.3.3 | |
+| `Swatinem/rust-cache` | v2.9.1 | v2.9.3 | |
+| `uv` (CI input) | 0.13.1 | 0.13.9 | |
+| `cargo-audit` | 0.22.2 | 0.23.0 | |
+| Firecracker | tag only, digests `UNSET` | `v1.17.0` with both release digests | see §7; `v1.18.0` exists and is deliberately not adopted |
+
+New direct dependencies in this delivery, all resolved on 2026-11-18: `rustls` 0.23.46, `tokio-rustls` 0.26.6,
+`rcgen` 0.14.10 (tests only).
 
 ## 4. Rust
 
-Toolchain: `rust-toolchain.toml` pins **1.97.0** (components `rustfmt`, `clippy`); `rust-version = "1.97"`, edition 2024.
-The highest `rust-version` declared by any locked dependency is **1.89** (`uuid` 1.28.0, `serde-saphyr` 2.0.0), so the
-workspace's own 1.97 is a choice (the verified toolchain), not a requirement of a dependency.
+Toolchain: `rust-toolchain.toml` pins **1.100.0** with `rustfmt` and `clippy`; `rust-version = "1.100"`; edition
+2024. The pinned toolchain is the one that compiled and tested this code.
 
-The 1.97.0 toolchain download was blocked in the authoring environment; the tests were run on the installed **stable**
-channel, which was also `rustc 1.97.0`. The pinned toolchain itself was therefore not downloaded there.
-
-`Cargo.lock` holds 182 packages. The direct dependencies (workspace manifest floor = locked version, 24 crates, all **verified** on
-2026-10-17 and **exercised** on the same day):
+`Cargo.lock` holds 229 packages. The direct dependencies (workspace floor = locked version; **verified** and
+**exercised** on 2026-11-18):
 
 | Crate | Locked | Features | Used for |
 |---|---|---|---|
-| `async-trait` | 0.1.92 | | `SandboxBackend` and other async traits |
-| `base64` | 0.23.1 | | binary stdout/stderr data inside JSON (`wire::guest`, host exec) |
-| `cap-std` | 4.0.3 | | capability-based file access for state and artifacts |
-| `clap` | 4.6.7 | `derive` | host-agent and fake-host command lines |
-| `crc32fast` | 1.5.2 | | write-ahead journal checksums |
+| `async-trait` | 0.1.92 | | the backend, secret-provider and launch-sink ports |
+| `base64` | 0.23.1 | | binary output inside JSON |
+| `cap-std` | 4.0.3 | | capability-based file access for state, images and snapshots |
+| `clap` | 4.6.8 | `derive` | command lines of `acf-host` and the test host |
+| `crc32fast` | 1.5.5 | | journal batch checksums |
 | `hex` | 0.4.3 | | digests |
 | `http-body-util` | 0.1.5 | | Firecracker API client |
-| `hyper` | 1.12.0 | `client`, `http1` | Firecracker API client over a Unix socket (also re-exports `Bytes`) |
-| `hyper-util` | 0.1.21 | `tokio` | same |
-| `proptest` | 1.12.0 | | property tests (`dev-dependencies`) |
-| `rustix` | 1.1.5 | `fs process thread mount system time pipe event` | safe syscall wrappers (peer credentials, file-system and process calls); the host forbids `unsafe` |
-| `schemars` | 1.2.3 | | JSON Schema generation for the host's protocol and record types (`make schemas`) |
+| `hyper` | 1.12.0 | `client`, `http1` | Firecracker API client over a Unix socket |
+| `hyper-util` | 0.1.21 | `tokio` | the same |
+| `proptest` | 1.12.0 | | property tests (dev) |
+| `rcgen` | 0.14.10 | `aws_lc_rs`, `pem`; no defaults | certificates for the mutual-TLS tests; behind the `testing` feature only |
+| `rustix` | 1.1.6 | `fs process thread mount system time pipe event net` | system calls without `unsafe`: peer credentials, descriptor passing, namespaces, `SO_ORIGINAL_DST` |
+| `rustls` | 0.23.46 | `std`, `aws_lc_rs`; no defaults | TLS 1.3 for the network endpoint. The `tls12` feature is off, so no TLS 1.2 code is compiled in |
+| `schemars` | 1.2.3 | | JSON Schema generation for the API and the file formats |
 | `serde` | 1.0.229 | `derive` | |
-| `serde-saphyr` | 2.0.0 | | YAML config and policy |
+| `serde-saphyr` | 2.1.1 | | YAML: host configuration, safety profile, enrolment table |
 | `serde_json` | 1.0.154 | | wire envelope, journal records |
-| `sha2` | 0.11.1 | | image identity, policy digest |
-| `tempfile` | 3.27.0 | | tests only (`dev-dependencies` in both agents) |
+| `sha2` | 0.11.1 | | image identity, profile digest, fingerprints |
+| `tempfile` | 3.27.0 | | tests; optional in the host behind `testing` |
 | `thiserror` | 2.0.21 | | error types |
-| `tokio` | 1.53.3 | `rt-multi-thread macros net io-util time fs process signal sync` | async runtime |
-| `tokio-util` | 0.7.20 | | `CancellationToken` for shutdown and operation cancel |
+| `tokio` | 1.54.1 | `rt-multi-thread macros net io-util time fs process signal sync` | async runtime |
+| `tokio-rustls` | 0.26.6 | `aws_lc_rs`; no defaults | TLS acceptor |
+| `tokio-util` | 0.7.20 | `rt` | cancellation tokens, task tracker |
 | `tracing` | 0.1.44 | | structured logs |
-| `tracing-subscriber` | 0.3.23 | `env-filter`, `json` | JSON logs |
-| `uuid` | 1.28.0 | `v7`, `serde` | identifiers |
-| `vsock` | 0.5.4 | | guest agent transport |
+| `tracing-subscriber` | 0.3.23 | `env-filter`, `json` | log output |
+| `uuid` | 1.29.3 | `v7`, `serde` | identifiers |
+| `vsock` | 0.5.5 | | guest agent transport |
+
+The cryptographic provider is `aws-lc-rs` (locked 1.19.0, with `aws-lc-sys` 0.47.0); it builds here with a C
+compiler only. `rustls-webpki` is locked at 0.103.17. The guest-traffic crate uses `rustix`, `serde`, `serde_json`,
+`thiserror`, `tokio` and `tracing` only: it has no TLS library, because it reads a server name and decrypts nothing.
 
 ## 5. Python
 
-Both packages require Python `>=3.12`.
+Both projects require Python `>=3.12`. They were exercised on Python 3.12.3; 3.13 is listed in the client's
+classifiers and was not run.
 
-`apps/cli` (the `acf-local` CLI; **verified** 2026-10-13, re-verified 2026-10-17):
+Both lock files were regenerated with `uv` 0.13.1 and are accepted unchanged (`uv lock --check`) by 0.13.9, the
+release the workflows pin.
+
+`apps/cli` (the `acf-local` client; **verified** and **exercised** on 2026-11-18):
 
 | Package | Floor | Locked | Cap and reason |
 |---|---|---|---|
-| `typer` | 0.27.3 | 0.27.3 | `<0.28`: pre-1.0, minor releases can break |
-| `pydantic` | 2.14.1 | 2.14.1 | `<3`: the next major |
+| `typer` | 0.29.1 | 0.29.1 | `<0.30`: before 1.0 a minor release can break |
+| `pydantic` | 2.14.3 | 2.14.3 | `<3`: the next major |
 | `rich` | 15.0.0 | 15.0.0 | `<16`: the next major |
 
-The runtime surface is deliberately three libraries: the CLI talks to a privileged socket, so each dependency is
-supply-chain surface. Dev-only: `pytest` 9.1.1, `pytest-timeout` 2.4.0, `pytest-cov` 7.1.0, `jsonschema` 4.26.0,
-`types-jsonschema`, `mypy` 2.4.0, `ruff` 0.17.1 (`uv.lock` has 33 packages).
+The runtime surface is three libraries on purpose: the client talks to a privileged host agent, so each dependency
+is supply-chain surface. TLS is the standard library's `ssl`. Development only: `pytest` 9.2.0, `pytest-timeout`
+2.4.0, `pytest-cov` 7.1.0, `jsonschema` 4.26.0, `types-jsonschema` 4.26.0.20261006, `mypy` 2.4.1, `ruff` 0.17.5;
+build backend `hatchling` 1.33.0.
 
-Repository tooling (`pyproject.toml` at the root; no runtime dependencies; `uv.lock` has 22 packages): `pytest` 9.1.1,
-`pytest-timeout` 2.4.0, `jsonschema` 4.26.0, `types-jsonschema`, `mypy` 2.4.0, `ruff` 0.17.1, `shellcheck-py` 0.11.0.1.
+Repository tooling (root `pyproject.toml`; no runtime dependencies): `pytest` 9.2.0, `pytest-timeout` 2.4.0,
+`jsonschema` 4.26.0, `types-jsonschema` 4.26.0.20261006, `mypy` 2.4.1, `ruff` 0.17.5, `shellcheck-py` 0.11.0.1.
 
 ## 6. CI, release and supply-chain tooling
 
-GitHub Actions, pinned to full commit SHAs (the tag is in a trailing comment). Tags were checked on 2026-10-14; the SHAs
-were resolved on 2026-10-18 by `git ls-remote` and re-checked against the tag in the same command that rewrote the
-workflows.
+GitHub Actions are pinned to full commit SHAs with the tag in a trailing comment. Resolved by `git ls-remote` on
+2026-11-18:
 
-| Action | Tag | Commit SHA |
+| Action | Tag | Commit |
 |---|---|---|
 | `actions/checkout` | v7.0.1 | `3d3c42e5aac5ba805825da76410c181273ba90b1` |
-| `astral-sh/setup-uv` | v10.3.0 | `1c37ad07a6a961277cf70c0d37d6f313000f5884` |
+| `astral-sh/setup-uv` | v10.3.3 | `68559e99cc807c1eb7e9238fd43a15bba460eec2` |
 | `actions/upload-artifact` | v7.0.2 | `cf430e030ddbb5b0abf93d22962f4752f3646cd9` |
-| `Swatinem/rust-cache` | v2.9.1 | `c19371144df3bb44fab255c43d04cbc2ab54d1c4` (peeled; the tag is annotated) |
+| `Swatinem/rust-cache` | v2.9.3 | `d1527c8f67ef9af357290475d4af4b0fab8f12e0` (peeled; the tag is annotated) |
 
-A commit SHA cannot be re-pointed the way a tag can. What it does not prove is that the commit is the one the maintainers
-signed off on; that needs the project's release notes or signatures, which could not be consulted. Dependabot
-(`.github/dependabot.yml`: `github-actions`, `cargo`, `uv` twice, weekly) proposes updates and rewrites the SHA and the
-tag comment together. A guard test (`tests/scripts/test_makefile_and_ci.py`) fails if any `uses:` is not an exact tag or a
-40-hex SHA.
+A commit cannot be re-pointed the way a tag can. What it does not prove is that the commit is the one the
+maintainers intended; that needs the project's release notes or signatures. Dependabot proposes updates for the
+actions, the Rust lock and both Python locks. A guard test fails if any `uses:` is not an exact tag or a 40-hex
+commit.
 
-| Tool | Pinned version | Where | Verified |
+| Tool | Pinned | Where | Verified |
 |---|---|---|---|
-| `uv` | 0.13.1 | `setup-uv` input in all three workflows | 2026-10-17 |
-| `cargo-audit` | 0.22.2 | `audit.yml`, installed with `cargo install --locked` | 2026-10-14 |
-| `pip-audit` | 2.10.1 | `audit.yml`, via `uvx --from pip-audit==2.10.1` | 2026-10-14 |
-| `actionlint` | 1.7.12 | used while authoring; **not** a repository dependency (see `.github/actionlint.yaml` for its one custom-label setting) | 2026-10-17 |
+| `uv` | 0.13.9 | `setup-uv` input in the workflows | 2026-11-18 |
+| `cargo-audit` | 0.23.0 | `audit.yml` | 2026-11-18 |
+| `pip-audit` | 2.10.1 | `audit.yml` | 2026-11-18 (still the newest) |
 
 ## 7. Firecracker, guest kernel, base images
 
 | Input | State | Evidence |
 |---|---|---|
-| Firecracker | **`v1.17.0`** in `scripts/firecracker.lock` and `config/host.example.yaml` (kept equal by `make check-pins`) | The tag exists; its changelog lists `[1.17.0]` including the `sync_snapshot_files` snapshot parameter this host uses; no `v1.17.1` or `v1.18.0` existed on 2026-10-09/12. |
-| Firecracker tarball digests | **`UNSET`** (`SHA256_x86_64`, `SHA256_aarch64`) | The release assets were unreachable from the authoring environment. `scripts/install-firecracker.sh` **refuses** (exit 3) while a digest is `UNSET`. |
-| Guest kernel digests | **`UNSET`** (`KERNEL_SHA256_*`) | No kernel was built or downloaded. |
-| Base image digests | **`UNSET`** (`BASE_DIGEST_base`, `_python`, `_node`, `_browser`) | The registries were unreachable. The tags in `images/images.lock` (`debian:trixie-slim`, `python:3.14-slim-trixie`, `node:24-trixie-slim`) were chosen by the author and **not re-resolved**; `scripts/pin-images.sh` resolves them to digests and fails loudly on a tag that does not exist. |
+| Firecracker | **`v1.17.0`** in `scripts/firecracker.lock` and in the example configuration | Release published 2026-09-10. Its changelog lists the `sync_snapshot_files` snapshot parameter this host uses, and a fix for an ownership race in the jailer. |
+| Firecracker tarball digests | **pinned** for `x86_64` and `aarch64` | Each value was read from two published sources that agree: the release's asset metadata and the `.sha256.txt` file beside the tarball. They were not measured from a downloaded tarball here. The installer measures what it downloads and refuses on any difference, so a wrong value fails closed. |
+| The installed `firecracker` and `jailer` binaries | **pinned per host**, not in the repository | `firecracker.firecracker_sha256` and `firecracker.jailer_sha256` in the host configuration. The installer prints the digest of each file it installed from the verified tarball; the host hashes both at startup and before every launch. The example configuration leaves them unset: a digest that nobody measured would be worse than none. |
+| Firecracker `v1.18.0` | **not adopted** | Published 2026-11-09. It adds a new device type and changes none of the API calls or jailer flags this host uses. The pin moves only together with a run of the integration suites on a KVM host, which was not available. |
+| Guest kernel digests | **`UNSET`** | No kernel was built or downloaded. |
+| Base image digests | **`UNSET`** | The image registries were not consulted. `scripts/pin-images.sh` resolves the tags to digests and fails on a tag that does not exist. |
 
-`make check-pins` validates the pin files' shape and cross-file consistency; `make check-pins-release` additionally
-**fails** while anything is `UNSET`, so a release cannot be cut with unpinned inputs by accident.
+Security notices read while choosing the pin: CVE-2026-1386, published in January 2026, by which the jailer could
+be made to overwrite a host file through a symbolic link
+([AWS security bulletin 2026-003](https://aws.amazon.com/security/security-bulletins/2026-003-AWS/)); the security
+fix in v1.15.1 (CVE-2026-5747); and the fixes for races in the jailer listed for v1.16.2 and v1.17.0. All of them
+are in the pinned release. The host's own trusted-input rule (no link at the leaf of a file, every directory on the
+way closed to other users) is the defence in depth against the same class of problem.
 
-## 8. What could not be verified from the authoring environment
+`make check-pins` validates the pin files and their consistency; `make check-pins-release` fails while anything is
+`UNSET`, so a release cannot be cut with unpinned inputs by accident.
 
-Blocked or unavailable, reported rather than routed around:
+## 8. What could not be verified
 
-- **Container registries** (`public.ecr.aws`, Docker Hub): base-image tags unresolved, so every `BASE_DIGEST_*` is `UNSET`.
-- **GitHub release assets and the GitHub REST API**: Firecracker tarball digests unset; Action SHAs were resolved with
-  `git ls-remote` instead of the releases API.
-- **Advisory databases** (RustSec, PyPI advisories): `cargo audit` and `pip-audit` have **never been run** on this lock
-  set. `audit.yml` exists to run them where the databases are reachable.
-- **Upstream changelog for `serde-saphyr` 2.0.0**: not fetchable; the major bump was evaluated by building and testing.
-- **The pinned 1.97.0 toolchain download**: not fetchable; the installed stable `rustc 1.97.0` was used.
-- **A KVM host, a container daemon, `CAP_SYS_RESOURCE`**: not available, so nothing here has booted a real microVM. See
-  [VERIFICATION_STATUS.md](VERIFICATION_STATUS.md).
+* **A KVM host and root.** Nothing here has booted a microVM, and the Firecracker binaries were not downloaded or
+  executed. See [VERIFICATION_STATUS.md](VERIFICATION_STATUS.md).
+* **Container registries.** Base-image tags were not resolved; every base-image digest is `UNSET`.
+* **Advisory databases.** `cargo audit` and `pip-audit` were not run on these lock files. `audit.yml` runs them
+  where the databases are reachable.
+* **Upstream changelogs of every bumped crate.** The bumps in §3 were judged by building and by the full test
+  suites, not by reading each changelog.
+* **Python 3.13.**
 
-## 9. How to re-verify
+## 9. Upstream guidance and prior art
 
-Nothing below needs this repository's tooling beyond a shell, `git` and `curl`/`cargo`:
+What the design takes from others, and where it was read (all on 2026-11-18).
+
+**Firecracker's own guidance.**
+
+| Source | What it says | Where the host follows it |
+|---|---|---|
+| [Production host setup](https://github.com/firecracker-microvm/firecracker/blob/main/docs/prod-host-setup.md) | run through the jailer with a uid and gid per instance; keep the default seccomp filters; disable the serial console or bound its output; bound logs; disable swap; disable SMT; disable kernel same-page merging; block guest access to the metadata address; have the host end an unresponsive VMM; keep the parents of the jailer's inputs unwritable | `backend/firecracker/jailer.rs` (never `--no-seccomp`), the identifier pool, `8250.nr_uarts=0` in the default boot arguments, `diagnostic_log` off by default, the `swap`, `smt` and `ksm` checks of `acf-host doctor`, the always-denied address classes of mode `allowlist`, the execution backstop and the lifetime enforcer, the trusted-input rule |
+| [Jailer](https://github.com/firecracker-microvm/firecracker/blob/main/docs/jailer.md) | the jailer's inputs are trusted; it creates the device nodes and the cgroup | every jailer input is derived from validated ids and checked as a trusted input; cgroup v2 only |
+| [Snapshot support](https://github.com/firecracker-microvm/firecracker/blob/main/docs/snapshotting/snapshot-support.md) | snapshot files are trusted and must be protected; a snapshot is loaded by the version that took it; resuming one snapshot more than once makes guests share random state unless the guest reseeds | digests held in the store and verified on the bytes loaded; the version in the compatibility gate; the restore result notes a repeated restore; the backend does not claim entropy reseeding |
+| [Network for clones](https://github.com/firecracker-microvm/firecracker/blob/main/docs/snapshotting/network-for-clones.md) | give each clone its own network namespace with the same device name | one namespace per sandbox, device `tap0`, one constant guest segment |
+| [Changelog](https://github.com/firecracker-microvm/firecracker/blob/main/CHANGELOG.md), [releases](https://github.com/firecracker-microvm/firecracker/releases) | versions, dates, API changes | the pin and the transcribed API models |
+
+**Projects that solve a neighbouring problem.** None of their code is used; these are the patterns recognised in
+them and applied here.
+
+| Project | Pattern | Here |
+|---|---|---|
+| [E2B infrastructure](https://github.com/e2b-dev/infra) | a per-node orchestrator behind an API; a daemon inside each sandbox; a network namespace and an egress filter per sandbox; templates restored from snapshots | the host agent as the per-node authority; the guest agent; per-sandbox namespace and filter; restore as a new generation |
+| [OpenSandbox egress component](https://www.mintlify.com/alibaba/OpenSandbox/components/egress) | a DNS proxy that feeds packet-filter sets with a lifetime | the resolver records the addresses it returned, and a name entry is honoured only for those addresses within the binding lifetime |
+| [Evervault: egress networking with packet-filter redirection](https://evervault.com/blog/built-enclaves-egress-networking-iptables), [trans_proxy](https://madeye.github.io/trans_proxy/) | redirect all outbound TCP to a local proxy, recover the destination with `SO_ORIGINAL_DST`, read the TLS server name | the relay of the guest-traffic role |
+| flintlock, firecracker-containerd, Kata Containers | a VMM behind a narrow provider interface; a guest agent over vsock | the backend port and its capability profile; the guest protocol |
+| [AWS Lambda MicroVMs announcement](https://aws.amazon.com/about-aws/whats-new/2026/06/aws-lambda-microvms) | microVM isolation offered as a product primitive for untrusted code | context for the threat model, not a design input |
+
+## 10. How to re-verify
 
 ```sh
-# Actions and Firecracker: the commit a tag points at (annotated tags show a second, peeled line)
-git ls-remote https://github.com/actions/checkout.git 'refs/tags/v7.0.1' 'refs/tags/v7.0.1^{}'
-
-# Rust: anything newer than the lock allows? (needs the network; prints what would change, writes nothing)
+# Rust: anything newer than the lock allows? (prints what would change, writes nothing)
 cargo update --dry-run
 
-# Python: anything newer than the lock allows?
-uv lock --check            # lock matches the manifest
+# Python: does each lock match its manifest, and is anything newer?
+uv lock --check && uv --directory apps/cli lock --check
 uv lock --upgrade --dry-run
+
+# Actions: the commit a tag points at (an annotated tag shows a second, peeled line)
+git ls-remote https://github.com/actions/checkout.git 'refs/tags/v7.0.1' 'refs/tags/v7.0.1^{}'
+
+# Firecracker: the published digests of the pinned release
+gh api repos/firecracker-microvm/firecracker/releases/tags/v1.17.0 \
+  --jq '.assets[] | select(.name | endswith(".tgz")) | "\(.name) \(.digest)"'
 ```
 
-Then run the gates in [VERIFICATION_STATUS.md](VERIFICATION_STATUS.md). A dependency change is accepted only when the
-whole gate passes on the new lock.
+Then run the gates in [VERIFICATION_STATUS.md](VERIFICATION_STATUS.md). A dependency change is accepted only when
+the whole gate passes on the new lock.

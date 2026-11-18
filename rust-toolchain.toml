@@ -1,7 +1,7 @@
 # Pinned so every build (CI, release, your laptop) uses the toolchain the test-suite was verified with.
-# rust-version in Cargo.toml is deliberately equal: no older compiler has been verified (several
-# dependencies already require >= 1.89: serde-saphyr, uuid).
+# rust-version in Cargo.toml is deliberately equal: no older compiler has been verified.
+# 1.100.0 was the newest stable release on 2026-11-18 (channel manifest dated 2026-11-12).
 [toolchain]
-channel = "1.97.0"
+channel = "1.100.0"
 components = ["rustfmt", "clippy"]
 profile = "minimal"

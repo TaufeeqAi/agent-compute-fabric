@@ -1,8 +1,9 @@
-"""Length-delimited framing, byte-compatible with ``acf-wire``'s ``frame`` module.
+"""Length-delimited framing, byte-compatible with the host's wire crate.
 
-Wire format: a ``u32`` big-endian length followed by exactly that many payload bytes.
+Wire format: a ``u32`` big-endian length followed by exactly that many payload bytes. The same
+frames travel over the local Unix socket and over mutual TLS.
 
-Security properties (each one has a test, and each mirrors the Rust side):
+Security properties (each one has a test, and each mirrors the host's side):
 
 * a declared length above the caller's ``max_len`` is rejected **before any payload is read or
   allocated**, so a hostile or confused peer cannot make this process buffer more than it chose to;
@@ -15,7 +16,7 @@ from __future__ import annotations
 import struct
 from typing import Protocol
 
-#: Absolute upper bound on any frame, whatever the caller asks for (64 MiB, same as the Rust side).
+#: Absolute upper bound on any frame, whatever the caller asks for (64 MiB, same as the host's).
 MAX_FRAME_HARD_CAP = 64 * 1024 * 1024
 
 _HEADER = struct.Struct(">I")

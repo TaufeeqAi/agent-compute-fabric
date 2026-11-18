@@ -1,4 +1,4 @@
-# Repository tooling: tests for scripts/, tools/ and images/, plus the zip -> markdown exporter.
+# Repository tooling: tests for scripts/, tools/, deploy/ and images/.
 #
 # This is NOT a published package and has no runtime code of its own (`package = false`): it exists so
 # that `uv sync` gives every contributor and CI the same pinned toolchain for the parts of the
@@ -10,7 +10,9 @@
 #   ACF_INTEGRATION=1 uv run pytest tests/integration tests/isolation   # on a KVM host, with an image installed
 #   make control-plane              # the control-plane half of those suites against the in-memory host (no KVM)
 #
-# Floors below are the newest releases verified on PyPI on 2026-10-13 and re-verified on 2026-10-17 (docs/DEPENDENCY_PROVENANCE.md).
+# Floors below were verified on PyPI on 2026-10-13 and re-verified on 2026-10-17 (docs/DEPENDENCY_PROVENANCE.md);
+# those of pytest, mypy and ruff were raised on 2026-11-18 to the releases pip installed from PyPI that day.
+# After changing a floor, run `uv lock`: every `uv run --locked` refuses a lock file that no longer matches.
 [project]
 name = "acf-repo-tools"
 version = "0.0.0"
@@ -21,12 +23,12 @@ dependencies = []
 
 [dependency-groups]
 dev = [
-    "pytest>=9.1.1",
+    "pytest>=9.2.0",
     "pytest-timeout>=2.4.0",
     "jsonschema>=4.26.0",
     "types-jsonschema>=4.26.0.20261006",
-    "mypy>=2.4.0",
-    "ruff>=0.17.1",
+    "mypy>=2.4.1",
+    "ruff>=0.17.5",
     "shellcheck-py>=0.11.0.1",  # ShellCheck 0.11.0 as a wheel: `shellcheck` on PATH inside the venv
 ]
 
@@ -77,6 +79,6 @@ markers = [
     "needs_root: needs uid 0 (skipped otherwise): the script under test extracts tarballs or builds filesystems with real ownership",
     "integration: boots a real microVM through acf-local; needs ACF_INTEGRATION=1, KVM and an installed image",
     "isolation: attacks the sandbox from inside; same requirements as integration",
-    "control_plane: also valid against the in-memory host with the shipped config and policy (ACF_CONTROL_PLANE=1, no KVM)",
+    "control_plane: also valid against the in-memory host with the shipped config and safety profile (ACF_CONTROL_PLANE=1, no KVM)",
     "driver_selftest: proves the integration driver against the in-memory host (ACF_DRIVER_SELFTEST=1, no KVM)",
 ]

@@ -1,4 +1,5 @@
-//! Guest-side corroboration of `network=none` (spec §18.6, SEC-006).
+//! Guest-side corroboration of `network=none`: the third verification layer of contract §20.2. It can
+//! only add a violation; nothing the guest says here makes a start succeed (GP-7).
 //!
 //! This is *corroborating* evidence only: the authoritative proof that no NIC exists is the
 //! host-side Firecracker configuration (no `network-interfaces` entry). A compromised guest

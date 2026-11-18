@@ -1,15 +1,17 @@
-"""Isolation, filesystem: the guest sees its own disk and nothing of the host's (contract §16.3, §27.7).
+"""Isolation, filesystem: the guest sees its own disk and nothing of the host's.
 
 The claim is *absence*: there is no path from the workload to a host file, however clever the workload. Each test
 asks the guest kernel (``/proc``, ``/sys``) what it has, because that is the only view the workload has too:
 
 * exactly one block device (its own root disk) and no shared filesystem (9p, virtiofs, fuse, nfs ...);
 * a canary file planted on the host is nowhere in the guest, and the guest is not the host (hostname differs);
-* whatever the workload does to its disk, the installed image on the host stays byte-for-byte what its manifest says;
+* whatever the workload does to its disk, the installed image on the host stays byte-for-byte what its manifest
+  says (the host never mounts, parses or resolves paths inside a guest-writable filesystem);
 * the workload can write its workspace and scratch space and nothing else;
 * nothing in the image lets the workload become root (no setuid/setgid files).
 
-The probes are small Python programs run inside the guest (``python -c``); each prints one JSON document.
+Everything here needs a real guest (evidence level L4). The probes are small Python programs run inside the guest
+(``python -c``); each prints one JSON document.
 """
 
 from __future__ import annotations
@@ -22,8 +24,8 @@ from pathlib import Path
 
 import pytest
 
-from acf_driver import AcfLocal
-from acf_integration import REPO, HostEnv
+from acf_driver import REPO, AcfLocal
+from acf_integration import HostEnv, require_root
 
 pytestmark = [pytest.mark.isolation, pytest.mark.usefixtures("clean_host")]
 
@@ -142,8 +144,7 @@ print('done')
 
 def test_the_guest_has_one_block_device_and_no_shared_filesystem(acf: AcfLocal) -> None:
     box = acf.boot("storage")
-    assert box.name is not None
-    seen = acf.python(box.name, GUEST_STORAGE).stdout_json()
+    seen = acf.python(box.sandbox_id, GUEST_STORAGE).stdout_json()
     real_blocks = [b for b in seen["blocks"] if not b.startswith(("ram", "loop", "zram"))]
     assert real_blocks == ["vda"], f"the guest must see exactly its own virtio disk, not {seen['blocks']}"
     assert [(m[1], m[2]) for m in seen["device_mounts"]] == [("/", "ext4")], (
@@ -156,7 +157,8 @@ def test_the_guest_has_one_block_device_and_no_shared_filesystem(acf: AcfLocal) 
     assert seen["serial"] == [], f"the guest must have no serial channel to the VMM: {seen['serial']}"
 
 
-def test_a_file_on_the_host_is_nowhere_in_the_guest(acf: AcfLocal, tmp_path: Path) -> None:
+def test_a_file_on_the_host_is_nowhere_in_the_guest(acf: AcfLocal, host_env: HostEnv, tmp_path: Path) -> None:
+    require_root(host_env, "planting a canary in root's home directory")
     token = f"acf-canary-{uuid.uuid4().hex}"
     canary = tmp_path / token
     canary.write_text(token)
@@ -164,11 +166,12 @@ def test_a_file_on_the_host_is_nowhere_in_the_guest(acf: AcfLocal, tmp_path: Pat
     other.write_text(token)
     try:
         box = acf.boot("canary")
-        assert box.name is not None
-        seen = acf.python(box.name, GUEST_FIND_CANARY, token, str(canary), timeout="120s").stdout_json()
+        seen = acf.python(
+            box.sandbox_id, GUEST_FIND_CANARY, token, str(canary), options=["--time-limit", "120s"]
+        ).stdout_json()
         assert seen["hits"] == [], f"a host file name appears in the guest: {seen['hits']}"
         assert seen["host_path_exists"] is False
-        guest_name = acf.python(box.name, "import os; print(os.uname().nodename)").stdout.strip()
+        guest_name = acf.python(box.sandbox_id, "import os; print(os.uname().nodename)").stdout_text.strip()
         assert guest_name, "the guest must report a hostname"
         assert guest_name != socket.gethostname(), "the guest must not share the host's identity"
     finally:
@@ -181,9 +184,8 @@ def test_nothing_the_guest_does_to_its_disk_changes_the_installed_image(acf: Acf
     manifest_bytes = manifest.read_bytes()
 
     box = acf.boot("vandal", disk="512")
-    assert box.name is not None
-    assert acf.python(box.name, GUEST_VANDAL, timeout="120s").stdout == "done\n"
-    acf.sandbox_destroy(box.name)
+    assert acf.python(box.sandbox_id, GUEST_VANDAL, options=["--time-limit", "120s"]).stdout_text == "done\n"
+    acf.wire.destroy(acf.wire.refresh(box))
 
     assert manifest.read_bytes() == manifest_bytes
     assert {p.name: (p.stat().st_size, p.stat().st_mtime_ns) for p in sorted(host_env.image_dir.iterdir())} == before, (
@@ -209,8 +211,7 @@ def test_nothing_the_guest_does_to_its_disk_changes_the_installed_image(acf: Acf
 
 def test_the_workload_writes_its_workspace_and_scratch_space_and_nothing_else(acf: AcfLocal) -> None:
     box = acf.boot("writes")
-    assert box.name is not None
-    seen = acf.python(box.name, GUEST_WRITES).stdout_json()
+    seen = acf.python(box.sandbox_id, GUEST_WRITES).stdout_json()
     assert {k: seen[k] for k in ("workspace", "tmp", "shm")} == {"workspace": "ok", "tmp": "ok", "shm": "ok"}
     denied = {k: v for k, v in seen.items() if k not in {"workspace", "tmp", "shm"}}
     assert all(v in {"PermissionError", "FileNotFoundError", "OSError"} for v in denied.values()), (
@@ -221,6 +222,5 @@ def test_the_workload_writes_its_workspace_and_scratch_space_and_nothing_else(ac
 
 def test_the_image_contains_no_setuid_or_setgid_file(acf: AcfLocal) -> None:
     box = acf.boot("setid")
-    assert box.name is not None
-    found = acf.python(box.name, GUEST_SETID_FILES, timeout="180s").stdout_json()
+    found = acf.python(box.sandbox_id, GUEST_SETID_FILES, options=["--time-limit", "180s"]).stdout_json()
     assert found == [], f"the guest layer must strip every setuid/setgid bit, but these remain: {found}"

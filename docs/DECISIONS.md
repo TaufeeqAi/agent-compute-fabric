@@ -1,205 +1,333 @@
-# Decision log — 
+# Decision log
 
-Architecture decisions that are *not* spelled out by the contract, with the reasoning and the way back.
-Reversibility uses the project's vocabulary: **reversible** (a refactor), **expensive** (touches a wire contract or on-disk
-format), **effectively irreversible** (cannot be undone once data exists). Status of all entries: *accepted*.
+Decisions the execution-plane contract (version 1.2.0) leaves to the implementation, with the reasoning and the way
+back. Where the contract itself decides, this log does not repeat it; [CONTRACT_COMPLIANCE.md](CONTRACT_COMPLIANCE.md)
+maps clauses to code and lists the places where a clause had to be read one way or another.
+
+Reversibility: **reversible** (a refactor), **expensive** (touches a wire contract or an on-disk format),
+**effectively irreversible** (cannot be undone once data exists). Every entry is *accepted*.
 
 | ID | Decision | Reversibility |
 |---|---|---|
-| 001 | Python client, Rust privileged plane; the client never enforces | expensive |
-| 002 | One privileged process; Firecracker behind a `SandboxBackend` trait | reversible |
-| 003 | Operation protocol: validate → begin → step → backend → finish; `UNKNOWN` is first-class | expensive |
-| 004 | A narrow, CRC-framed write-ahead journal of our own | reversible |
-| 005 | Identity from `SO_PEERCRED`; two-layer socket access control | expensive |
-| 006 | One trusted-file loader for config, policy and executed binaries | reversible |
-| 007 | Policy is immutable per operation; reload affects the future only | expensive |
-| 008 | Admission is atomic with reservation; failed generations keep their reservation | expensive |
-| 009 | `network=none` is proven in three independent layers | reversible |
-| 010 | Verify the VMM's confinement by reading `/proc` back, before configuring it | reversible |
-| 011 | Image identity = sha256(manifest bytes); hash while copying | expensive |
-| 012 | Full snapshots, bound to the journal; restore is accepted only by a probe oracle | expensive |
-| 013 | Recovery is a pure decision table; doubt means quarantine | reversible |
-| 014 | Exec is single-flight, no stdin, empty environment, per-exec cgroup | reversible |
-| 015 | Guest init is a POSIX-sh PID 1, crash-only | reversible |
-| 016 | MMIO transport; Firecracker's default boot args plus an explicit `pci=off` | reversible |
-| 017 | The cgroup parent is created by a oneshot unit, not by the agent | reversible |
-| 018 | `serve` enforces the same checks as `doctor` | reversible |
-| 019 | Pins fail closed: UNSET refuses, `--allow-unpinned` is recorded | reversible |
-| 020 | Image hygiene: pinned ext4 features, no setuid/setgid, explicit default `PATH` | reversible |
-| 021 | The Makefile is the gate; guard tests keep CI, docs and Makefile honest | reversible |
-| 022 | KVM suites fail, never skip, when enabled; a control-plane subset runs everywhere | reversible |
-| 023 | Dependencies: verified-latest at write time, floors + committed locks, Actions by commit SHA | reversible |
-| 024 | Rust 2024, `unsafe` forbidden in the host, one audited exception in the guest | reversible |
-| 025 | The source archive is reproducible, carries its own sha256 manifest, and is read as untrusted | reversible |
+| 001 | Rust privileged plane, Python reference client; the client never enforces | expensive |
+| 002 | One binary, four roles, each its own process | reversible |
+| 003 | The edge is stateless and the core validates everything again | reversible |
+| 004 | Authority is enrolment, role, tags and the safety profile; no tenant concept on the host | expensive |
+| 005 | One operation protocol; the reserved state is committed in BEGIN | expensive |
+| 006 | Exclusivity is read from committed state; every write of an operation is fenced | expensive |
+| 007 | A narrow journal of our own, with lineage, sequence, epoch and a reserve | reversible |
+| 008 | One trusted-input rule for files and for executables | reversible |
+| 009 | A failed mandatory check means `CONTAINMENT`, never exit | reversible |
+| 010 | Admission is one commit with the reservation; a failed generation keeps its lease | expensive |
+| 011 | Recovery is a pure table; a granting operation is never continued; doubt is quarantined | reversible |
+| 012 | Lifetime is enforced by a separate process that needs only a directory of tickets | reversible |
+| 013 | Posture is verified by observation, and re-verified by whoever holds the sandbox | reversible |
+| 014 | Mode `none` is proven in three independent layers | reversible |
+| 015 | Mode `allowlist`: a namespace with no route, one constant segment, an unprivileged relay | reversible |
+| 016 | The backend port is semantic and declares its capabilities | reversible |
+| 017 | Image identity is the hash of the manifest; files are hashed while they are copied | expensive |
+| 018 | Full snapshots bound to the store; a restore is accepted only by an oracle | expensive |
+| 019 | Execution: one at a time, an argument vector, no stdin, a host backstop | reversible |
+| 020 | Secrets travel by reference; material cannot be serialised | reversible |
+| 021 | Schemas are generated from the types; the contract's tables are transcribed and tested | reversible |
+| 022 | Telemetry decides nothing | reversible |
+| 023 | Tests are named after the catalog; a test that cannot run is ignored, never passed | reversible |
+| 024 | The Firecracker pin moves only with a run on real KVM | reversible |
+| 025 | Dependencies are verified at write time and locked | reversible |
+| 026 | Rust 2024; `unsafe` forbidden except one audited block in the guest | reversible |
+| 027 | Guest init is a POSIX-sh PID 1, crash-only | reversible |
+| 028 | MMIO transport; Firecracker's default boot arguments plus an explicit `pci=off` | reversible |
+| 029 | The cgroup parent is created by a oneshot unit, not by the core | reversible |
+| 030 | Pins fail closed | reversible |
+| 031 | The Makefile is the gate; KVM suites fail, never skip, when enabled | reversible |
+| 032 | The source archive is reproducible, self-describing and read as untrusted | reversible |
+| 033 | The VMM and the jailer are pinned by digest in the host configuration and hashed before every launch | reversible |
 
 ---
 
-## ADR-001 — Python client, Rust privileged plane; the client never enforces
-**Context.** The Master Plan fixes a Python CLI and a Rust host agent. A client that also "checks policy" would create two
-authorities that drift, and the client runs as an unprivileged user — the wrong place for a decision.
-**Decision.** `acf-local` parses, resolves names to ids, renders evidence and picks exit codes; *every* allow/deny and
-every legality check happens in `acf-host`. The wire contract is generated from the Rust types (`make schemas`; `make check-schemas`
-fails if `schemas/` is stale) and the Python models are tested against it.
-**Consequences.** Client bugs cannot widen authority; a second client (SDK) inherits all enforcement. Cost: two
-toolchains, and a schema step. **Reversibility:** expensive (the wire format), mitigated by the versioned protocol `acf.host/1`.
+## ADR-001 — Rust privileged plane, Python reference client; the client never enforces
+**Context.** A client that also checks limits creates two authorities that drift, and the client runs where the
+caller runs, which is the wrong place for a decision.
+**Decision.** `acf-local` builds requests, resolves names to ids through reads, renders answers and chooses exit
+codes. Every allow, deny and legality check happens in `acf-host`. The wire contract is generated from the Rust types
+and the client is tested against it.
+**Consequences.** A client bug cannot widen authority, and a second client inherits all enforcement. Cost: two
+toolchains and a schema step. **Reversibility:** expensive (the wire format), mitigated by the versioned protocol.
 
-## ADR-002 — One privileged process; Firecracker behind `SandboxBackend`
-**Context.** Spec §26 projects eleven boundaries onto *one* process; §25 asks for backend replaceability without a speculative second backend.
-**Decision.** `acf-host` is the only privileged process; the jailer and `firecracker` are tools it launches. Everything
-Firecracker-specific lives behind the `SandboxBackend` trait with a `CapabilityProfile`; unsupported operations return the stable `UNSUPPORTED`.
-**Consequences.** Lifecycle, journal and recovery are backend-agnostic and are tested with an in-memory backend and with a
-fake Firecracker + the real guest agent. A real second backend is deliberately not written (Gate H). **Reversibility:** reversible.
+## ADR-002 — One binary, four roles, each its own process
+**Context.** The contract requires that bytes from a peer and bytes from a guest's network traffic are parsed
+without host-mutation capability, and that lifetime enforcement survives the core. It also requires one artifact.
+**Decision.** `acf-host` runs as `serve` (core), `edge`, `guest-traffic` and `lifetime`. The core starts the edge
+and each guest-traffic process by re-executing `/proc/self/exe` with an empty environment and an unprivileged
+identity, and passes configuration and open sockets over a socket pair. A role sets `no_new_privs` before its
+runtime has a second thread, then verifies from `/proc/thread-self/status` that it holds no privilege, and refuses to
+run otherwise. The lifetime enforcer is a separate service so that restarting the core never stops it.
+**Consequences.** A parser bug in the edge or the relay yields an unprivileged process with two sockets. An upgrade
+of the file on disk cannot make two roles of one activation run different code. Cost: role startup is part of the
+start path and has its own tests (`tests/process_roles.rs`). **Reversibility:** reversible.
 
-## ADR-003 — Operation protocol; `UNKNOWN` is first-class
-**Context.** The dangerous bug in a runtime like this is reporting "failed" for something that happened (then re-running it) or
-"succeeded" for something that did not.
-**Decision.** Every mutating request is a durable operation: *begin* (fingerprint, caller, policy, reservation in one atomic
-append) → *step* (the next privileged action is declared **before** it runs) → backend → *finish* (one atomic terminal
-record). A failure whose side effect "may have happened" and that cannot be proven clean is `UNKNOWN`. Refusals happen before
-*begin* and leave nothing behind. Duplicates are resolved by canonical request fingerprint.
-**Consequences.** Retrying is safe by construction; `exec` after a crash is *always* `UNKNOWN` and never re-run. Cost: every
-operation writes at least three journal records. **Reversibility:** expensive (recovery semantics depend on it).
+## ADR-003 — The edge is stateless and the core validates everything again
+**Context.** If the edge held state, its death would lose it; if the core trusted the edge's validation, a
+compromised edge could send anything.
+**Decision.** The edge authenticates, enrols, bounds, decodes and validates, then relays the request with the
+peer's enrolled `(peer_id, role)`. The core runs the same decode and shape checks, checks the enrolment in force
+now, and only then admits. If the edge dies the core starts another with the same listeners.
+**Consequences.** A compromised edge has the authority of an enrolled peer, bounded by the safety profile. Callers
+resolve lost responses by operation id. Cost: each request is validated twice. **Reversibility:** reversible.
 
-## ADR-004 — A narrow, CRC-framed write-ahead journal of our own
-**Context.** Admission needs an atomic *check-and-append* (room? then reserve) with a single writer, small state, and crash
-semantics we can test exhaustively. An embedded database would be a large dependency inside a root process.
-**Decision.** `operation/journal.rs`: an append-only file, one line per *atomic batch* —
-`<crc32 hex> <json {"seq":N,"entries":[…]}>\n` — with `commit_with(check)` atomic under one lock, a single-instance lock file,
-torn-tail repair, **read-only quarantine** on mid-file corruption, and compaction to live state plus the newest terminal operations. It holds only what recovery needs (spec §10.2); logs and metrics are not authority.
-**Consequences.** Fully unit-tested including corruption and failed appends; no migration tooling yet (spec §21.5 keeps that a storage
-concern). **Reversibility:** reversible behind `Journal`; the *records* are the contract.
+## ADR-004 — Authority is enrolment, role, tags and the safety profile; no tenant concept on the host
+**Context.** The host cannot know who a control plane's users are, and must not pretend to.
+**Decision.** An enrolment entry names one credential exactly and gives it one role. Records carry
+`(peer_id, owner_scope)`; `owner_scope` is opaque and compared for equality only. A record with other tags is
+`NOT_FOUND`. The profile is the host's own floor: ceilings and capabilities, nothing about users or prices. The
+switches `sandbox_destroy` and `snapshot_delete` bind role `caller` only, because containment by an operator or by
+the host must never be refusable.
+**Consequences.** Rotating a certificate is an enrolment change that touches no record. A peer that serves several
+tenants separates them with scopes it chooses. **Reversibility:** expensive (tags are in every record).
 
-## ADR-005 — Identity from `SO_PEERCRED`; two-layer socket access control
-**Context.** Local callers must be authenticated without secrets that could leak into an agent's environment.
-**Decision.** The kernel reports the caller's real uid/gid. Layer 1 is the socket's mode/group; layer 2 is the host's allow-list
-(`allowed_uids`/`allowed_gids`). Both must admit. An unauthorised peer that reaches the socket gets one `AUTHORIZATION`
-frame and is closed *before any request is read* (status `REJECTED`, no operation). Admin actions need `trusted_owner_uids`.
-**Consequences.** No tokens to rotate or leak; callers are Unix users. remote protocol must add real authentication — this is
-deliberately not forward-compatible with tenants. **Reversibility:** expensive.
+## ADR-005 — One operation protocol; the reserved state is committed in BEGIN
+**Context.** The dangerous bug is reporting "failed" for something that happened, or "succeeded" for something
+that did not. The joint-state invariants must hold after every commit, not only at the end of an operation.
+**Decision.** Refusal leaves nothing. BEGIN commits the record, the reservation and the state the operation
+reserves in one batch: an execution makes the generation `RUNNING`, a snapshot makes it `PAUSED`, a destroy of a
+live generation makes it `STOPPING`. STEP names a privileged step durably before it runs. FINISH commits the
+terminal state with every lifecycle and lease change. `effect` and `cleanup` are derived when an operation is read,
+from the committed state of what it left behind.
+**Consequences.** A crash at any point leaves a record that says what may have happened. A pending cleanup
+becomes complete without rewriting history. Cost: at least three commits per operation. **Reversibility:**
+expensive.
 
-## ADR-006 — One trusted-file loader
-**Context.** Config, policy and the binaries a root daemon executes are all "files an unprivileged user might replace".
-**Decision.** A single function loads them: root-owned, regular, `O_NOFOLLOW`, not group/world-writable, every ancestor checked,
-≤ 1 MiB; failure is `SECURITY_CONTROL_FAILURE` and the file is not used. The policy's identity is the sha256 of the verified bytes.
-**Consequences.** Misconfiguration is loud. Cost: operators must keep `/etc/acf` root-owned (the installer does). **Reversibility:** reversible.
+## ADR-006 — Exclusivity is read from committed state; every write of an operation is fenced
+**Context.** An in-memory lock is forgotten by a restart and cannot be seen by recovery.
+**Decision.** "Is this sandbox busy?" is answered inside the BEGIN commit from the non-terminal operations in the
+store. Every later write of an operation goes through `commit_for`, which refuses if the operation is no longer
+non-terminal. A containment operation ends the operations it supersedes in its own BEGIN commit, and in the same
+commit marks an unfinished snapshot `INVALID` and the generation a restore was building `FAILED`.
+**Consequences.** A superseded task cannot write anything, whatever it is doing. The invariants hold at the commit
+that supersedes. **Reversibility:** expensive (recovery depends on it).
 
-## ADR-007 — Policy is immutable per operation
-**Context.** A policy edited mid-run must not retroactively change what a running sandbox was allowed.
-**Decision.** Each operation records the policy digest it was admitted under and keeps that policy; `policy_reload` swaps the
-policy atomically for *future* operations only and is itself a durable, admin-only operation. A bad file is refused and the old policy stays.
-**Consequences.** Evidence can always say "run R was permitted by policy P". **Reversibility:** expensive.
+## ADR-007 — A narrow journal of our own, with lineage, sequence, epoch and a reserve
+**Context.** Admission needs an atomic check-and-append with one writer, small state and crash behaviour that can
+be tested exhaustively. An embedded database would be a large dependency inside a root process.
+**Decision.** An append-only file of CRC-framed batches of full-record upserts. One mutex spans check, append,
+fsync and apply. A lineage id qualifies every sequence and cursor; the commit sequence is each record's revision;
+an activation epoch fences stale writers. A torn tail is repaired; any other corruption makes the host
+`READ_ONLY`; an uncertain commit is a fail-stop. A ballast file keeps room to record containment on a full disk.
+**Consequences.** The store's failure behaviour is unit-tested, including failed appends and lost rollbacks. The
+previous schema's file is kept at migration. Cost: the whole state is in memory, which is fine for one host's
+sandboxes. **Reversibility:** reversible behind `commit_with` and `read`; the records are the contract.
 
-## ADR-008 — Admission is atomic with reservation
-**Context.** Check-then-act admission lets two creators take the last slot.
-**Decision.** Capacity is a pure function over journal state evaluated *inside* `Journal::commit_with`, so the check and the
-reservation it justifies are one append. A failed generation keeps its reservation until it is destroyed; an over-ceiling request is refused, never clamped.
-**Consequences.** No overcommit and no hidden leaks; a stuck generation visibly consumes capacity. **Reversibility:** expensive.
+## ADR-008 — One trusted-input rule for files and for executables
+**Context.** A file or a tool that an unprivileged user can replace is a root-execution primitive.
+**Decision.** Configuration, profile, enrolment, secrets and TLS material are read through one loader that checks
+the open descriptor: regular file, trusted owner, not writable by group or other, bounded size, no link at the leaf,
+and every directory on the way with the same property, including the directories a linked directory is reached
+through. Executables obey the same rule. Because distributions ship some tools as links, an executable's leaf may
+be a link placed by a trusted owner; the file it resolves to and the way there are then checked as well. Every tool
+is named by an absolute configured path and started with an empty environment.
+**Consequences.** Misconfiguration is loud, and nothing is found through `PATH`. Cost: `/etc/acf` and the tool
+directories must be root-owned and closed, which the installer arranges. **Reversibility:** reversible.
 
-## ADR-009 — `network=none` in three independent layers
-**Context.** "No network" claimed by one mechanism is one bug from false.
-**Decision.** (1) the Firecracker configuration has no NIC — authoritative; (2) the VMM runs in a dedicated *empty* network
-namespace; (3) the guest agent corroborates by listing interfaces and attempting egress to three addresses. The guest can only *add* a
-violation. Any violation ⇒ the start fails closed and the VMM is killed. Egress/proxy code does not exist in.
-**Consequences.** A compromised guest cannot talk the host into "verified". Adding a mode requires a new verdict function and an adversarial suite. **Reversibility:** reversible.
+## ADR-009 — A failed mandatory check means `CONTAINMENT`, never exit
+**Context.** A host that refuses to start cannot destroy the sandboxes it already runs.
+**Decision.** Structural defects that make the configuration unusable stop the process. Everything else (a
+violated relation between parameters, a failed preflight check, an unusable profile, enrolment table or TLS
+material, a missing lifetime enforcer, a store older than the system) is recorded as a reason for `CONTAINMENT`:
+no new privilege, containment and reads served. An unusable profile is replaced by one that denies everything and
+still permits containment; an unusable enrolment table by one that admits local root as operator.
+**Consequences.** The host stays administrable in every failure it can describe. **Reversibility:** reversible.
 
-## ADR-010 — Verify confinement by observation, before configuring the VMM
-**Context.** The jailer *should* chroot, setuid, drop capabilities and install seccomp; a wrong flag or a kernel difference silently doesn't.
-**Decision.** After launch the host reads `/proc/<pid>/status` and `/root`: expected uid ≠ 0, `Seccomp: 2`, `NoNewPrivs`, empty
-`CapEff`, root = jail. Any miss ⇒ kill the VMM *before* sending it any configuration. The profile is hashed into `security_profile_id`.
-**Consequences.** Misconfiguration becomes a refused start, not a silent hole. Unproven on real hardware until the KVM run. **Reversibility:** reversible.
+## ADR-010 — Admission is one commit with the reservation; a failed generation keeps its lease
+**Context.** Check-then-act admission lets two creators take the last slot, and releasing a lease on failure lets
+a leaked runtime hide behind a free slot.
+**Decision.** Capacity is a pure function over committed state evaluated inside the BEGIN commit. A lease is
+released only in the commit that records the generation `DESTROYED`. An identifier slot is assigned only if records
+show it free and the backend sees no live resource carrying it.
+**Consequences.** No overcommit and no hidden leak; a stuck generation visibly consumes capacity and is counted.
+**Reversibility:** expensive.
 
-## ADR-011 — Image identity is the hash of the manifest; hash while copying
-**Context.** Validate-then-use is a TOCTOU window; a swapped rootfs between hash and boot defeats provenance.
-**Decision.** An image is `kernel` + `rootfs.ext4` + `manifest.json`; its id is sha256(manifest bytes), which binds both file digests. The host copies the
-rootfs into the generation directory *while hashing it* (holes preserved) and compares, so the digest describes the booted bytes.
-**Consequences.** Cheap, strong, auditable. Images are not bit-reproducible; identity is that of what was actually built. **Reversibility:** expensive (ids are recorded).
+## ADR-011 — Recovery is a pure table; a granting operation is never continued; doubt is quarantined
+**Context.** Continuing an interrupted operation would need the authority, the secrets and the deadline of a
+request made to an earlier activation.
+**Decision.** Two pure functions decide: one for an operation an earlier activation left, one for a generation no
+operation holds. Granting operations are undone to proven absence; an interrupted execution ends `UNKNOWN` and its
+runtime is stopped; containment is re-driven. Ownership doubt wins over every other rule. Attempts are counted
+durably before they are made. Quarantine is left only through `quarantine.release`, where an operator asserts and
+the host observes afterwards.
+**Consequences.** Recovery creates no privilege and needs no secret. Cost: an interrupted create is lost work.
+**Reversibility:** reversible.
 
-## ADR-012 — Full snapshots, journal-bound; restore accepted only by an oracle
-**Context.** A restore that "worked" but resumed the wrong state or a rebooted guest is worse than a failure.
-**Decision.** Full Firecracker snapshots plus a disk copy; the manifest names every artifact (sha256, size), the host CPU
-fingerprint, Firecracker version, security-profile id and image identity, and its digest is bound into the journal. At restore
-the artifacts are re-hashed, then the guest is probed (`boot_id` + canary sha + agent version) and must reproduce the baseline
-digest; a changed `boot_id` reveals a reboot. Same host/version/CPU only; quotas on count and bytes.
-**Consequences.** "Verified restore" has a definition. Cost: snapshots are large and hold memory (secrets). **Reversibility:** expensive.
+## ADR-012 — Lifetime is enforced by a separate process that needs only a directory of tickets
+**Context.** A sandbox must not outlive its expiry because the core crashed, hung or was being upgraded.
+**Decision.** The instant a runtime process exists, before it is configured, the core writes a ticket: process
+identity, the control group's kill switch, the monotonic expiry of this boot. `acf-host lifetime` reads the
+directory, ends what has expired, and writes a heartbeat. It signals only the recorded process instance and writes
+only to a `cgroup.kill` under the configured root. The core stops creating privilege when the heartbeat is stale.
+Tickets live on the runtime filesystem, so they do not survive a reboot, and neither does any runtime.
+**Consequences.** The enforcer has no store, no backend and no peer input, and can be restarted at any time.
+**Reversibility:** reversible; the contract leaves the mechanism open.
 
-## ADR-013 — Recovery is a pure decision table; doubt means quarantine
-**Decision.** `classify(op, state, has_handle, observed, switched) → Plan` is a pure function (every row a unit test). Ownership
-doubt beats every other rule: nothing is deleted or signalled that the journal cannot prove is ours (OWNER marker with nonce;
-process identity = pid + start-time ticks + boot id). A record touched `max_attempts` times is quarantined, not retried forever.
-**Consequences.** Recovery is boring and auditable. Cost: no release command for a quarantine (known gap). **Reversibility:** reversible.
+## ADR-013 — Posture is verified by observation, and re-verified by whoever holds the sandbox
+**Context.** The jailer should chroot, change identity, drop capabilities and install seccomp. A wrong flag or a
+kernel difference silently does not. And the sweep does not observe a sandbox that an operation holds.
+**Decision.** After launch and before any configuration, the host reads the VMM's state from `/proc` and ends it on
+any miss. Afterwards, the sweep observes idle generations, and an execution, a snapshot capture and a restore in
+place observe the runtime they hold every quarter of `posture_recheck_interval`. A lost control ends the runtime
+with `SECURITY_CONTROL_FAILURE`; a paused guest is not resumed; nothing is repaired in place. A start in flight is
+not watched, because a runtime still being launched has not installed every control yet.
+**Consequences.** The interval is an upper bound for every control, which the relation
+`sweep_interval ≤ posture_recheck_interval / 4` makes checkable at startup. **Reversibility:** reversible.
 
-## ADR-014 — Exec: single-flight, no stdin, empty environment, per-exec cgroup
-**Decision.** One exec per sandbox at a time (the loser gets `STATE_CONFLICT` without a record). stdin is `/dev/null`;
-the environment is empty plus allow-listed request variables plus an explicit default `PATH`; commands run as uid/gid 1000; each gets a
-cgroup-v2 child with `pids.max` and `cgroup.kill` (falling back to `RLIMIT_NPROC`, and *reporting* the weaker `containment`);
-cancel arrives on a second connection; output is capped but fully counted.
-**Consequences.** Evidence is attributable to exactly one command; no interactive sessions in. **Reversibility:** reversible.
+## ADR-014 — Mode `none` is proven in three independent layers
+**Decision.** The VMM configuration has no network interface, which Firecracker itself reports; the VMM runs in
+an empty network namespace, which is checked by inode; the guest agent lists its interfaces and tries egress, and
+can only add a violation. The host-side layers are judged before the first vCPU instruction.
+**Consequences.** A compromised guest cannot talk the host into "verified". **Reversibility:** reversible.
 
-## ADR-015 — Guest init is a POSIX-sh PID 1, crash-only
-**Context.** Init is part of the guest's trusted computing base and must be small enough to read.
-**Decision.** A shell script (`acf-init`) that refuses to run unless it is PID 1 of a guest, mounts, hardens, grows the root filesystem, raises
-loopback, floors the clock, runs the agent as a child, and ends when the agent ends. Exiting PID 1 panics the kernel; with
-`panic=1 reboot=k` the VMM exits, so the host sees a dead VM rather than a half-alive one. Logic that can be pure (clock floor, block-name parsing) is tested as functions.
-**Consequences.** Readable and testable (`tests/scripts/test_acf_init.py`, real namespaces under root); no supervision tree. **Reversibility:** reversible.
+## ADR-015 — Mode `allowlist`: a namespace with no route, one constant segment, an unprivileged relay
+**Context.** The contract requires that loss of enforcement yields no connectivity, that traffic parsing runs
+without host privilege, and that a name entry cannot be turned into access to another address.
+**Decision.** Each sandbox has its own network namespace with a tap device, a packet filter and no route. The same
+private /30 is used in every namespace. All guest TCP is redirected to a relay socket and DNS goes to a resolver
+socket, both bound inside the namespace by the core and served by a `guest-traffic` process that runs in the host's
+namespace under its own uid and control group. A name entry allows a TLS connection whose server name equals the
+entry, to an address the resolver returned for that name to this sandbox within the binding lifetime.
+**Consequences.** If the relay dies or the filter is flushed there is nothing that carries a packet. Restored
+guests find the addresses they were captured with. Accepted limit: a TLS server name is the guest's claim, so two
+sites sharing one allowlisted address can both be reached. **Reversibility:** reversible; this is the backend's.
 
-## ADR-016 — MMIO transport; Firecracker's default boot args plus an explicit `pci=off`
-**Decision.** The host does not pass `--enable-pci`, so virtio devices are MMIO. The built-in boot-args default is Firecracker v1.17.0's documented
-default plus `pci=off`; a value in config or an image manifest *replaces* the default, so overrides must carry every flag they keep. The serial device is disabled (`8250.nr_uarts=0`).
-**Consequences.** Smaller device surface; debugging a guest has no console by default (`diagnostic_log` is opt-in because it is guest-influenced disk growth). **Reversibility:** reversible.
+## ADR-016 — The backend port is semantic and declares its capabilities
+**Decision.** The coordinator is written against `SandboxBackend` and `CapabilityProfile`. It reads the identifier
+pool size, per-runtime overhead and stop grace from the declared capabilities, never from Firecracker's
+configuration. A request needing an undeclared capability is refused before BEGIN. The VMM, the isolation
+controls, the network plumbing and storage placement are replaced together or not at all.
+**Consequences.** Every flow and all of recovery are tested against an in-memory backend. That backend is itself
+held to the port's rules by the conformance suite (`testing/conformance.rs`), the same assertions the Firecracker
+adapter must pass, so the double cannot drift from the port without a test failing. A second real backend is
+deliberately not written. **Reversibility:** reversible.
 
-## ADR-017 — The cgroup parent is created by a oneshot unit
-**Context.** The agent must not need write access to the root of the cgroup tree at runtime, and delegation must be re-created at every boot.
-**Decision.** `acf-cgroup.service` runs `acf-setup-cgroup` (POSIX sh) before the agent; `doctor` verifies that `cpu`, `memory` and `pids` are delegated.
-**Consequences.** A clear failure message when the host cannot provide the profile. **Reversibility:** reversible.
+## ADR-017 — Image identity is the hash of the manifest; files are hashed while they are copied
+**Decision.** An image is a kernel, a root filesystem and a manifest; its identity is the SHA-256 of the manifest
+bytes, which binds both file digests and records the guest agent and protocol versions. The host copies each file
+from an open descriptor while hashing it and compares, so the digest describes the bytes that are booted.
+**Consequences.** No window between check and use. Images are not bit-reproducible; identity is that of what was
+built. **Reversibility:** expensive (identities are recorded).
 
-## ADR-018 — `serve` enforces the same checks as `doctor`
-**Decision.** `doctor` prints one line per check; `serve` runs the identical checks and refuses to start on any FAIL (WARN is tolerated: swap, SMT, low headroom).
-**Consequences.** An isolation profile the machine cannot honour is a start-up error, not a runtime surprise. **Reversibility:** reversible.
+## ADR-018 — Full snapshots bound to the store; a restore is accepted only by an oracle
+**Decision.** A snapshot is CPU and device state, guest memory and the disk, each copied with its digest. The
+manifest's digest is held in the store. A restore checks integrity, then compatibility, loads into a new
+generation, and requires the guest to reproduce the probe taken before the capture. The switch to the new
+generation is one commit, and the old generation is retired afterwards.
+**Consequences.** "Verified restore" has a definition, and a failed restore never costs the caller their sandbox.
+Cost: snapshots are large and contain guest memory. The Firecracker backend does not claim that a restore reseeds
+guest entropy. **Reversibility:** expensive.
 
-## ADR-019 — Pins fail closed
-**Decision.** Image builds and the Firecracker installer refuse (exit 3) while a digest is `UNSET`. `--allow-unpinned` exists for development and is
-written into the manifest as `unpinned`. The lock files use a strict `KEY=VALUE` grammar parsed identically by bash and Python (a parity test feeds both the same inputs).
-**Consequences.** The repository ships *unpinned by honesty*: the first operator pins (see OPERATIONS §3). **Reversibility:** reversible.
+## ADR-019 — Execution: one at a time, an argument vector, no stdin, a host backstop
+**Decision.** One execution per sandbox. The command is an argument vector that no shell interprets. The
+environment is empty plus the names the profile allows. The guest gets a deadline and the host keeps a later one;
+when it passes the host ends the runtime. Output is capped per stream and fully counted. When no result can be
+obtained the operation is `UNKNOWN` and the runtime is ended.
+**Consequences.** Evidence is attributable to exactly one command. No interactive sessions. **Reversibility:**
+reversible.
 
-## ADR-020 — Image hygiene
-**Decision.** ext4 features are pinned in `scripts/mke2fs.conf` (the host's mke2fs defaults must not decide what the guest kernel needs);
-every setuid/setgid bit is stripped in each image's Dockerfile (`find / -xdev -type f \( -perm -4000 -o -perm -2000 \) -exec chmod a-s {} +`) and
-*asserted absent* in a running guest by a K test; the agent injects an explicit default `PATH` because the environment is empty;
-the guest agent is verified static by reading its ELF header, never by executing it.
-**Consequences.** No privilege-escalation binaries in the guest; reproducible filesystem features. **Reversibility:** reversible.
+## ADR-020 — Secrets travel by reference; material cannot be serialised
+**Decision.** A request names a secret; raw material in a request is refused. `SecretMaterial` implements neither
+`Clone` nor `Serialize` nor `Debug` output of its content, and is overwritten when dropped. Resolution happens
+inside the delivering operation. The shipped provider reads one trusted file per reference. The Firecracker backend
+declares `secret_injection: false`, so delivery is refused there before BEGIN.
+**Consequences.** The rule is structural rather than procedural. Delivery to a real guest is future work behind a
+declared capability. **Reversibility:** reversible.
 
-## ADR-021 — The Makefile is the gate
-**Decision.** CI calls make targets; guard tests fail if a workflow or a doc names a missing target, if `make release` could build with
-the test-only feature, or if `make ci` includes something CI never runs. Docs may only mention `` `make X` `` for targets that exist.
-**Consequences.** "Passed locally" and "passed in CI" mean the same thing. **Reversibility:** reversible.
+## ADR-021 — Schemas are generated from the types; the contract's tables are transcribed and tested
+**Decision.** The method table, role table, mode table, lifecycle relation and failure classes are written as
+code and each is compared with a transcription of the contract's table in a unit test. `host-api.json` and the
+file-format schemas are generated from the types, checked in, and a difference fails the build.
+**Consequences.** A method added in code without a contract change fails a test. A client cannot drift silently.
+**Reversibility:** reversible.
 
-## ADR-022 — KVM suites fail, never skip, when enabled
-**Decision.** `ACF_INTEGRATION=1` makes a missing environment an *error with a list of what is missing*; a suite that skips on a broken host would
-report success exactly where the isolation claims matter. Tests that depend only on admission/policy/state/exit-code semantics are marked `control_plane` and
-also run against the in-memory host loaded with the **shipped** config and policy. The driver is black-box (CLI + a raw wire client + `/proc`) and is itself tested.
-**Consequences.** Real coverage on every push for what needs no VM; honest skips otherwise. **Reversibility:** reversible.
+## ADR-022 — Telemetry decides nothing
+**Decision.** `emit` returns nothing and cannot fail. Events carry a per-activation sequence and, for committed
+changes, the commit sequence. Metric labels are closed vocabularies and the number of series is bounded. Security
+evidence never passes through telemetry: it is obtained at the call site or the operation fails.
+**Consequences.** A full disk changes no outcome and is visible as a counter. **Reversibility:** reversible.
 
-## ADR-023 — Dependency policy
-**Decision.** Versions were resolved against crates.io / PyPI / GitHub at write time, not from memory (see [DEPENDENCY_PROVENANCE.md](DEPENDENCY_PROVENANCE.md));
-manifests carry floors, locks (`Cargo.lock`, `uv.lock` ×2) are committed and used with `--locked`; the CLI's runtime surface is three libraries; GitHub Actions are pinned by full
-commit SHA (with the release tag in a trailing comment, resolved by `git ls-remote`) and Dependabot proposes bumps.
-**Consequences.** Reproducible builds; advisory scanning (`audit.yml`) must run where the advisory databases are reachable. **Reversibility:** reversible.
+## ADR-023 — Tests are named after the catalog; a test that cannot run is ignored, never passed
+**Decision.** One suite module per catalog section; each test carries its entry's id in its name. The rig
+restarts a host by opening the store again over the same disk and the same world of running fake runtimes, and it
+checks the joint-state invariants after every commit. Tests that need root are `#[ignore]`d with the reason and
+fail when asked for without it. `fsync` is skipped in test builds only, through one module that a release build
+compiles without the switch.
+**Consequences.** Cargo's own summary shows what did not run. **Reversibility:** reversible.
 
-## ADR-024 — Rust 2024; `unsafe` forbidden in the host
-**Decision.** Workspace lints: `unsafe_code = forbid`, `unwrap_used`/`panic`/`todo`/`dbg_macro` denied; the guest agent allows exactly one `unsafe` block (`pre_exec`, needed to join the per-exec cgroup and set `RLIMIT_NPROC`/`RLIMIT_CORE` between `fork` and `exec`) and documents why it is async-signal-safe.
-System interfaces go through `rustix` and `cap-std`. Release profile: `panic = "abort"`, LTO, overflow checks **on**.
+## ADR-024 — The Firecracker pin moves only with a run on real KVM
+**Context.** A snapshot is valid only on the Firecracker version that took it, and the API models are transcribed
+from one version's description. A newer release existed when this was written.
+**Decision.** The pin stays at `v1.17.0`, whose release digests are recorded. Moving it requires the integration
+suites to pass on a KVM host with the new binaries.
+**Consequences.** The host may trail upstream by a release. **Reversibility:** reversible.
+
+## ADR-025 — Dependencies are verified at write time and locked
+**Decision.** Versions were resolved against the registries when the code was written, not from memory
+([DEPENDENCY_PROVENANCE.md](DEPENDENCY_PROVENANCE.md)). Manifests carry floors, lock files are committed and builds
+use them. The TLS stack is built without TLS 1.2. GitHub Actions are pinned by commit.
+**Consequences.** Reproducible builds; advisory scanning must run where the advisory databases are reachable.
+**Reversibility:** reversible.
+
+## ADR-026 — Rust 2024; `unsafe` forbidden except one audited block in the guest
+**Decision.** Workspace lints forbid `unsafe` and deny `unwrap`, `panic`, `todo` and `dbg`. The guest agent allows
+one `unsafe` block (`pre_exec`, to join the per-execution control group and set resource limits between `fork` and
+`exec`) and documents why it is async-signal-safe. System interfaces go through `rustix` and `cap-std`. Release
+profile: `panic = "abort"`, thin LTO, overflow checks on.
 **Consequences.** A memory-safety bug has to come from a dependency or the kernel. **Reversibility:** reversible.
 
-## ADR-025 — The source archive is reproducible, self-describing and read as untrusted
-**Decision.** `make dist` builds the delivery ZIP with `tools/pack_zip.py`: members sorted by UTF-8 path under one top-level directory, every
-timestamp fixed at 1980-01-01, modes normalised to 0644/0755 (the executable bit is kept), no directory entries, deflate level 9, and an embedded
-`MANIFEST.sha256` in coreutils format. The exclusions mirror `.gitignore` (a test keeps the two in step); a symlink, a special file, an oversized file
-or a name with a control or direction-changing character is refused rather than skipped, and so is a root `MANIFEST.sha256` that is not exactly the
-manifest the tree would get (an unpacked archive's own manifest is accepted and regenerated, so unpack-then-repack gives the same archive; a stale one
-is refused until deleted). `tools/zip_to_markdown.py` turns an archive into one markdown
-page per file, the complete directory tree and an optional single-document bundle. It treats the archive as **untrusted**: member names, types, sizes
-(checked from the headers and again on the bytes read) and CRCs are verified, the manifest must match every file, nothing is written through a
-symbolic link or over an existing file without `--force`, and the first problem refuses the whole archive before anything is written.
-**Consequences.** Anyone with `sha256sum` can check the deliverable, and the same source always yields the same manifest. Byte-identical *archives* also
-need the same zlib build, so cross-machine comparison should use the manifest. The markdown export is lossless (a test parses every page of this
-repository back into the exact bytes of its source file) and therefore about as large as the source. **Reversibility:** reversible.
+## ADR-027 — Guest init is a POSIX-sh PID 1, crash-only
+**Decision.** `acf-init` refuses to run unless it is PID 1 of a guest, mounts, hardens, raises loopback, runs the
+agent as a child, and ends when the agent ends. Exiting PID 1 panics the kernel; with `panic=1 reboot=k` the VMM
+exits, so the host sees a dead runtime rather than a half-alive one.
+**Consequences.** Small enough to read and test. No supervision tree. **Reversibility:** reversible.
+
+## ADR-028 — MMIO transport; Firecracker's default boot arguments plus an explicit `pci=off`
+**Decision.** The host does not pass `--enable-pci`. The built-in boot arguments are Firecracker's documented
+default with `pci=off` spelled out; the serial device is disabled. A value in configuration or in an image manifest
+replaces the default, so an override must carry every flag it keeps.
+**Consequences.** A smaller device surface; a guest has no console unless `diagnostic_log` is turned on, which is
+off by default because it is guest-influenced disk growth. **Reversibility:** reversible.
+
+## ADR-029 — The cgroup parent is created by a oneshot unit, not by the core
+**Decision.** A unit creates the parent group and delegates `cpu`, `memory` and `pids` before the core starts;
+`doctor` verifies the delegation.
+**Consequences.** The core never writes to the root of the cgroup tree. **Reversibility:** reversible.
+
+## ADR-030 — Pins fail closed
+**Decision.** The Firecracker installer and the image builder refuse to proceed while a digest they need is
+`UNSET`. The lock files use a strict `KEY=VALUE` grammar parsed identically by shell and Python.
+**Consequences.** A root-executed binary is never installed on trust. The base-image and kernel pins are still
+`UNSET` in this repository: the first operator pins them. **Reversibility:** reversible.
+
+## ADR-031 — The Makefile is the gate; KVM suites fail, never skip, when enabled
+**Decision.** CI calls make targets, and guard tests fail if a workflow or a document names a target that does
+not exist or if the release build could include the test-only feature. With the integration switch set, a missing
+KVM environment is an error that lists what is missing.
+**Consequences.** "Passed locally" and "passed in CI" mean the same thing, and a suite cannot report success on a
+host where it verified nothing. **Reversibility:** reversible.
+
+## ADR-032 — The source archive is reproducible, self-describing and read as untrusted
+**Decision.** `tools/pack_zip.py` builds the delivery archive with sorted members, fixed timestamps, normalised
+modes and an embedded SHA-256 manifest. `tools/zip_to_markdown.py` turns an archive into markdown pages, the
+complete directory tree and an optional single-document bundle, and refuses an archive whose names, sizes, checksums
+or manifest do not hold before it writes anything.
+**Consequences.** Anyone with `sha256sum` can check the deliverable. **Reversibility:** reversible.
+
+## ADR-033 — The VMM and the jailer are pinned by digest in the host configuration and hashed before every launch
+**Decision.** `firecracker.firecracker_sha256` and `firecracker.jailer_sha256` hold the SHA-256 of the two
+installed files; the installer prints them. The host hashes both at startup, before it runs either even for
+`--version`, and again before every start and restore. A digest that is unset or different is a failed
+mandatory check at startup and an `INTEGRITY_FAILURE` at launch. The example configuration leaves both unset.
+**Why not the version alone.** A version is what a binary says about itself. A wrong build with the right
+version line, or a file replaced under a running host, would be run as root.
+**Why not a private verified copy.** Copying the binaries into the state root and running the copies would make
+the executed bytes exactly the hashed ones, as is done for kernels and root filesystems. It adds a second place
+a root-executed binary lives and a dependency on where that place is mounted. Hashing costs a few milliseconds
+per launch for a file of a few megabytes, and the window that remains is covered by the trusted-input rule.
+**Consequences.** A new host needs two more lines in its configuration before it creates a sandbox. Upgrading
+the binaries without the configuration stops new launches and nothing else. **Reversibility:** reversible.

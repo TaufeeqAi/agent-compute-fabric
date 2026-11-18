@@ -10,7 +10,7 @@ while hashing the bytes it copies and refuses the sandbox if they differ from th
 *identity* of an image is the sha256 of the manifest bytes, so any change — even whitespace — is a
 different image. This tool therefore writes deterministic bytes.
 
-The rules below mirror ``ImageManifest::validate`` in ``execution/host-agent/src/filesystem/images.rs``
+The rules below mirror ``ImageManifest::validate`` in ``execution/host-agent/src/storage/images.rs``
 (a cross-language golden test, ``tests/fixtures/image-manifest.golden.json``, pins both sides), and the
 output is validated against the committed ``schemas/image-manifest.schema.json`` in the test-suite.
 

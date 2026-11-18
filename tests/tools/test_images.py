@@ -1,4 +1,4 @@
-"""images/: the recipes, the init and the places that must agree with them (policy, host config, scripts, docs)."""
+"""images/: the recipes, the init and the places that must agree with them (safety profile, host config, scripts, docs)."""
 
 from __future__ import annotations
 
@@ -97,10 +97,10 @@ def test_nothing_in_a_recipe_floats(repo: Path, name: str) -> None:
     assert "@sha256" not in text, "digests live in images/images.lock, where scripts/pin-images.sh maintains them"
 
 
-def test_the_guest_user_is_the_one_the_default_policy_runs_commands_as(repo: Path) -> None:
-    policy = (repo / "policies" / "default.yaml").read_text()
-    uid = int(re.search(r"^\s*guest_uid:\s*(\d+)", policy, re.MULTILINE).group(1))  # type: ignore[union-attr]
-    gid = int(re.search(r"^\s*guest_gid:\s*(\d+)", policy, re.MULTILINE).group(1))  # type: ignore[union-attr]
+def test_the_guest_user_is_the_one_the_default_safety_profile_runs_commands_as(repo: Path) -> None:
+    profile = (repo / "profiles" / "default.yaml").read_text()
+    uid = int(re.search(r"^\s*guest_uid:\s*(\d+)", profile, re.MULTILINE).group(1))  # type: ignore[union-attr]
+    gid = int(re.search(r"^\s*guest_gid:\s*(\d+)", profile, re.MULTILINE).group(1))  # type: ignore[union-attr]
     layer = guest_layer(dockerfile(repo, "base"))
     assert f"getent group {gid} " in layer
     assert f"groupadd --gid {gid} " in layer
@@ -108,12 +108,12 @@ def test_the_guest_user_is_the_one_the_default_policy_runs_commands_as(repo: Pat
     assert f"useradd --uid {uid} --gid {gid} " in layer
     assert f"install -d -m 0755 -o {uid} -g {gid} /workspace" in layer
     build = (repo / "scripts" / "build-image.sh").read_text()
-    assert f"--owner /workspace={uid}:{gid}" in build, "build-image.sh must verify the ownership the policy depends on"
+    assert f"--owner /workspace={uid}:{gid}" in build, "build-image.sh must verify the ownership the profile depends on"
 
 
-def test_the_images_the_default_policy_offers_are_the_images_that_can_be_built(repo: Path) -> None:
-    policy = (repo / "policies" / "default.yaml").read_text()
-    offered = re.search(r"^\s*images:\s*\[([^\]]*)\]", policy, re.MULTILINE)
+def test_the_images_the_default_safety_profile_offers_are_the_images_that_can_be_built(repo: Path) -> None:
+    profile = (repo / "profiles" / "default.yaml").read_text()
+    offered = re.search(r"^\s*images:\s*\[([^\]]*)\]", profile, re.MULTILINE)
     assert offered is not None
     assert sorted(n.strip() for n in offered.group(1).split(",")) == sorted(RECIPES)
 
@@ -186,6 +186,7 @@ def test_every_shipped_shell_script_is_executable_and_has_a_shebang(repo: Path) 
     for path in [
         *(repo / "scripts").glob("*.sh"),
         repo / "scripts" / "acf-setup-cgroup",
+        repo / "scripts" / "acf-wait-ready",
         repo / "images" / "overlay" / "usr" / "local" / "sbin" / "acf-init",
     ]:
         assert path.stat().st_mode & 0o111, f"{path} is not executable"

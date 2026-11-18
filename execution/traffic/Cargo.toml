@@ -1,0 +1,23 @@
+[package]
+name = "acf-traffic"
+description = "Guest-traffic domain: the allowlist verdict, the allowlist-only resolver and the server-name-checking TCP relay. Parses guest-originated bytes and holds no host-mutation code."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+rustix = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

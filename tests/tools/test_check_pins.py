@@ -27,16 +27,19 @@ def _write_pinned_locks(tree: Path) -> None:
         p.write_text("\n".join(out) + "\n")
 
 
-def test_the_shipped_pins_are_consistent_even_though_digests_are_unset(repo: Path) -> None:
+def test_the_shipped_pins_are_consistent_even_though_some_digests_are_unset(repo: Path) -> None:
     assert check_pins.check(repo, require_pinned=False) == []
 
 
 def test_the_release_gate_names_every_unset_input(repo: Path) -> None:
     problems = "\n".join(check_pins.check(repo, require_pinned=True))
-    assert "SHA256_x86_64 is UNSET" in problems
-    assert "SHA256_aarch64 is UNSET" in problems
-    assert "BASE_DIGEST_python is UNSET" in problems
-    assert "KERNEL_SHA256_x86_64 is UNSET" in problems
+    # The VMM tarballs are pinned (two published sources agreed); the image inputs are not yet. The file name is
+    # part of what is compared: "KERNEL_SHA256_x86_64 is UNSET" contains "SHA256_x86_64 is UNSET".
+    assert "scripts/firecracker.lock: SHA256_x86_64 is UNSET" not in problems
+    assert "scripts/firecracker.lock: SHA256_aarch64 is UNSET" not in problems
+    assert "scripts/firecracker.lock" not in problems
+    assert "images/images.lock: BASE_DIGEST_python is UNSET" in problems
+    assert "images/images.lock: KERNEL_SHA256_x86_64 is UNSET" in problems
 
 
 def test_a_fully_pinned_tree_passes_the_release_gate(tree: Path) -> None:

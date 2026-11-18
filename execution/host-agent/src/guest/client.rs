@@ -2,10 +2,10 @@
 //!
 //! **Trust model.** The guest is untrusted. This client therefore:
 //! * bounds every frame it will read *before* allocating (`max_frame` derived from the run's own
-//!   output budget), so a hostile guest cannot make the host allocate more than the policy allows;
+//!   output budget), so a hostile guest cannot make the host allocate more than the safety profile allows;
 //! * re-enforces the output caps on whatever comes back ([`enforce_bounds`]) instead of trusting
 //!   the guest to have honoured them;
-//! * enforces its **own, later, deadline** (spec §18.3): the guest is told to stop at
+//! * enforces its **own, later, deadline** (contract EX-5): the guest is told to stop at
 //!   `timeout`, but if it does not, the host sends `Cancel`, waits a grace period, and then takes
 //!   the VM down through the [`VmBackstop`]. A guest that ignores its deadline cannot hold a
 //!   sandbox hostage.
@@ -54,16 +54,18 @@ pub struct GuestClient {
 fn map_frame(e: FrameError) -> AcfError {
     match e {
         FrameError::TooLarge { len, max } => {
-            AcfError::new(FailureClass::OutputLimit, format!("guest sent a {len}-byte frame, above the {max}-byte bound"))
+            AcfError::new(FailureClass::ProtocolError, format!("guest sent a {len}-byte frame, above the {max}-byte bound"))
                 .with_possible_side_effect()
         }
         FrameError::Decode(e) => {
-            AcfError::new(FailureClass::CorruptInput, format!("undecodable guest response: {e}")).with_possible_side_effect()
+            AcfError::new(FailureClass::IntegrityFailure, format!("undecodable guest response: {e}")).with_possible_side_effect()
         }
         FrameError::Eof | FrameError::Truncated => {
-            AcfError::new(FailureClass::BackendCrash, "guest connection closed unexpectedly").with_possible_side_effect()
+            AcfError::new(FailureClass::DependencyUnavailable, "guest connection closed unexpectedly").with_possible_side_effect()
         }
-        FrameError::Io(e) => AcfError::new(FailureClass::BackendCrash, format!("guest connection error: {e}")).with_possible_side_effect(),
+        FrameError::Io(e) => {
+            AcfError::new(FailureClass::DependencyUnavailable, format!("guest connection error: {e}")).with_possible_side_effect()
+        }
     }
 }
 
@@ -130,19 +132,19 @@ impl GuestClient {
         let mut s = self.connector.connect().await?;
         let resp = timeout(SHORT_RPC, self.rpc(&mut s, &GuestRequest::Hello { protocol_version: GUEST_PROTOCOL_VERSION }, 64 * 1024))
             .await
-            .map_err(|_| AcfError::new(FailureClass::BackendUnavailable, "guest agent did not answer Hello in time"))??;
+            .map_err(|_| AcfError::new(FailureClass::DependencyUnavailable, "guest agent did not answer Hello in time"))??;
         match resp {
             GuestResponse::Hello { protocol_version, agent_version, boot_id } if protocol_version == GUEST_PROTOCOL_VERSION => {
                 Ok((s, GuestHello { agent_version, boot_id }))
             }
             GuestResponse::Hello { protocol_version, .. } => Err(AcfError::new(
-                FailureClass::SchemaMismatch,
+                FailureClass::IncompatibleRuntime,
                 format!("guest agent speaks protocol {protocol_version}, host speaks {GUEST_PROTOCOL_VERSION}"),
             )),
             GuestResponse::Error { message, .. } => {
-                Err(AcfError::new(FailureClass::SchemaMismatch, format!("guest rejected Hello: {message}")))
+                Err(AcfError::new(FailureClass::IncompatibleRuntime, format!("guest rejected Hello: {message}")))
             }
-            other => Err(AcfError::new(FailureClass::CorruptInput, format!("unexpected reply to Hello: {other:?}"))),
+            other => Err(AcfError::new(FailureClass::IntegrityFailure, format!("unexpected reply to Hello: {other:?}"))),
         }
     }
 
@@ -158,12 +160,12 @@ impl GuestClient {
             let err = match self.hello().await {
                 Ok(h) => return Ok(h),
                 // A version mismatch will not fix itself by waiting.
-                Err(e) if e.class == FailureClass::SchemaMismatch => return Err(e),
+                Err(e) if e.class == FailureClass::IncompatibleRuntime => return Err(e),
                 Err(e) => e,
             };
             if Instant::now() + backoff >= deadline {
                 return Err(AcfError::new(
-                    FailureClass::BackendUnavailable,
+                    FailureClass::DependencyUnavailable,
                     format!("guest agent not ready within {total:?}: {}", err.message),
                 ));
             }
@@ -176,11 +178,11 @@ impl GuestClient {
         let (mut s, _) = self.connect_hello().await?;
         match timeout(SHORT_RPC, self.rpc(&mut s, &GuestRequest::Probe { nonce: nonce.to_owned() }, 64 * 1024))
             .await
-            .map_err(|_| AcfError::new(FailureClass::TimeoutUnknown, "guest probe timed out"))??
+            .map_err(|_| AcfError::new(FailureClass::Timeout, "guest probe timed out"))??
         {
             GuestResponse::Probe(p) if p.nonce == nonce => Ok(p),
-            GuestResponse::Probe(_) => Err(AcfError::new(FailureClass::CorruptInput, "guest probe echoed the wrong nonce")),
-            other => Err(AcfError::new(FailureClass::CorruptInput, format!("unexpected reply to Probe: {other:?}"))),
+            GuestResponse::Probe(_) => Err(AcfError::new(FailureClass::IntegrityFailure, "guest probe echoed the wrong nonce")),
+            other => Err(AcfError::new(FailureClass::IntegrityFailure, format!("unexpected reply to Probe: {other:?}"))),
         }
     }
 
@@ -188,10 +190,10 @@ impl GuestClient {
         let (mut s, _) = self.connect_hello().await?;
         match timeout(Duration::from_secs(15), self.rpc(&mut s, &GuestRequest::NetProbe, 64 * 1024))
             .await
-            .map_err(|_| AcfError::new(FailureClass::TimeoutUnknown, "guest net probe timed out"))??
+            .map_err(|_| AcfError::new(FailureClass::Timeout, "guest net probe timed out"))??
         {
             GuestResponse::NetProbe(r) => Ok(r),
-            other => Err(AcfError::new(FailureClass::CorruptInput, format!("unexpected reply to NetProbe: {other:?}"))),
+            other => Err(AcfError::new(FailureClass::IntegrityFailure, format!("unexpected reply to NetProbe: {other:?}"))),
         }
     }
 
@@ -241,14 +243,14 @@ impl GuestClient {
                             Ok(GuestExecOutcome { result: er, host_deadline_hit, vm_killed: false })
                         }
                         GuestResponse::ExecResult(er) => Err(AcfError::new(
-                            FailureClass::CorruptInput,
+                            FailureClass::IntegrityFailure,
                             format!("guest answered exec `{}` while `{}` was in flight", er.exec_id, req.exec_id),
                         ).with_possible_side_effect()),
                         GuestResponse::Error { code, message } => Err(AcfError::new(
-                            FailureClass::BackendUnavailable,
+                            FailureClass::DependencyUnavailable,
                             format!("guest refused exec ({code:?}): {message}"),
                         )),
-                        other => Err(AcfError::new(FailureClass::CorruptInput, format!("unexpected reply to Exec: {other:?}")).with_possible_side_effect()),
+                        other => Err(AcfError::new(FailureClass::IntegrityFailure, format!("unexpected reply to Exec: {other:?}")).with_possible_side_effect()),
                     };
                 }
                 () = cancel.cancelled(), if cancel_sent_at.is_none() => {
@@ -331,12 +333,14 @@ mod tests {
             command: ResolvedCommand {
                 argv: vec!["/bin/sh".into(), "-c".into(), script.into()],
                 env: BTreeMap::from([("PATH".into(), "/usr/bin:/bin".into())]),
+                secret_env: BTreeMap::new(),
                 cwd: "/".into(),
                 limits: RunLimits { timeout_ms, max_pids: 4096, max_stdout_bytes: 4096, max_stderr_bytes: 4096 },
                 uid: 0,
                 gid: 0,
             },
             grace: Duration::from_millis(grace_ms),
+            secrets: Vec::new(),
         }
     }
 
@@ -515,7 +519,7 @@ mod tests {
             }
         });
         let e = client(&path).exec(&req("e6", "x", 5000, 500), CancellationToken::new(), &Killer::default()).await.unwrap_err();
-        assert_eq!(e.class, FailureClass::OutputLimit);
+        assert_eq!(e.class, FailureClass::ProtocolError, "a frame above the bound is a framing violation");
         assert!(!e.is_definite(), "a command may have run, so the side effect is Possible");
     }
 }

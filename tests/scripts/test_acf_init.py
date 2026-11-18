@@ -367,6 +367,98 @@ def test_render_hosts_makes_localhost_and_the_machine_name_resolve(shell: str, s
 
 
 @pytest.mark.parametrize("shell", SHELLS)
+def test_render_resolv_takes_over_the_resolver_the_host_chose(shell: str, sh: ShellRunner, lab: Lab) -> None:
+    """In network mode `allowlist` the kernel records the resolver from the `ip=` argument in /proc/net/pnp."""
+    pnp = lab.root / "pnp"
+    pnp.write_text("#PROTO: MANUAL\nnameserver 10.201.0.1\n")
+    result = sh(shell, 'render_resolv "$1"', str(pnp))
+    assert (result.returncode, result.stdout, result.stderr) == (0, "nameserver 10.201.0.1\n", "")
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_render_resolv_takes_only_well_formed_ipv4_nameservers(shell: str, sh: ShellRunner, lab: Lab) -> None:
+    """Nothing but digits and dots reaches /etc/resolv.conf, whatever the file says; the last line needs no newline."""
+    pnp = lab.root / "pnp"
+    pnp.write_text(
+        "#MANUAL\n"
+        "nameserver 0.0.0.0\n"
+        "nameserver evil;reboot\n"
+        "nameserver $(reboot)\n"
+        "nameserver fe80::1\n"
+        "nameserver\n"
+        "domain example.test\n"
+        "bootserver 10.0.0.9\n"
+        "nameserver 10.201.0.1 trailing words\n"
+        "nameserver 192.0.2.7"
+    )
+    result = sh(shell, 'render_resolv "$1"', str(pnp))
+    assert (result.returncode, result.stderr) == (0, "")
+    assert result.stdout == "nameserver 10.201.0.1\nnameserver 192.0.2.7\n"
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_render_resolv_says_nothing_for_a_sandbox_without_a_network(shell: str, sh: ShellRunner, lab: Lab) -> None:
+    empty = lab.root / "pnp-empty"
+    empty.write_text("")
+    for pnp in (empty, lab.root / "no-such-file"):
+        result = sh(shell, 'render_resolv "$1"', str(pnp))
+        assert (result.returncode, result.stdout, result.stderr) == (0, "", ""), pnp
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_set_resolver_writes_resolv_conf_only_when_the_host_gave_the_sandbox_a_network(
+    shell: str, sh: ShellRunner, lab: Lab
+) -> None:
+    pnp = lab.root / "pnp"
+    pnp.write_text("#PROTO: MANUAL\nnameserver 10.201.0.1\n")
+    with_network = lab.root / "etc-allowlist"
+    with_network.mkdir()
+    result = sh(shell, 'set_resolver "$1" "$2"', str(pnp), str(with_network))
+    assert (result.returncode, result.stderr) == (0, "")
+    assert (with_network / "resolv.conf").read_text() == "nameserver 10.201.0.1\n"
+
+    # Mode `none`: no resolver exists, so no file is written. A stale one would only produce timeouts.
+    no_network = lab.root / "etc-none"
+    no_network.mkdir()
+    (lab.root / "pnp-empty").write_text("")
+    result = sh(shell, 'set_resolver "$1" "$2"', str(lab.root / "pnp-empty"), str(no_network))
+    assert (result.returncode, result.stderr) == (0, "")
+    assert list(no_network.iterdir()) == []
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_set_resolver_replaces_a_resolv_conf_that_is_a_dangling_link(shell: str, sh: ShellRunner, lab: Lab) -> None:
+    """A base image may ship /etc/resolv.conf as a link into a directory that does not exist in the guest."""
+    pnp = lab.root / "pnp"
+    pnp.write_text("nameserver 10.201.0.1\n")
+    etc = lab.root / "etc"
+    etc.mkdir()
+    (etc / "resolv.conf").symlink_to(lab.root / "run" / "resolver" / "stub-resolv.conf")
+    result = sh(shell, 'set_resolver "$1" "$2"', str(pnp), str(etc))
+    assert (result.returncode, result.stderr) == (0, "")
+    assert not (etc / "resolv.conf").is_symlink()
+    assert (etc / "resolv.conf").read_text() == "nameserver 10.201.0.1\n"
+    assert not (lab.root / "run").exists(), "nothing is written through the link"
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_set_resolver_reports_failure_quietly_so_that_init_can_warn(shell: str, sh: ShellRunner, lab: Lab) -> None:
+    """`main` turns the failure into its own warning; the shell's "cannot create" must not reach the log."""
+    pnp = lab.root / "pnp"
+    pnp.write_text("nameserver 10.201.0.1\n")
+    result = sh(shell, 'set_resolver "$1" "$2" || echo could-not-write', str(pnp), str(lab.root / "no-etc"))
+    assert (result.returncode, result.stdout, result.stderr) == (0, "could-not-write\n", "")
+
+
+def test_main_sets_the_resolver_after_loopback_and_only_warns_when_it_cannot() -> None:
+    """The resolver is comfort, not contract: an address entry of the allowlist works without it."""
+    body = INIT.read_text().split("\nmain() {\n", 1)[1].split("\n}\n", 1)[0]
+    steps = [line.strip().split(" ", 1)[0] for line in body.splitlines() if line.strip()]
+    assert steps.index("loopback_up") < steps.index("set_resolver") < steps.index("supervise")
+    assert 'set_resolver || warn "cannot write /etc/resolv.conf' in body
+
+
+@pytest.mark.parametrize("shell", SHELLS)
 def test_fatal_logs_and_exits_with_status_1_and_warn_only_logs(shell: str, sh: ShellRunner) -> None:
     result = sh(shell, 'warn "just a heads-up"; echo still-running; fatal "cannot go on"; echo not-reached')
     assert result.returncode == 1

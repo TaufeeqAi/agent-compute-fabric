@@ -1,9 +1,13 @@
-"""``acf-local snapshot ...`` — create, restore, list, delete.
+"""``acf-local snapshot ...`` — create, restore, delete, list.
 
-Restore is a *rollback with proof*: the host replaces the sandbox with a **new generation** built
-from the snapshot's exact objects, and answers only after a deterministic guest probe confirmed the
-restored state (spec §20). The CLI's job is just to name the right things and say what happened,
-including the honest caveat the host attaches about restored-clone uniqueness.
+A snapshot is identified by ``snapshot_id`` + ``snapshot_generation``; its name is an alias.
+
+Restore has two distinct forms, and the command line makes the choice explicit:
+
+* ``--into SANDBOX`` restores **in place**: the host builds a *new generation* of that sandbox from
+  the snapshot, verifies it, and only then makes it current. A failed restore never costs the
+  caller the sandbox they had. The sandbox keeps its expiry.
+* ``--new`` restores **as a new sandbox** (generation 1), with its own name and lifetime.
 """
 
 from __future__ import annotations
@@ -12,141 +16,180 @@ from typing import Annotated
 
 import typer
 
-from acf_cli.client import raise_for_status
-from acf_cli.common import JsonOption, client_of, confirm_destructive, guard
-from acf_cli.errors import InvalidArgument, LookupFailure, Rejected
-from acf_cli.models import (
+from acf_cli.client import expect
+from acf_cli.common import (
+    AllOption,
+    ChangedSinceOption,
+    ExpectedGenerationOption,
+    IfRevisionOption,
+    JsonOption,
+    LimitOption,
+    OperationIdOption,
+    TimeoutOption,
+    WaitOption,
+    YesOption,
+    alias_of,
+    client_of,
+    conclude,
+    confirm_destructive,
+    guard,
+    operation_id_of,
+    timeout_of,
+)
+from acf_cli.errors import InvalidArgument
+from acf_cli.render import print_json, render_listing_footer, render_snapshot, render_snapshots
+from acf_cli.requests import (
     RestoreExisting,
     RestoreNew,
-    SandboxView,
     SnapshotCreateParams,
-    SnapshotCreateRequest,
-    SnapshotDeleteRequest,
     SnapshotRestoreParams,
-    SnapshotRestoreRequest,
-    SnapshotView,
+    snapshot_create,
+    snapshot_delete,
+    snapshot_restore,
 )
-from acf_cli.render import print_json, render_sandbox, render_snapshot, render_snapshots
-from acf_cli.resolve import expect, list_snapshots, only_live_sandbox, resolve_sandbox, resolve_snapshot
+from acf_cli.resolve import list_snapshots, resolve_snapshot, sandbox_target
+from acf_cli.responses import OperationView, SnapshotBody
+from acf_cli.sandbox import LifetimeOpt, sandbox_of
+from acf_cli.units import parse_cursor, parse_whole_seconds
 
-app = typer.Typer(help="Create, restore, list and delete snapshots.", no_args_is_help=True)
+app = typer.Typer(help="Create, restore, delete and list snapshots.", no_args_is_help=True)
+
+SnapshotArg = Annotated[str, typer.Argument(help="Snapshot id (snp-...) or name.")]
+SnapshotGenerationOpt = Annotated[
+    int | None,
+    typer.Option(
+        "--snapshot-generation",
+        min=1,
+        help="The snapshot's generation. Default: looked up. With an id, giving it avoids the lookup.",
+        show_default=False,
+    ),
+]
+
+
+def snapshot_of(view: OperationView) -> None:
+    """Show the snapshot an operation produced."""
+    render_snapshot(expect(view.result, SnapshotBody).data)
 
 
 @app.command("create")
 @guard
 def create(
     ctx: typer.Context,
-    name: Annotated[str | None, typer.Argument(help="Snapshot name (unique). Omit for an unnamed snapshot.")] = None,
-    sandbox: Annotated[
-        str | None, typer.Option("--sandbox", "-s", help="Sandbox id or name. Default: the only running sandbox.")
+    sandbox: Annotated[str, typer.Argument(help="Sandbox id (sbx-...) or name. It must be idle.")],
+    name: Annotated[
+        str | None, typer.Option("--name", help="Alias for the snapshot, unique among your own snapshots.")
     ] = None,
+    expected_generation: ExpectedGenerationOption = None,
+    if_revision: IfRevisionOption = None,
+    operation_id: OperationIdOption = None,
+    wait: WaitOption = True,
+    timeout: TimeoutOption = None,
     as_json: JsonOption = False,
 ) -> None:
-    """Snapshot a running sandbox (its memory, device state and disk)."""
+    """Snapshot an idle sandbox: its memory, device state and disk. The guest is paused for the capture."""
+    alias = alias_of(name, "--name")
     client = client_of(ctx)
-    view = resolve_sandbox(client, sandbox) if sandbox else only_live_sandbox(client)
-    params = SnapshotCreateParams(sandbox_id=view.sandbox_id, expected_generation=view.generation, name=name)
-    snap = expect(raise_for_status(client.mutate_slow(SnapshotCreateRequest(params=params))), SnapshotView)
-    if as_json:
-        print_json(snap)
-    else:
-        render_snapshot(snap)
+    target = sandbox_target(client, sandbox, expected_generation=expected_generation, if_revision=if_revision)
+    params = SnapshotCreateParams(
+        sandbox_id=target.sandbox_id,
+        expected_generation=target.expected_generation,
+        if_revision=target.if_revision,
+        name=alias,
+    )
+    outcome = client.submit(
+        snapshot_create(params), operation_id=operation_id_of(operation_id), wait=wait, timeout_s=timeout_of(timeout)
+    )
+    conclude(outcome, as_json=as_json, show=snapshot_of)
 
 
 @app.command("restore")
 @guard
 def restore(
     ctx: typer.Context,
-    snapshot: Annotated[str, typer.Argument(help="Snapshot id or name.")],
-    sandbox: Annotated[
+    snapshot: SnapshotArg,
+    into: Annotated[
         str | None,
-        typer.Option("--sandbox", "-s", help="Roll this sandbox back (default: the snapshot's source sandbox)."),
+        typer.Option("--into", help="Restore in place: a new generation of this sandbox (id or name)."),
     ] = None,
-    new: Annotated[
-        bool, typer.Option("--new", help="Restore into a brand-new sandbox instead of rolling one back.")
-    ] = False,
-    name: Annotated[str | None, typer.Option("--name", help="Name for the new sandbox (with --new).")] = None,
+    new: Annotated[bool, typer.Option("--new", help="Restore as a brand-new sandbox.")] = False,
+    name: Annotated[str | None, typer.Option("--name", help="With --new: alias of the new sandbox.")] = None,
+    lifetime: LifetimeOpt = None,
+    snapshot_generation: SnapshotGenerationOpt = None,
+    expected_generation: ExpectedGenerationOption = None,
+    if_revision: IfRevisionOption = None,
+    operation_id: OperationIdOption = None,
+    wait: WaitOption = True,
+    timeout: TimeoutOption = None,
     as_json: JsonOption = False,
 ) -> None:
-    """Return a sandbox to a snapshot and verify it (a new generation of the same sandbox)."""
-    if new and sandbox:
-        raise InvalidArgument("--new and --sandbox are mutually exclusive")
-    if name and not new:
-        raise InvalidArgument("--name only applies with --new")
+    """Restore a snapshot, in place (--into) or as a new sandbox (--new), and verify the result."""
+    if new == (into is not None):
+        raise InvalidArgument(
+            "say where to restore: --into SANDBOX (in place, a new generation) or --new (a new sandbox)"
+        )
+    if not new and (name is not None or lifetime is not None):
+        raise InvalidArgument("--name and --lifetime apply to --new; a restore in place keeps the sandbox's own")
+    if new and (expected_generation is not None or if_revision is not None):
+        raise InvalidArgument("--expected-generation and --if-revision apply to --into")
+    alias = alias_of(name, "--name")
+    seconds = parse_whole_seconds(lifetime, what="--lifetime") if lifetime else None
     client = client_of(ctx)
-    snap = resolve_snapshot(client, snapshot)
+    ref = resolve_snapshot(client, snapshot, generation=snapshot_generation)
     target: RestoreExisting | RestoreNew
-    if new:
-        target = RestoreNew(name=name)
+    if into is not None:
+        token = sandbox_target(client, into, expected_generation=expected_generation, if_revision=if_revision)
+        target = RestoreExisting(
+            sandbox_id=token.sandbox_id,
+            expected_generation=token.expected_generation,
+            if_revision=token.if_revision,
+        )
     else:
-        view = _rollback_target(ctx, snap, sandbox)
-        target = RestoreExisting(sandbox_id=view.sandbox_id, expected_generation=view.generation)
-    params = SnapshotRestoreParams(snapshot=snap.snapshot, target=target)
-    result = expect(raise_for_status(client.mutate_slow(SnapshotRestoreRequest(params=params))), SandboxView)
-    if as_json:
-        print_json(result)
-    else:
-        render_sandbox(result)
-
-
-def _rollback_target(ctx: typer.Context, snap: SnapshotView, sandbox: str | None) -> SandboxView:
-    client = client_of(ctx)
-    if sandbox:
-        return resolve_sandbox(client, sandbox)
-    if snap.source_sandbox is None:
-        raise LookupFailure("this snapshot has no recorded source sandbox", hint="pass --sandbox <name-or-id> or --new")
-    source_id = snap.source_sandbox[0]
-    try:
-        return resolve_sandbox(client, source_id)
-    except Rejected as e:
-        if e.failure_class == "NOT_FOUND":
-            raise LookupFailure(
-                f"the snapshot's source sandbox {source_id} no longer exists",
-                hint="restore into a new sandbox with --new (or name another sandbox with --sandbox)",
-            ) from e
-        raise
-
-
-@app.command("list")
-@guard
-def list_(ctx: typer.Context, as_json: JsonOption = False) -> None:
-    """List snapshots."""
-    items = list_snapshots(client_of(ctx))
-    if as_json:
-        print_json(items)
-    else:
-        render_snapshots(items)
-
-
-@app.command("inspect")
-@guard
-def inspect(
-    ctx: typer.Context,
-    snapshot: Annotated[str, typer.Argument(help="Snapshot id or name.")],
-    as_json: JsonOption = False,
-) -> None:
-    """Show one snapshot in detail."""
-    snap = resolve_snapshot(client_of(ctx), snapshot)
-    if as_json:
-        print_json(snap)
-    else:
-        render_snapshot(snap)
+        target = RestoreNew(name=alias, lifetime_secs=seconds)
+    outcome = client.submit(
+        snapshot_restore(SnapshotRestoreParams(snapshot=ref, target=target)),
+        operation_id=operation_id_of(operation_id),
+        wait=wait,
+        timeout_s=timeout_of(timeout),
+    )
+    conclude(outcome, as_json=as_json, show=sandbox_of)
 
 
 @app.command("delete")
 @guard
 def delete(
     ctx: typer.Context,
-    snapshot: Annotated[str, typer.Argument(help="Snapshot id or name.")],
-    yes: Annotated[bool, typer.Option("--yes", "-y", help="Do not ask for confirmation.")] = False,
+    snapshot: SnapshotArg,
+    snapshot_generation: SnapshotGenerationOpt = None,
+    yes: YesOption = False,
+    operation_id: OperationIdOption = None,
+    wait: WaitOption = True,
+    timeout: TimeoutOption = None,
     as_json: JsonOption = False,
 ) -> None:
-    """Delete a snapshot and its stored state. Irreversible."""
+    """Delete a snapshot and its stored state. Irreversible. Refused while something still depends on it."""
     client = client_of(ctx)
-    snap = resolve_snapshot(client, snapshot)
-    confirm_destructive(f"delete snapshot {snap.snapshot.snapshot_id} ({snap.name or 'unnamed'})", assume_yes=yes)
-    result = expect(raise_for_status(client.mutate_slow(SnapshotDeleteRequest(params=snap.snapshot))), SnapshotView)
+    ref = resolve_snapshot(client, snapshot, generation=snapshot_generation)
+    confirm_destructive(f"delete snapshot {ref.snapshot_id} (generation {ref.snapshot_generation})", assume_yes=yes)
+    outcome = client.submit(
+        snapshot_delete(ref), operation_id=operation_id_of(operation_id), wait=wait, timeout_s=timeout_of(timeout)
+    )
+    conclude(outcome, as_json=as_json, show=snapshot_of)
+
+
+@app.command("list")
+@guard
+def list_(
+    ctx: typer.Context,
+    changed_since: ChangedSinceOption = None,
+    limit: LimitOption = None,
+    all_pages: AllOption = False,
+    as_json: JsonOption = False,
+) -> None:
+    """List snapshots. With --changed-since: only what changed after that cursor, deleted ones included."""
+    cursor = parse_cursor(changed_since) if changed_since is not None else None
+    listing = list_snapshots(client_of(ctx), changed_since=cursor, limit=limit, follow=all_pages)
     if as_json:
-        print_json(result)
+        print_json(listing.to_wire())
     else:
-        render_snapshot(result)
+        render_snapshots(listing.items)
+        render_listing_footer(len(listing.items), listing.cursor, more=listing.more, as_of=listing.as_of)

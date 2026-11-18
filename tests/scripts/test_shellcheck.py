@@ -18,9 +18,13 @@ REPO = Path(__file__).resolve().parents[2]
 SCRIPTS = [
     *sorted((REPO / "scripts").glob("*.sh")),
     REPO / "scripts/acf-setup-cgroup",
+    REPO / "scripts/acf-wait-ready",
     REPO / "scripts/lib/common.sh",
     REPO / "images/overlay/usr/local/sbin/acf-init",
 ]
+
+# Not source: build output, environments, git's own sample hooks, and the ignored planning material.
+NOT_SOURCE = {"target", ".venv", "node_modules", "dist", ".git", "artifacts"}
 
 pytestmark = pytest.mark.skipif(
     shutil.which("shellcheck") is None, reason="shellcheck is not installed (uv sync installs it)"
@@ -31,11 +35,7 @@ def test_the_list_covers_every_shell_script_in_the_repository() -> None:
     """A script added without a test is a script nobody lints: find shell files by shebang, not by name."""
     found: set[Path] = set()
     for path in REPO.rglob("*"):
-        if (
-            path.is_file()
-            and not path.is_symlink()
-            and not {"target", ".venv", "node_modules", "dist"} & set(path.relative_to(REPO).parts)
-        ):
+        if path.is_file() and not path.is_symlink() and not NOT_SOURCE & set(path.relative_to(REPO).parts):
             try:
                 head = path.open("rb").read(64)
             except OSError:

@@ -165,3 +165,253 @@ def cgroup_dir(pid: int) -> Path:
 
 def cgroup_value(directory: Path, name: str) -> str:
     return (directory / name).read_text().strip()
+
+
+def cgroup_pids(directory: Path) -> list[int]:
+    """The processes a control group holds right now (empty when the group does not exist)."""
+    try:
+        text = (directory / "cgroup.procs").read_text()
+    except OSError:
+        return []
+    return [int(line) for line in text.split() if line.isdigit()]
+
+
+# ------------------------------------------------------------------------------------------- which process is it
+def parse_stat(text: str) -> list[str]:
+    """The fields of ``/proc/PID/stat`` from the third one (the state) on.
+
+    The second field, the command name, may itself contain spaces and parentheses, so the rest starts after the
+    LAST ``)``. Index 0 is the state, index 1 the parent pid, index 19 the start time in clock ticks.
+    """
+    return text.rpartition(")")[2].split()
+
+
+def start_time_ticks(pid: int) -> int | None:
+    """When ``pid`` started, in clock ticks since boot; ``None`` when there is no such process (a zombie has exited)."""
+    try:
+        fields = parse_stat((PROC / str(pid) / "stat").read_text())
+    except OSError:
+        return None
+    if len(fields) < 20 or fields[0] in {"Z", "X"}:
+        return None
+    return int(fields[19])
+
+
+def process_alive(pid: int, started_at_ticks: int) -> bool:
+    """Is the process with exactly this identity still running on THIS machine?
+
+    The host identifies a process by ``(pid, start time)`` because a pid alone can be recycled: a different process
+    that reuses the number is not the one that was asked about.
+    """
+    return start_time_ticks(pid) == started_at_ticks
+
+
+def parent_of(pid: int) -> int | None:
+    try:
+        fields = parse_stat((PROC / str(pid) / "stat").read_text())
+    except OSError:
+        return None
+    return int(fields[1]) if len(fields) > 1 else None
+
+
+def all_pids() -> list[int]:
+    return sorted(int(entry.name) for entry in PROC.iterdir() if entry.name.isdigit())
+
+
+def children_of(pid: int) -> list[int]:
+    """The processes whose parent is ``pid``."""
+    return [child for child in all_pids() if child != pid and parent_of(child) == pid]
+
+
+def executable(pid: int) -> Path | None:
+    """The file ``pid`` executes, as the kernel names it; ``None`` when it cannot be read (gone, or not ours)."""
+    try:
+        return (PROC / str(pid) / "exe").readlink()
+    except OSError:
+        return None
+
+
+def command_line(pid: int) -> list[str]:
+    """The argument vector of ``pid`` (empty when it cannot be read)."""
+    try:
+        raw = (PROC / str(pid) / "cmdline").read_bytes()
+    except OSError:
+        return []
+    return [part.decode("utf-8", errors="replace") for part in raw.split(b"\0") if part]
+
+
+def pids_with_argument(argument: str) -> list[int]:
+    """Every live process that has ``argument`` in its argument vector (a generation's host-derived id names its VMM)."""
+    return [pid for pid in all_pids() if argument in command_line(pid) and start_time_ticks(pid) is not None]
+
+
+def pids_running_as(uid: int) -> list[int]:
+    """Every live process whose real, effective, saved or filesystem uid is ``uid``."""
+    found: list[int] = []
+    for pid in all_pids():
+        try:
+            status = proc_status(pid)
+        except OSError:
+            continue  # it exited while we looked
+        if "Uid" in status and uid in ids(status, "Uid") and start_time_ticks(pid) is not None:
+            found.append(pid)
+    return found
+
+
+def file_identities(pid: int) -> dict[tuple[int, int], str]:
+    """``(device, inode) -> where`` for every file ``pid`` holds open or has mapped.
+
+    Two names of one file (a hard link, a path seen through another root directory) have the same identity, so this
+    answers "does this process still use that file?" whatever name it was opened by.
+    """
+    found: dict[tuple[int, int], str] = {}
+    for kind in ("fd", "map_files"):
+        try:
+            entries = list((PROC / str(pid) / kind).iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            try:
+                info = entry.stat()
+            except OSError:
+                continue  # closed or unmapped while we looked
+            found.setdefault((info.st_dev, info.st_ino), f"{kind}/{entry.name}")
+    return found
+
+
+def inet_sockets_in_namespace_of(holder: int, namespace_of: int) -> list[InetSocket]:
+    """The network sockets ``holder`` holds that live in the network namespace of ``namespace_of``.
+
+    A process can hold a socket that was created in another namespace (the guest-traffic process holds the two
+    sockets of its sandbox's namespace); such a socket appears in that namespace's tables, not in the holder's own.
+    """
+    inodes = socket_inodes(holder)
+    found: list[InetSocket] = []
+    for table in INET_TABLES:
+        try:
+            text = (PROC / str(namespace_of) / "net" / table).read_text()
+        except OSError:
+            continue
+        found += parse_inet_table(table, text, inodes)
+    return found
+
+
+# ------------------------------------------------------------------------------------------- where bytes live
+_SCAN_CHUNK = 8 << 20
+
+
+def file_contains(path: Path, needle: bytes) -> bool:
+    """Whether the file holds ``needle`` anywhere (read in chunks, so a disk image of any size can be searched)."""
+    overlap = b""
+    with path.open("rb") as stream:
+        while True:
+            chunk = stream.read(_SCAN_CHUNK)
+            if not chunk:
+                return False
+            if needle in overlap + chunk:
+                return True
+            overlap = chunk[-(len(needle) - 1) :] if len(needle) > 1 else b""
+
+
+def parse_maps(text: str) -> list[tuple[int, int, str]]:
+    """``(start, end, permissions)`` of every mapping in ``/proc/PID/maps``."""
+    found: list[tuple[int, int, str]] = []
+    for line in text.splitlines():
+        fields = line.split()
+        if len(fields) < 2 or "-" not in fields[0]:
+            continue
+        start, _, end = fields[0].partition("-")
+        found.append((int(start, 16), int(end, 16), fields[1]))
+    return found
+
+
+def memory_contains(pid: int, needle: bytes) -> bool:
+    """Whether any readable mapping of ``pid`` holds ``needle`` right now (needs the right to read its memory).
+
+    For a VMM this covers the guest's memory, which is mapped into the VMM process. A mapping that cannot be read
+    (a device region, a guard page) is skipped: it cannot hold bytes a guest wrote.
+    """
+    mappings = parse_maps((PROC / str(pid) / "maps").read_text())
+    with (PROC / str(pid) / "mem").open("rb", buffering=0) as memory:
+        for start, end, permissions in mappings:
+            if not permissions.startswith("r"):
+                continue
+            overlap = b""
+            position = start
+            while position < end:
+                try:
+                    memory.seek(position)
+                    chunk = memory.read(min(_SCAN_CHUNK, end - position))
+                except (OSError, ValueError, OverflowError):
+                    break
+                if not chunk:
+                    break
+                if needle in overlap + chunk:
+                    return True
+                overlap = chunk[-(len(needle) - 1) :] if len(needle) > 1 else b""
+                position += len(chunk)
+    return False
+
+
+# ------------------------------------------------------------------------------------------- confinement
+NO_CAPABILITIES = "0000000000000000"
+
+
+@dataclass(frozen=True)
+class Confinement:
+    """What the kernel says about how one process is confined (the facts a jailer is supposed to establish)."""
+
+    uids: tuple[int, ...]  # real, effective, saved, filesystem
+    gids: tuple[int, ...]
+    effective_capabilities: str
+    permitted_capabilities: str
+    no_new_privs: bool
+    #: Seccomp mode per thread name (2 is "filter").
+    seccomp_by_thread: dict[str, str]
+    #: How many PID namespaces deep the process is (1: the namespace of this machine's init).
+    pid_namespace_depth: int
+    root: Path
+    #: Kinds of namespace it SHARES with the process that is looking.
+    shared_namespaces: tuple[str, ...]
+
+    def violations(self, *, uid_range: tuple[int, int]) -> list[str]:
+        """Everything that is not as a jailed VMM must be; empty when the confinement holds."""
+        low, size = uid_range
+        found: list[str] = []
+        if len(set(self.uids)) != 1 or not low <= self.uids[0] < low + size:
+            found.append(f"uid {self.uids} is not one unprivileged id in [{low}, {low + size})")
+        if len(set(self.gids)) != 1 or self.gids[0] == 0:
+            found.append(f"gid {self.gids} is not one unprivileged id")
+        if (self.effective_capabilities, self.permitted_capabilities) != (NO_CAPABILITIES, NO_CAPABILITIES):
+            found.append(f"capabilities are held: {self.effective_capabilities} / {self.permitted_capabilities}")
+        if not self.no_new_privs:
+            found.append("no_new_privs is not set")
+        unfiltered = sorted(name for name, mode in self.seccomp_by_thread.items() if mode != "2")
+        if unfiltered or not self.seccomp_by_thread:
+            found.append(f"threads without a system-call filter: {unfiltered or 'no thread could be read'}")
+        if self.pid_namespace_depth < 2:
+            found.append("it is not in a PID namespace of its own")
+        if self.root == Path("/"):
+            found.append("its root directory is the machine's root")
+        if self.shared_namespaces:
+            found.append(f"it shares these namespaces with an ordinary process: {', '.join(self.shared_namespaces)}")
+        return found
+
+
+def confinement(pid: int, *, compared_with: int) -> Confinement:
+    """The confinement of ``pid`` as the kernel reports it; namespaces are compared with those of ``compared_with``."""
+    status = proc_status(pid)
+    threads = {tid: thread for tid, thread in thread_statuses(pid).items() if "Seccomp" in thread}
+    return Confinement(
+        uids=ids(status, "Uid"),
+        gids=ids(status, "Gid"),
+        effective_capabilities=status["CapEff"],
+        permitted_capabilities=status["CapPrm"],
+        no_new_privs=status.get("NoNewPrivs") == "1",
+        seccomp_by_thread={f"{thread.get('Name', '?')}/{tid}": thread["Seccomp"] for tid, thread in threads.items()},
+        pid_namespace_depth=len(status.get("NSpid", "").split()),
+        root=(PROC / str(pid) / "root").readlink(),
+        shared_namespaces=tuple(
+            kind for kind in ("net", "pid", "mnt") if namespace(pid, kind) == namespace(compared_with, kind)
+        ),
+    )

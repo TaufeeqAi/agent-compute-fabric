@@ -1,4 +1,4 @@
-//! Deterministic baseline probe (spec §20.5 step 6).
+//! Deterministic baseline probe: the guest half of the restore oracle (contract RE-4).
 //!
 //! `state_digest` binds two independent pieces of guest state:
 //! * `boot_id` — kernel *memory* state. A genuine snapshot restore preserves it; a reboot

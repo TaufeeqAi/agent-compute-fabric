@@ -1,6 +1,6 @@
-"""Checkout convenience: ``python apps/cli/main.py run ...`` without installing the package.
+"""Checkout convenience: ``python apps/cli/main.py host info`` without installing the package.
 
-An installed ``acf-local`` (``uv tool install ./apps/cli``) is the normal way to run the CLI; this
+An installed ``acf-local`` (``uv tool install ./apps/cli``) is the normal way to run the client; this
 shim only puts ``src/`` on the import path so a fresh clone works.
 """
 
@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
-from acf_cli.main import run
+from acf_cli.main import main
 
 if __name__ == "__main__":
-    run()
+    main()

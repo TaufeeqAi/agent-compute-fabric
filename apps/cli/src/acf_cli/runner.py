@@ -1,17 +1,20 @@
-"""``acf-local run``: create -> start -> exec -> (destroy), with honest cleanup.
+"""``acf-local run once``: create -> start -> exec -> destroy, with honest cleanup.
 
-This is the Phase 1 milestone command. It is deliberately *composed from public operations* — the
-host has no "run in a throwaway sandbox" primitive — so each step is an independently idempotent,
-journaled operation with its own operation id, and the report lists them all (evidence).
+The host has no "run in a throwaway sandbox" primitive. This command is *composed from the public
+methods*, so each step is its own operation with its own operation id, and the report names them
+all.
 
 Cleanup rules (each one is tested):
 
-* a successful or definitively failed run destroys the sandbox it created, unless ``--keep``;
-* **if any step's outcome is unknown, the sandbox is left in place** and its identity is printed:
-  destroying it would erase the very evidence needed to learn what happened;
-* an interrupt settles whatever step is in flight (an ``exec`` is cancelled; ``create``/``start`` are
-  observed to completion), then cleans up as above — or leaves the sandbox alone if it cannot tell;
-* a failed cleanup is reported loudly with the exact command to finish it — never swallowed.
+* the sandbox is destroyed whatever happened before — success, failure, an unknown outcome, a
+  client-side timeout, Ctrl-C — unless ``--keep``. Destroying is containment: the host never
+  refuses it for load, and it preempts whatever is still in flight on the sandbox. The record of
+  every operation, and the captured output, outlive the sandbox;
+* nothing is destroyed when the host states that creating the sandbox left nothing behind
+  (``effect: NOT_APPLIED``), or refused to create it;
+* if it is *not established* whether the host accepted ``create``, there is no sandbox id to act
+  on: the report says so and names the operation to ask about;
+* a failed cleanup is reported loudly, with the exact command that finishes the job.
 """
 
 from __future__ import annotations
@@ -19,92 +22,57 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from acf_cli.client import HostClient, raise_for_status
-from acf_cli.errors import AcfCliError, OutcomeUnknown
-from acf_cli.models import (
-    Body,
+from acf_cli.client import HostClient, Outcome, expect, require_success
+from acf_cli.errors import AcfCliError, HostUnreachable, MutationInterrupted, Refused
+from acf_cli.execution import run_of
+from acf_cli.requests import (
+    Call,
     CommandSpec,
     ExecParams,
-    ExecRequest,
-    OperationStatus,
-    ResponseEnvelope,
-    RunResult,
     SandboxCreateParams,
-    SandboxCreateRequest,
-    SandboxDestroyRequest,
-    SandboxResources,
-    SandboxStartRequest,
     SandboxTarget,
-    SandboxView,
+    exec_run,
+    sandbox_create,
+    sandbox_destroy,
+    sandbox_start,
 )
-from acf_cli.resolve import expect
+from acf_cli.resolve import target_of
+from acf_cli.responses import OperationView, RunResult, SandboxBody
+from acf_cli.wire import Effect
 
-#: Client-side patience for ``exec`` beyond the command's own timeout. The host's own operation
-#: deadline is the command timeout + 3 s grace + 60 s (``HOST_GRACE_MS`` and ``deadline_ms`` in
-#: ``execution/host-agent/src/lifecycle/exec.rs``); waiting slightly longer than that means we only
-#: ever give up *after* the host has resolved the run one way or the other.
-EXEC_MARGIN_S = 70.0
-#: With no explicit ``--timeout`` we cannot know the policy default, so we simply wait for the
-#: host (which always answers: its own deadline backstop kills the VM). Ctrl-C is the escape hatch.
-EXEC_UNBOUNDED_S = 24 * 3600.0
-INTERRUPT_SETTLE_S = 30.0
+STEPS = ("create", "start", "exec", "destroy")
 
 
 @dataclass(frozen=True, slots=True)
 class RunSpec:
-    image: str
-    vcpus: int
-    memory_mib: int
-    disk_mib: int
+    create: SandboxCreateParams
     command: CommandSpec
-    name: str | None = None
     keep: bool = False
+    #: Client-side patience per step. ``None``: until each operation ends.
+    timeout_s: float | None = None
 
 
 @dataclass(slots=True)
 class RunReport:
     """Everything the command layer needs to render a result *or* an incident, whichever happened."""
 
-    run: RunResult | None = None
-    sandbox: SandboxView | None = None
-    cleanup: str = "not started"
-    #: step name -> operation id, in submission order (``create``, ``start``, ``exec``, ``destroy``).
+    #: step -> operation id, known before the step's request is sent.
     operations: dict[str, str] = field(default_factory=dict)
+    #: step -> the host's last word on that operation, for the steps that were answered.
+    steps: dict[str, Outcome] = field(default_factory=dict)
+    run: RunResult | None = None
+    #: The sandbox the run is about, once the host has named it: ``(sandbox_id, generation)``.
+    sandbox: tuple[str, int] | None = None
+    #: ``destroyed`` | ``kept`` | ``none`` | ``failed`` | ``unknown``
+    cleanup_state: str = "none"
+    cleanup: str = "nothing to clean up"
+    #: The first step that did not succeed, as the exception that states why.
     error: AcfCliError | None = None
     interrupted: bool = False
-    #: True when some step's outcome is unknown: the sandbox was deliberately left in place.
-    unresolved: bool = False
-    #: True when destroying the sandbox failed: it may still exist and the operator must finish the job.
-    cleanup_failed: bool = False
-    #: The step whose mutation has been submitted but not yet answered (what an interrupt must settle).
-    in_flight: str | None = None
 
-
-@dataclass(frozen=True, slots=True)
-class Settled:
-    """What became of an interrupted ``exec`` after asking the host to cancel it."""
-
-    #: The run's evidence, if the host recorded one (a cancelled run still has output and metrics).
-    run: RunResult | None
-    #: False when we could not learn how it ended: the operation is *unknown*, not "cancelled".
-    resolved: bool
-
-
-def cancel_and_settle(client: HostClient, op_id: str, *, timeout_s: float = INTERRUPT_SETTLE_S) -> Settled:
-    """Ask the host to cancel ``op_id`` and observe how it ended. Never raises: the caller is unwinding.
-
-    Cancellation is a *request*. The run ends when the host has stopped the workload and journaled
-    the outcome, so the result is read back by observation (``operation_get``), not assumed.
-    """
-    try:
-        client.cancel(op_id)
-        final = client.wait_final(op_id, timeout_s=timeout_s)
-    except AcfCliError:
-        return Settled(run=None, resolved=False)
-    if not final.status.is_final:
-        return Settled(run=None, resolved=False)
-    data = final.body() if final.status == OperationStatus.SUCCEEDED else None
-    return Settled(run=data if isinstance(data, RunResult) else None, resolved=True)
+    @property
+    def cleanup_failed(self) -> bool:
+        return self.cleanup_state in {"failed", "unknown"}
 
 
 class Runner:
@@ -116,140 +84,132 @@ class Runner:
     def run(self, spec: RunSpec) -> RunReport:
         rep = RunReport()
         try:
-            self._create(spec, rep)
-            self._start(rep)
-            self._exec(spec, rep)
+            self._say("creating the sandbox")
+            created = self._step(rep, "create", sandbox_create(spec.create), spec)
+            target = target_of(expect(created.result, SandboxBody).data)
+            self._say(f"starting {target.sandbox_id}")
+            self._step(rep, "start", sandbox_start(target), spec)
+            self._say(f"running the command in {target.sandbox_id}")
+            params = ExecParams(
+                sandbox_id=target.sandbox_id, expected_generation=target.expected_generation, command=spec.command
+            )
+            self._step(rep, "exec", exec_run(params), spec)
         except AcfCliError as e:
             rep.error = e
-            if isinstance(e, OutcomeUnknown):
-                rep.unresolved = True
+        except MutationInterrupted as e:
+            rep.interrupted = True
+            self._learn_what_was_in_flight(rep, e.operation_id)
         except KeyboardInterrupt:
             rep.interrupted = True
-            self._settle_in_flight(rep)
         self._cleanup(spec, rep)
         return rep
 
     # ------------------------------------------------------------------ steps
-    def _submit(self, rep: RunReport, step: str, body: Body, *, wait_s: float | None = None) -> ResponseEnvelope:
-        """Send one mutation, remembering which step is in flight (so an interrupt knows what to settle)."""
-        rep.in_flight = step
+    def _step(self, rep: RunReport, name: str, call: Call, spec: RunSpec) -> OperationView:
+        def record(operation_id: str) -> None:
+            rep.operations[name] = operation_id
 
-        def record(op_id: str) -> None:
-            rep.operations[step] = op_id
+        outcome = self._client.submit(call, timeout_s=spec.timeout_s, on_operation=record)
+        self._note(rep, name, outcome)
+        if outcome.operation is not None and name == "exec":
+            # A cancelled or timed-out execution still has output and metrics: keep them.
+            rep.run = run_of(outcome.operation)
+        return require_success(outcome)
 
-        if wait_s is None:
-            env = self._client.mutate_slow(body, on_operation=record)
-        else:
-            env = self._client.mutate(body, io_timeout_s=wait_s, resolve_deadline_s=wait_s, on_operation=record)
-        rep.in_flight = None
-        return env
+    @staticmethod
+    def _note(rep: RunReport, name: str, outcome: Outcome) -> None:
+        rep.steps[name] = outcome
+        if outcome.operation is not None and outcome.operation.sandbox is not None:
+            # Whatever became of the operation, it names the sandbox it was about. Cleanup needs that.
+            rep.sandbox = outcome.operation.sandbox
 
-    def _create(self, spec: RunSpec, rep: RunReport) -> None:
-        self._say(f"creating sandbox ({spec.image}, {spec.vcpus} vCPU, {spec.memory_mib} MiB, network none)")
-        params = SandboxCreateParams(
-            name=spec.name,
-            image=spec.image,
-            resources=SandboxResources(
-                vcpus=spec.vcpus, memory_mib=spec.memory_mib, disk_mib=spec.disk_mib, network="none"
-            ),
-        )
-        env = raise_for_status(self._submit(rep, "create", SandboxCreateRequest(params=params)))
-        rep.sandbox = expect(env, SandboxView)
-
-    def _start(self, rep: RunReport) -> None:
-        sandbox = self._need_sandbox(rep)
-        self._say(f"starting {sandbox.sandbox_id}")
-        target = SandboxTarget(sandbox_id=sandbox.sandbox_id, expected_generation=sandbox.generation)
-        env = raise_for_status(self._submit(rep, "start", SandboxStartRequest(params=target)))
-        rep.sandbox = expect(env, SandboxView)
-
-    def _exec(self, spec: RunSpec, rep: RunReport) -> None:
-        sandbox = self._need_sandbox(rep)
-        self._say(f"running: {' '.join(spec.command.argv)}")
-        timeout_ms = spec.command.limits.timeout_ms
-        wait_s = timeout_ms / 1000 + EXEC_MARGIN_S if timeout_ms is not None else EXEC_UNBOUNDED_S
-        request = ExecRequest(
-            params=ExecParams(
-                sandbox_id=sandbox.sandbox_id, expected_generation=sandbox.generation, command=spec.command
-            )
-        )
-        env = raise_for_status(self._submit(rep, "exec", request, wait_s=wait_s))
-        rep.run = expect(env, RunResult)
-
-    def _need_sandbox(self, rep: RunReport) -> SandboxView:
-        if rep.sandbox is None:  # pragma: no cover - guarded by control flow
-            msg = "internal error: no sandbox"
-            raise AssertionError(msg)
-        return rep.sandbox
-
-    # ------------------------------------------------------------------ interrupt
-    def _settle_in_flight(self, rep: RunReport) -> None:
-        """Ctrl-C arrived mid-step: learn how that step ended so cleanup can act on facts.
-
-        ``exec`` can be cancelled; ``create``/``start`` cannot (Phase 1), so they are simply
-        *observed* to completion. Anything we cannot resolve is marked unresolved, which makes
-        cleanup leave the sandbox alone.
-        """
-        step = rep.in_flight
-        rep.in_flight = None
-        op_id = rep.operations.get(step) if step is not None else None
-        if step is None or op_id is None:
-            return
-        self._say(f"interrupted during '{step}': resolving it before cleaning up")
-        if step == "exec":
-            settled = cancel_and_settle(self._client, op_id)
-            rep.run = settled.run
-            rep.unresolved = not settled.resolved
+    def _learn_what_was_in_flight(self, rep: RunReport, operation_id: str) -> None:
+        """Ctrl-C arrived mid-step: ask once what the host recorded, so cleanup acts on facts."""
+        step = next((name for name, op in rep.operations.items() if op == operation_id), None)
+        if step is None:
             return
         try:
-            final = self._client.wait_final(op_id, timeout_s=INTERRUPT_SETTLE_S)
+            self._note(rep, step, self._client.observe(operation_id))
         except AcfCliError:
-            rep.unresolved = True
             return
-        if not final.status.is_final:
-            rep.unresolved = True
-            return
-        data = final.body() if final.status == OperationStatus.SUCCEEDED else None
-        if isinstance(data, SandboxView):
-            rep.sandbox = data
 
     # ------------------------------------------------------------------ cleanup
     def _cleanup(self, spec: RunSpec, rep: RunReport) -> None:
-        sandbox = rep.sandbox
-        if sandbox is None:
-            rep.cleanup = (
-                "skipped: the outcome of 'create' is unknown, a sandbox may exist"
-                if rep.unresolved
-                else "nothing to clean up"
-            )
+        if rep.sandbox is None:
+            self._nothing_to_address(rep)
             return
-        if rep.unresolved:
-            rep.cleanup = (
-                f"skipped: an operation's outcome is unknown, so {sandbox.sandbox_id} was left in place for inspection"
-            )
+        sandbox_id, generation = rep.sandbox
+        created = rep.steps.get("create")
+        if created is not None and created.operation is not None and created.operation.effect is Effect.NOT_APPLIED:
+            rep.cleanup = "nothing to clean up: the host states that creating the sandbox left nothing behind"
             return
         if spec.keep:
-            rep.cleanup = f"kept ({sandbox.sandbox_id}, generation {sandbox.generation})"
-            return
-        self._say(f"destroying {sandbox.sandbox_id}")
-        target = SandboxTarget(sandbox_id=sandbox.sandbox_id, expected_generation=sandbox.generation)
-        try:
-            env = raise_for_status(self._submit(rep, "destroy", SandboxDestroyRequest(params=target)))
-        except AcfCliError as e:
-            rep.cleanup_failed = True
-            rep.cleanup = (
-                f"FAILED: {e.message}. {sandbox.sandbox_id} may still exist; finish with: "
-                f"acf-local sandbox destroy {sandbox.sandbox_id}"
+            rep.cleanup_state = "kept"
+            rep.cleanup = f"kept {sandbox_id} (generation {generation}); destroy it with: " + _destroy_command(
+                sandbox_id
             )
             return
+        try:
+            target = SandboxTarget(sandbox_id=sandbox_id, expected_generation=generation)
+        except ValueError:
+            rep.cleanup_state = "failed"
+            rep.cleanup = f"FAILED: the host named a sandbox this client cannot address ({sandbox_id!r})"
+            return
+        self._say(f"destroying {sandbox_id}")
+        try:
+            require_success(self._destroy(rep, target, spec))
+        except AcfCliError as e:
+            rep.cleanup_state = "failed"
+            rep.cleanup = (
+                f"FAILED: {e.message}. {sandbox_id} may still exist; finish with: {_destroy_command(sandbox_id)}"
+            )
         except KeyboardInterrupt:
             rep.interrupted = True
-            rep.unresolved = True
-            op = rep.operations.get("destroy", "<operation-id>")
+            rep.cleanup_state = "unknown"
+            operation = rep.operations.get("destroy", "<operation-id>")
             rep.cleanup = (
-                f"interrupted while destroying {sandbox.sandbox_id}; the host finishes what it accepted. "
-                f"Confirm with: acf-local operation get {op}"
+                f"interrupted while destroying {sandbox_id}; the host finishes what it accepted. "
+                f"Ask it: acf-local operation get {operation}"
             )
+        else:
+            rep.cleanup_state = "destroyed"
+            rep.cleanup = f"destroyed {sandbox_id}"
+        self._refresh_superseded_execution(rep)
+
+    def _destroy(self, rep: RunReport, target: SandboxTarget, spec: RunSpec) -> Outcome:
+        def record(operation_id: str) -> None:
+            rep.operations["destroy"] = operation_id
+
+        outcome = self._client.submit(sandbox_destroy(target), timeout_s=spec.timeout_s, on_operation=record)
+        rep.steps["destroy"] = outcome
+        return outcome
+
+    def _nothing_to_address(self, rep: RunReport) -> None:
+        """No sandbox id is known. Either none exists, or it is not established whether one does."""
+        operation = rep.operations.get("create")
+        sent_nothing = operation is None or isinstance(rep.error, HostUnreachable | Refused)
+        if sent_nothing or "create" in rep.steps:
             return
-        rep.sandbox = expect(env, SandboxView)
-        rep.cleanup = f"destroyed ({sandbox.sandbox_id})"
+        rep.cleanup_state = "unknown"
+        rep.cleanup = (
+            f"not attempted: it is not established whether the host accepted `create` (operation {operation}). "
+            f"If it did, a sandbox exists. Ask the host: acf-local operation get {operation}"
+        )
+
+    def _refresh_superseded_execution(self, rep: RunReport) -> None:
+        """Destroying the sandbox ends an execution that was still in flight. Report how it really ended."""
+        operation = rep.operations.get("exec")
+        last = rep.steps.get("exec")
+        if operation is None or (last is not None and last.operation is not None and last.operation.is_terminal):
+            return
+        try:
+            now = self._client.observe(operation)
+        except AcfCliError:
+            return
+        if now.operation is not None:
+            rep.steps["exec"] = now
+            rep.run = run_of(now.operation) or rep.run
+
+
+def _destroy_command(sandbox_id: str) -> str:
+    return f"acf-local sandbox destroy {sandbox_id} --yes"

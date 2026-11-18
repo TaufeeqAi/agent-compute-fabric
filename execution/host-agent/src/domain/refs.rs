@@ -1,4 +1,4 @@
-//! Logical, immutable identities (spec §8.9–8.11).
+//! Logical, immutable identities (contract §8, IM-1, SNP-1).
 //!
 //! A raw host path is an implementation detail, never a portable identity: refs name *what*
 //! something is (digests, ids), and the filesystem manager maps them to paths privately.
@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::ids::{ArtifactId, Generation, OperationId, RunId, SandboxId, SnapshotId};
 
 /// Immutable execution identity. The alias is a *mutable human label* and is never sufficient
-/// on its own (spec §8.9): `image_id` is the digest of the image manifest.
+/// on its own (contract IM-1): `image_id` is the digest of the image manifest.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct ImageRef {
     /// `sha256:<hex>` of the canonical image manifest.

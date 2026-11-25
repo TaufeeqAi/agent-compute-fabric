@@ -1,0 +1,111 @@
+[build-system]
+requires = ["hatchling>=1.33.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "acf-cli"
+dynamic = ["version"]
+description = "acf-local: reference command-line client of the Agent Compute Fabric host agent (protocol acf.host/2, Unix socket and mutual TLS)."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+authors = [{ name = "Agent Compute Fabric contributors" }]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Systems Administration",
+    "Typing :: Typed",
+]
+# Deliberately tiny runtime surface: this process talks to a privileged host agent, so every
+# dependency is supply-chain surface. TLS is the standard library's `ssl`. Floors are the newest
+# releases verified against PyPI on 2026-11-18 (docs/DEPENDENCY_PROVENANCE.md describes the method);
+# caps are the next incompatible major/minor line.
+dependencies = [
+    "typer>=0.29.1,<0.30",
+    "pydantic>=2.14.3,<3",
+    "rich>=15.0.0,<16",  # imported directly (tables, text); typer also depends on it
+]
+
+[project.scripts]
+acf-local = "acf_cli.main:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+    "pytest-timeout>=2.4.0",
+    "pytest-cov>=7.1.0",
+    "jsonschema>=4.26.0",
+    "types-jsonschema>=4.26.0.20261006",
+    "mypy>=2.4.1",
+    "ruff>=0.17.5",
+]
+
+[tool.hatch.version]
+path = "src/acf_cli/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/acf_cli"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/acf_cli", "tests", "main.py", "README.md", "pyproject.toml", "uv.lock"]
+
+# --------------------------------------------------------------------------------------------
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W", "F", "I", "N", "UP", "B", "A", "C4", "SIM", "RUF", "PT", "PERF", "PL", "TID",
+    "T20", "ARG", "S", "ANN", "ERA", "PIE", "RET", "TRY", "FBT", "DTZ", "ISC", "ICN", "G", "LOG",
+]
+ignore = [
+    "TRY003",  # long messages in exception constructors are fine for a CLI
+    "FBT001", "FBT002",  # boolean flags are idiomatic in Typer commands
+    "PLR0913", "PLR0917",  # Typer commands legitimately take many options (invoked by keyword)
+    "N818",  # exception names mirror the contract vocabulary (Refused, OutcomeUnknown, ...) on purpose
+    "RET505",  # explicit else after return is sometimes clearer
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S311", "S603", "S607", "PLR2004", "ANN", "ARG", "FBT", "T20", "PLR0915", "S108", "SLF001"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["acf_cli"]
+
+# --------------------------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+files = ["src", "tests", "main.py"]
+warn_unreachable = true
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
+
+# --------------------------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"
+timeout = 60
+markers = [
+    "e2e: runs the real host (the acf-host-fake binary named by $ACF_HOST_FAKE) over its Unix socket and over mutual TLS; skipped without it unless ACF_REQUIRE_E2E=1",
+]
+
+[tool.coverage.run]
+source = ["acf_cli"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true

@@ -20,6 +20,7 @@ SCRIPTS = [
     REPO / "scripts/acf-setup-cgroup",
     REPO / "scripts/acf-wait-ready",
     REPO / "scripts/lib/common.sh",
+    REPO / "scripts/platform-journey/cli.sh",
     REPO / "images/overlay/usr/local/sbin/acf-init",
 ]
 

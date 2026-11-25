@@ -103,6 +103,20 @@ pub struct SecurityPosture {
     pub gid: u32,
     /// `Seccomp:` — 2 means a BPF filter is installed.
     pub seccomp_mode: u32,
+    /// Every thread of the VMM carries a seccomp filter of its own: more filters than the host
+    /// process that started it. Mode 2 alone proves nothing under a service manager, because filters
+    /// are inherited: a VMM started with its own filtering turned off still reports mode 2, with
+    /// exactly the filters it inherited from the core's unit. (Found the first time a VMM started with
+    /// `--no-seccomp` ran under the shipped unit, and was accepted.)
+    #[serde(default)]
+    pub seccomp_own_filter: bool,
+    /// The same, at launch: every thread except the first carries a filter of its own, and there is
+    /// at least one. Firecracker's API thread installs its filter before it serves, and the main and
+    /// vCPU threads install theirs when the instance starts, so before configuration the first thread
+    /// still has only what it inherited. (Measured on a real VMM: core 14 filters, API thread 15, main
+    /// thread 14 until the instance starts.)
+    #[serde(default)]
+    pub seccomp_own_filter_at_launch: bool,
     pub no_new_privs: bool,
     /// Effective capability set is empty (privileges were dropped).
     pub caps_dropped: bool,
@@ -111,6 +125,12 @@ pub struct SecurityPosture {
 }
 
 impl SecurityPosture {
+    /// The posture floor of a VMM that has just been launched and is not configured yet (IS-1): as
+    /// [`Self::violations`], with the seccomp rule of that moment ([`Self::seccomp_own_filter_at_launch`]).
+    pub fn launch_violations(&self, expect_uid: u32) -> Vec<String> {
+        Self { seccomp_own_filter: self.seccomp_own_filter_at_launch, ..self.clone() }.violations(expect_uid)
+    }
+
     /// The posture floor item N2 requires of a running VMM. Any miss fails closed (IS-1, IS-3).
     pub fn violations(&self, expect_uid: u32) -> Vec<String> {
         let mut v = Vec::new();
@@ -119,6 +139,8 @@ impl SecurityPosture {
         }
         if self.seccomp_mode != 2 {
             v.push(format!("seccomp filter not installed (mode {})", self.seccomp_mode));
+        } else if !self.seccomp_own_filter {
+            v.push("seccomp filter of the VMM's own not installed: a thread carries only the filters it inherited from the host".into());
         }
         if !self.no_new_privs {
             v.push("no_new_privs is not set".into());
@@ -133,22 +155,92 @@ impl SecurityPosture {
     }
 }
 
-/// Pure parser over `/proc/<pid>/status` text (so it is unit-testable without a VMM).
-pub fn parse_status(status: &str, chrooted: bool) -> Option<SecurityPosture> {
+/// Pure parser over `/proc/<pid>/status` text (so it is unit-testable without a VMM). `host_filters`
+/// is how many seccomp filters the host process itself carries (see [`own_filter`]).
+pub fn parse_status(status: &str, chrooted: bool, host_filters: u32) -> Option<SecurityPosture> {
     let field = |k: &str| status.lines().find_map(|l| l.strip_prefix(k)).map(str::trim);
     let uid = field("Uid:")?.split_whitespace().next()?.parse().ok()?;
     let gid = field("Gid:")?.split_whitespace().next()?.parse().ok()?;
     let seccomp_mode = field("Seccomp:")?.parse().ok()?;
     let no_new_privs = field("NoNewPrivs:")? == "1";
     let caps_dropped = u64::from_str_radix(field("CapEff:")?, 16).ok()? == 0;
-    Some(SecurityPosture { uid, gid, seccomp_mode, no_new_privs, caps_dropped, chrooted })
+    let seccomp_own_filter = own_filter(status, host_filters);
+    Some(SecurityPosture {
+        uid,
+        gid,
+        seccomp_mode,
+        no_new_privs,
+        caps_dropped,
+        seccomp_own_filter,
+        seccomp_own_filter_at_launch: seccomp_own_filter,
+        chrooted,
+    })
+}
+
+/// Whether one thread (its `/proc/.../status` text) carries a seccomp filter of its own: mode 2, and
+/// more filters than the `host_filters` it could have inherited. Without a `Seccomp_filters:` line
+/// (kernels before 5.9) that cannot be told, and the answer is no: the check fails closed.
+pub fn own_filter(status: &str, host_filters: u32) -> bool {
+    let field = |k: &str| status.lines().find_map(|l| l.strip_prefix(k)).map(str::trim);
+    let mode = field("Seccomp:").and_then(|m| m.parse::<u32>().ok());
+    let filters = field("Seccomp_filters:").and_then(|n| n.parse::<u32>().ok());
+    mode == Some(2) && filters.is_some_and(|n| n > host_filters)
+}
+
+/// `ESRCH`, as the number `std::io::Error::raw_os_error` reports it.
+fn libc_esrch() -> i32 {
+    rustix::io::Errno::SRCH.raw_os_error()
+}
+
+/// How many seccomp filters this process's own thread carries: what any process it starts inherits.
+pub fn host_seccomp_filters() -> u32 {
+    let status = fs::read_to_string("/proc/thread-self/status").unwrap_or_default();
+    status.lines().find_map(|l| l.strip_prefix("Seccomp_filters:")).and_then(|n| n.trim().parse().ok()).unwrap_or(0)
 }
 
 pub fn read_posture(pid: i32, expected_root: &Path) -> Result<SecurityPosture> {
     let status = fs::read_to_string(format!("/proc/{pid}/status"))?;
-    let root = fs::read_link(format!("/proc/{pid}/root"))?;
-    let chrooted = root == expected_root || fs::canonicalize(expected_root).map(|c| c == root).unwrap_or(false);
-    parse_status(&status, chrooted).ok_or_else(|| AcfError::internal("could not parse /proc/<pid>/status"))
+    let chrooted = same_directory(Path::new(&format!("/proc/{pid}/root")), expected_root);
+    let host = host_seccomp_filters();
+    let mut posture = parse_status(&status, chrooted, host).ok_or_else(|| AcfError::internal("could not parse /proc/<pid>/status"))?;
+    // Every thread, not only the first: each thread of a process carries its own filter set.
+    let (mut all, mut others, mut other_threads) = (true, true, 0_usize);
+    for task in fs::read_dir(format!("/proc/{pid}/task"))?.flatten() {
+        let first = task.file_name().to_str().and_then(|t| t.parse::<i32>().ok()) == Some(pid);
+        match fs::read_to_string(task.path().join("status")) {
+            Ok(text) => {
+                let own = own_filter(&text, host);
+                all &= own;
+                if !first {
+                    others &= own;
+                    other_threads += 1;
+                }
+            }
+            // A thread that ended between the listing and the read has nothing left to judge: the
+            // kernel says so with ENOENT or, for a thread caught while it exits, ESRCH.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound || e.raw_os_error() == Some(libc_esrch()) => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+    posture.seccomp_own_filter = all;
+    posture.seccomp_own_filter_at_launch = others && other_threads > 0;
+    Ok(posture)
+}
+
+/// Whether `a` and `b` are the same directory: the same device and inode, followed through links.
+///
+/// This, and not the text of `readlink /proc/<pid>/root`, is how a VMM's root is compared with its jail:
+/// the jailer gives the VMM a mount namespace of its own and moves its root there with `pivot_root`,
+/// and seen from the host's namespace the link then reads `/`, whatever directory it is. Following the
+/// link reaches the directory itself, which keeps its device and inode through the bind mount the jailer
+/// makes. A process that was not confined reaches the host's `/`, which is not the jail. (Found the
+/// first time a real jailer ran: a text comparison refused every correctly confined VMM.)
+pub fn same_directory(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (fs::metadata(a), fs::metadata(b)) {
+        (Ok(x), Ok(y)) => x.is_dir() && y.is_dir() && (x.dev(), x.ino()) == (y.dev(), y.ino()),
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -156,6 +248,22 @@ mod tests {
     use super::*;
 
     const STATUS_GOOD: &str = "Name:\tfirecracker\nUid:\t100003\t100003\t100003\t100003\nGid:\t100003\t100003\t100003\t100003\nCapEff:\t0000000000000000\nNoNewPrivs:\t1\nSeccomp:\t2\nSeccomp_filters:\t1\n";
+
+    /// A process's root is judged by what it is, not by how its link reads.
+    #[test]
+    fn a_root_directory_is_compared_by_device_and_inode_not_by_its_path() {
+        let d = tempfile::tempdir().unwrap();
+        let me = Path::new("/proc/self/root");
+        assert!(same_directory(me, Path::new("/")), "this test process is not confined: its root is the host's");
+        assert!(!same_directory(me, d.path()), "a directory is not the root just because it exists");
+        // Two names for one directory are the same directory; a file is never a root.
+        let link = d.path().join("link");
+        std::os::unix::fs::symlink(d.path(), &link).unwrap();
+        assert!(same_directory(&link, d.path()));
+        std::fs::write(d.path().join("file"), b"x").unwrap();
+        assert!(!same_directory(&d.path().join("file"), &d.path().join("file")));
+        assert!(!same_directory(&d.path().join("missing"), d.path()));
+    }
 
     #[test]
     fn stat_parsing_survives_hostile_comm_fields() {
@@ -193,16 +301,68 @@ mod tests {
 
     #[test]
     fn posture_parsing_and_policy() {
-        let p = parse_status(STATUS_GOOD, true).unwrap();
+        let p = parse_status(STATUS_GOOD, true, 0).unwrap();
         assert!(p.violations(100_003).is_empty(), "{:?}", p.violations(100_003));
-        let root = parse_status(&STATUS_GOOD.replace("100003\t100003\t100003\t100003", "0\t0\t0\t0"), true).unwrap();
+        let root = parse_status(&STATUS_GOOD.replace("100003\t100003\t100003\t100003", "0\t0\t0\t0"), true, 0).unwrap();
         assert!(!root.violations(100_003).is_empty(), "a root VMM must be a violation");
-        let no_seccomp = parse_status(&STATUS_GOOD.replace("Seccomp:\t2", "Seccomp:\t0"), true).unwrap();
+        let no_seccomp = parse_status(&STATUS_GOOD.replace("Seccomp:\t2", "Seccomp:\t0"), true, 0).unwrap();
         assert!(no_seccomp.violations(100_003).iter().any(|v| v.contains("seccomp")));
-        let caps = parse_status(&STATUS_GOOD.replace("0000000000000000", "00000000000001ff"), true).unwrap();
+        let caps = parse_status(&STATUS_GOOD.replace("0000000000000000", "00000000000001ff"), true, 0).unwrap();
         assert!(caps.violations(100_003).iter().any(|v| v.contains("capabilities")));
-        let no_chroot = parse_status(STATUS_GOOD, false).unwrap();
+        let no_chroot = parse_status(STATUS_GOOD, false, 0).unwrap();
         assert!(no_chroot.violations(100_003).iter().any(|v| v.contains("jail root")));
-        assert!(parse_status("Name:\tx\n", true).is_none());
+        assert!(parse_status("Name:\tx\n", true, 0).is_none());
+    }
+
+    /// The case found on a real host: the core runs under its unit with 14 seccomp filters; a VMM
+    /// started with its own filtering turned off inherits exactly those 14 and still reports mode 2.
+    #[test]
+    fn a_seccomp_filter_counts_only_if_it_is_the_vmms_own() {
+        let with = |n: u32| STATUS_GOOD.replace("Seccomp_filters:\t1", &format!("Seccomp_filters:\t{n}"));
+        let inherited_only = parse_status(&with(14), true, 14).unwrap();
+        assert_eq!(inherited_only.seccomp_mode, 2);
+        assert!(
+            inherited_only.violations(100_003).iter().any(|v| v.contains("of the VMM's own")),
+            "{:?}",
+            inherited_only.violations(100_003)
+        );
+        assert!(parse_status(&with(15), true, 14).unwrap().violations(100_003).is_empty(), "14 inherited and 1 of its own");
+        assert!(own_filter(&with(1), 0), "a host with no filter: any filter is the VMM's own");
+        let no_count = STATUS_GOOD.replace("Seccomp_filters:\t1\n", "");
+        assert!(!own_filter(&no_count, 0), "a kernel that does not say how many filters cannot prove it: fail closed");
+        assert!(!own_filter(&with(15).replace("Seccomp:\t2", "Seccomp:\t1"), 0), "strict mode is not a filter");
+    }
+
+    /// The two moments of the seccomp rule, as a real Firecracker behaves: before configuration only
+    /// the API thread has installed its filter; once the instance runs, every thread has.
+    #[test]
+    fn at_launch_the_first_thread_may_still_be_unfiltered_and_once_running_no_thread_may() {
+        let launched = SecurityPosture {
+            uid: 100_003,
+            gid: 100_003,
+            seccomp_mode: 2,
+            no_new_privs: true,
+            caps_dropped: true,
+            seccomp_own_filter: false,
+            seccomp_own_filter_at_launch: true,
+            chrooted: true,
+        };
+        assert!(launched.launch_violations(100_003).is_empty(), "{:?}", launched.launch_violations(100_003));
+        assert!(!launched.violations(100_003).is_empty(), "a running VMM whose first thread has no filter of its own");
+        let no_seccomp = SecurityPosture { seccomp_own_filter_at_launch: false, ..launched.clone() };
+        assert!(
+            no_seccomp.launch_violations(100_003).iter().any(|v| v.contains("of the VMM's own")),
+            "`--no-seccomp`: the API thread carries only inherited filters, refused before configuration"
+        );
+        let running = SecurityPosture { seccomp_own_filter: true, ..launched };
+        assert!(running.violations(100_003).is_empty());
+    }
+
+    #[test]
+    fn this_test_process_reports_how_many_filters_it_carries() {
+        // Unconfined under cargo, confined under a service manager; never more than a few dozen.
+        assert!(host_seccomp_filters() < 64);
+        let me = read_posture(std::process::id() as i32, Path::new("/")).unwrap();
+        assert!(me.chrooted, "the test process's root is the host's root");
     }
 }

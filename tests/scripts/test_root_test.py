@@ -101,8 +101,8 @@ def test_it_builds_as_the_invoking_user_and_runs_only_the_two_test_binaries_as_r
     expected = [
         f"{BUILD} -p acf-host-agent --all-features --lib",  # never through sudo
         f"{BUILD} -p acf-guest-agent --test protocol",
-        *([f"{prefix}{stage.backend} fc_backend_tests --ignored"] if not AS_ROOT else []),
-        f"backend args=[fc_backend_tests --ignored] cwd={REPO}/execution/host-agent",
+        *([f"{prefix}{stage.backend} fc_backend_tests privsep:: --ignored"] if not AS_ROOT else []),
+        f"backend args=[fc_backend_tests privsep:: --ignored] cwd={REPO}/execution/host-agent",
         *([f"{prefix}{stage.guest} --ignored"] if not AS_ROOT else []),
         f"guest args=[--ignored] cwd={REPO}/execution/guest-agent",
     ]
@@ -127,7 +127,7 @@ def test_root_runs_the_binaries_directly(run: Runner, tmp_path: Path) -> None:
     result = root_test(run, stage)
     assert result.returncode == 0, result.stderr
     assert not any(call.startswith("sudo") for call in stage.called())
-    assert f"backend args=[fc_backend_tests --ignored] cwd={REPO}/execution/host-agent" in stage.called()
+    assert f"backend args=[fc_backend_tests privsep:: --ignored] cwd={REPO}/execution/host-agent" in stage.called()
 
 
 def test_a_build_failure_is_an_error_and_nothing_runs_as_root(run: Runner, tmp_path: Path) -> None:
@@ -181,12 +181,14 @@ def test_every_rust_test_that_asks_for_this_target_is_in_a_binary_the_script_run
         for path in (REPO / "execution").rglob("*.rs")
         if REASON in path.read_text(encoding="utf-8")
     )
-    assert asking == ["guest-agent/tests/protocol.rs", "host-agent/src/testing/fc_backend_tests.rs"], (
-        "scripts/root-test.sh must be taught about every file listed here"
-    )
+    assert asking == [
+        "guest-agent/tests/protocol.rs",
+        "host-agent/src/privsep.rs",
+        "host-agent/src/testing/fc_backend_tests.rs",
+    ], "scripts/root-test.sh must be taught about every file listed here"
     script = SCRIPT.read_text()
     assert 'cargo_test_binary acf-host-agent --all-features --lib)"' in script
-    assert '"$backend" fc_backend_tests --ignored' in script
+    assert '"$backend" fc_backend_tests privsep:: --ignored' in script
     assert 'cargo_test_binary acf-guest-agent --test protocol)"' in script
     assert '"$guest" --ignored' in script
     assert REASON in script, "the script quotes the reason it answers"

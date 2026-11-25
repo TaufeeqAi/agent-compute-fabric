@@ -105,7 +105,7 @@ directory, connections are accepted by the edge only, and a killed edge is repla
 | `execution/guest-agent/` | `acf-guest-agent`: the in-VM executor. Runs inside the untrusted guest. |
 | `execution/contracts/` | `host-api.json`, `event-schema.json`: generated from the Rust types, checked in, drift fails the build. |
 | `schemas/` | Generated JSON Schemas of the files a host reads or writes: configuration, safety profile, enrolment, image and snapshot manifests. |
-| `apps/cli/` | `acf-local`: the Python reference client. It asks; it never decides. |
+| `apps/host-cli/` | `acf-local`: the Python reference client. It asks; it never decides. |
 | `config/`, `profiles/` | Shipped examples: `host.example.yaml`, `enrolment.example.yaml`, `profiles/default.yaml`. |
 | `deploy/`, `scripts/`, `tools/`, `images/` | systemd units, install and build scripts with pins, repository tooling, guest image recipes. |
 | `tests/` | Repository-level Python suites: tooling, scripts, and the KVM integration and isolation suites. |
@@ -213,7 +213,12 @@ default for a backend error is `POSSIBLE`.
 **Reads (§10.6, `coordinator/query.rs`).** Served from committed state under roles and tags. A list accepts
 `changed_since {lineage, sequence}` and then returns exactly the records that changed, including tombstones of
 destroyed sandboxes and deleted snapshots, for `change_retention`. A cursor from another lineage, older than the
-change floor or ahead of the store is `CURSOR_EXPIRED`. Names are aliases accepted by reads only (ID-5). A name is
+change floor or ahead of the store is `CURSOR_EXPIRED`. The change floor is the newest revision of a tombstone that
+retention has forgotten, so it applies to the sandbox and snapshot lists only: operations have no tombstones, and
+forgetting a sandbox's takes nothing from a follower of operations. A page is cut in revision order at `limit`, but
+never between two items of one revision and never below the floor, so the `next` it hands out is always a cursor
+the host accepts and a full listing can be followed to its end (§4 reading 32 in
+[CONTRACT_COMPLIANCE.md](CONTRACT_COMPLIANCE.md)). Names are aliases accepted by reads only (ID-5). A name is
 unique within its tags and is looked up there first; an operator may also name a sandbox of other tags when the
 name is unambiguous among the records it may read, and is told to use the id when it is not. `host.info` lists a
 feature only while the host offers it: `allowlist_network` needs the backend's support and the profile's listing.
@@ -359,7 +364,8 @@ where entries are full-record upserts and the latest record for a key wins.
 | Property | Mechanism |
 |---|---|
 | Atomicity (PS-3) | A batch is visible entirely or not at all. |
-| Single critical section (PS-4, PS-7) | `commit_with(check)` holds one mutex across *check → append → fsync → apply*. Memory is updated only after the fsync succeeds, so it never runs ahead of disk. |
+| Single critical section (PS-4, PS-7) | `commit_with(check)` holds the writer lock across *check → append → fsync → apply*. Memory is updated only after the fsync succeeds, so it never runs ahead of disk. |
+| Reads never wait for a disk (API-6) | The committed state has a lock of its own, which a writer takes only to apply a batch that is already durable. A read sees the last durable state at once, even while a commit's flush waits for the filesystem. On ext4 that flush can wait for everything in the same journal transaction, such as a root filesystem being staged beside the store. Before this split, every read on a WSL host waited for the whole of a concurrent create: 5 s typically, 165 s once, long enough for the edge to give up on an answer. Lock order: writer, then state. |
 | Identity (PS-5, PS-6) | **Lineage**: a random id written when the store is created; qualifies every sequence, revision and cursor. **Commit sequence**: strictly increasing; stamped on each record as its `revision`. **Activation epoch**: one more than the highest in the file, taken at each open for writing and recorded in every batch. |
 | One writer | An advisory `flock` on `host-agent.lock`, taken before the store is read. Before every append the file must still have the length this writer left; if not, another writer exists and this activation fences itself. |
 | Failed or uncertain commit (FS-9) | A failed append is rolled back by truncation. If the rollback cannot be confirmed, the store demands a fail-stop: the activation ends and must be restarted. |
@@ -374,6 +380,12 @@ captured output live in subsystem files and are only located from the store. No 
 
 All synchronisation goes through `durability.rs`, which has a test-only switch to skip `fsync`. It is compiled only
 under `cfg(test)` or the `testing` feature; a release build always syncs.
+
+The same module owns `blocking`, through which every flush and every bulk copy runs: staging a kernel and a root
+filesystem, exporting and re-hashing a snapshot, restoring one. On the multi-threaded runtime it hands the
+worker's other tasks to another worker (`tokio::task::block_in_place`) before the work starts. The work still
+finishes before its caller goes on. A detached blocking task would not: an operation that timed out could leave
+a copy being written into a directory that its own cleanup is removing.
 
 ---
 
@@ -698,10 +710,15 @@ backend, L3 shipped configuration and profile, L4 real VMM, L5 real supply chain
 * **Shipped files at L3**: the example configuration, profile and enrolment table are parsed by the real loaders
   and checked against each other.
 
-**Not verified.** No microVM has been booted from this code: the environment it was written in has no `/dev/kvm`.
-Everything the contract marks L4 or L5 is unrun, including the isolation claims as observed on a real VMM, kernel
-enforcement of limits, the lifetime enforcer against a real runtime, the allowlist end to end through a real guest,
-and the restore oracle on a real snapshot. [VERIFICATION_STATUS.md](VERIFICATION_STATUS.md) lists each entry.
+* **A real host** (`tests/integration`, `tests/isolation` with `ACF_INTEGRATION=1`): the installed host under
+  systemd, real Firecracker microVMs booted from a pinned image and kernel, probed from the guest and from the
+  host's `/proc`.
+
+**Verified on one machine only.** The real-host suites ran on a development laptop with KVM nested inside WSL 2,
+`x86_64`. There they exercised the confinement read back from the kernel, kernel-enforced limits, both network
+modes through a real guest, real snapshots and restores, and recovery after real kills. The lifetime enforcer's
+deadline could not be judged there, because that machine's monotonic clock runs slow. Nothing has run on bare
+metal or on `aarch64`. [VERIFICATION_STATUS.md](VERIFICATION_STATUS.md) lists each entry with its result.
 
 ---
 

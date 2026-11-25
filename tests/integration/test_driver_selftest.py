@@ -12,6 +12,7 @@ Needs ``acf-host-fake`` (``$ACF_HOST_FAKE``, ``make fake-host``) and the client 
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import re
@@ -687,7 +688,8 @@ def test_what_a_machine_lacks_for_a_production_host_is_listed_one_entry_each(tmp
     assert env.state_root == Path(Settings.load(SHIPPED_CONFIG).text("paths.state_root")), (
         "until the file is there, the defaults answer"
     )
-    problems = machine_problems(env, euid=1000)
+    # What is listed must not depend on whether this machine has a host of its own at the default state root.
+    problems = machine_problems(dataclasses.replace(env, state_root=tmp_path / "state"), euid=1000)
     for needle in (
         "not root",
         f"{tmp_path / 'host.yaml'} does not exist",
@@ -963,7 +965,7 @@ def test_an_ordinary_process_is_reported_as_unconfined_with_every_reason() -> No
     try:
         facts = confinement(child.pid, compared_with=os.getpid())
         assert facts.uids == (os.getuid(),) * 4
-        assert facts.root == Path("/")
+        assert facts.machine_root
         assert set(facts.shared_namespaces) == {"net", "pid", "mnt"}
         reasons = facts.violations(uid_range=(100_000, 4096))
     finally:

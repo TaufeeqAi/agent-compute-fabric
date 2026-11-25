@@ -23,6 +23,7 @@ import socket
 import ssl
 import struct
 import subprocess
+import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
@@ -32,7 +33,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any, Final, Self
 
-from acf_driver.base import PROTOCOL, DriverError, tail
+from acf_driver.base import PROTOCOL, DriverError, LostAnswerError, tail
 from acf_driver.views import Answer, HostInfo, Operation, Page, Sandbox, Snapshot
 
 REPO: Final = Path(__file__).resolve().parents[3]
@@ -40,6 +41,12 @@ API_DESCRIPTION: Final = REPO / "execution" / "contracts" / "host-api.json"
 
 #: The largest answer this client is willing to read: a bound, so that a broken peer cannot make a test allocate.
 MAX_ANSWER_BYTES: Final = 64 * 1024 * 1024
+#: How long `_done` follows an operation the host was still working on when its wait ended.
+FOLLOW_S: Final = 600.0
+#: The states of an operation that has not ended.
+UNFINISHED: Final = frozenset({"ACCEPTED", "IN_PROGRESS", "RECOVERING"})
+#: How many times a full listing is begun again when its continuation cursor expires (API-11).
+FULL_LISTING_ATTEMPTS: Final = 3
 _HEADER: Final = struct.Struct(">I")
 
 
@@ -301,7 +308,7 @@ class RawConnection:
         self.send_json(document)
         answer = self.read(timeout=timeout)
         if answer is None:
-            raise DriverError(f"{self.where}: the peer closed the connection without answering {document!r}")
+            raise LostAnswerError(f"{self.where}: the peer closed the connection without answering {document!r}")
         return answer
 
     def request(self, method: str, params: Mapping[str, Any] | None = None, **options: Any) -> Answer:
@@ -377,7 +384,47 @@ class WireHost:
             return conn.ask(envelope(method, params, **options), timeout=120.0)
 
     def _done(self, method: str, params: Mapping[str, Any] | None = None) -> Operation:
-        return self.call(method, params).succeeded()
+        """The operation ``method`` creates, followed to its end; it must have ended ``SUCCEEDED``.
+
+        The host answers when the operation ends or when its wait (``operations.wait_max_ms``) is over, whichever is
+        first. Work that takes longer on a real host (a snapshot writes the guest's memory to disk) is still in
+        progress then, and a caller resolves it by its id, which is what this does, for at most ``FOLLOW_S``.
+
+        An answer can also be lost: the edge closes without one when the core does not answer in time, since it
+        cannot know whether the operation was recorded. That is resolved as the protocol says, by the same request
+        with ``retry: true``, which the host answers with the operation it holds, or refuses with ``NOT_FOUND`` if it
+        never recorded one; then the request is sent again as a first submission, under the same id.
+        """
+        deadline = time.monotonic() + FOLLOW_S
+        answer = self._resolved(envelope(method, params, scope=self.scope), deadline)
+        operation = answer.accepted()
+        while operation.state in UNFINISHED and time.monotonic() < deadline:
+            time.sleep(0.5)
+            operation = self.operation(operation.operation_id)
+        if operation.state != "SUCCEEDED":
+            raise DriverError(
+                f"operation {operation.operation_id} ({operation.operation_type}) is {operation.state}, "
+                f"expected SUCCEEDED: failure={operation.failure!r}"
+            )
+        return operation
+
+    def _resolved(self, document: dict[str, Any], deadline: float) -> Answer:
+        """The answer to ``document``, a request that creates an operation, with a lost answer resolved by its id."""
+        while True:
+            try:
+                with self._connect() as conn:
+                    answer = conn.ask(document, timeout=120.0)
+            except LostAnswerError:
+                if time.monotonic() >= deadline:
+                    raise
+                document = {**document, "retry": True}
+                time.sleep(1.0)
+                continue
+            refusal = answer.refusal
+            if document.get("retry") and refusal is not None and refusal.failure_class == "NOT_FOUND":
+                document = {**document, "retry": False}
+                continue
+            return answer
 
     # ---- reads
     def info(self) -> HostInfo:
@@ -392,12 +439,39 @@ class WireHost:
 
     @contextlib.contextmanager
     def nothing_recorded(self, what: str = "a refused request") -> Iterator[None]:
-        """The block must commit nothing: a refusal leaves no operation record and no reservation behind."""
-        before = self.sequence()
+        """The block must commit nothing: a refusal leaves no operation record and no reservation behind.
+
+        A host that has run for a while also commits on its own: retention forgets what has outlived
+        ``operation_retention`` and ``change_retention``, at any moment. So when the commit sequence moved, the
+        records are asked: no operation, sandbox or snapshot may have changed since the block began. (Found on the
+        first real host, where the one commit inside such a block was retention's ``forget``.)
+        """
+        start = self.call("host.info").as_of
+        if start is None:
+            raise DriverError("host.info carried no as_of")
         yield
         after = self.sequence()
-        if after != before:
-            raise DriverError(f"{what} must record nothing, but the store moved from commit {before} to {after}")
+        if after == start.sequence:
+            return
+        changed: list[str] = []
+        readers: tuple[tuple[str, Callable[[Answer], Page[Any]]], ...] = (
+            ("operation.list", lambda a: a.operations()),
+            ("sandbox.list", lambda a: a.sandboxes()),
+            ("snapshot.list", lambda a: a.snapshots()),
+        )
+        for method, page_of in readers:
+            answer = self.call(method, {"changed_since": start.to_wire()})
+            if answer.refusal is not None:
+                raise DriverError(
+                    f"{what}: the store moved from commit {start.sequence} to {after}, and what changed could not "
+                    f"be read: {answer!r}"
+                )
+            changed.extend(f"{method}: {_identity(item)}" for item in page_of(answer).items)
+        if changed:
+            raise DriverError(
+                f"{what} must record nothing, but the store moved from commit {start.sequence} to {after} and "
+                f"changed {changed}"
+            )
 
     def inspect(self, sandbox: str) -> Sandbox:
         """A sandbox by id or by name."""
@@ -421,16 +495,31 @@ class WireHost:
         return Operation(found)
 
     def _all[T: (Sandbox, Snapshot, Operation)](self, method: str, page_of: Callable[[Answer], Page[T]]) -> list[T]:
-        """Follow a listing to its end. A later page is a change: it replaces what an earlier page said."""
+        """Follow a listing to its end. A later page is a change: it replaces what an earlier page said.
+
+        If retention forgets a tombstone while the listing is followed, the host refuses the next cursor with
+        ``CURSOR_EXPIRED``, and "the caller lists again in full" (API-11): it is begun again, a bounded number of
+        times, as the reference client does.
+        """
         limit = {} if self.page_size is None else {"limit": self.page_size}
-        page = page_of(self.call(method, limit or None))
-        by_identity: dict[str, T] = {}
-        while True:
-            for item in page.items:
-                by_identity[_identity(item)] = item
-            if not page.more:
-                return list(by_identity.values())
-            page = page_of(self.call(method, {"changed_since": page.cursor.to_wire(), **limit}))
+        for attempt in range(1, FULL_LISTING_ATTEMPTS + 1):
+            page = page_of(self.call(method, limit or None))
+            by_identity: dict[str, T] = {}
+            while True:
+                for item in page.items:
+                    by_identity[_identity(item)] = item
+                if not page.more:
+                    return list(by_identity.values())
+                answer = self.call(method, {"changed_since": page.cursor.to_wire(), **limit})
+                refusal = answer.refusal
+                if (
+                    refusal is not None
+                    and refusal.failure_class == "CURSOR_EXPIRED"
+                    and attempt < FULL_LISTING_ATTEMPTS
+                ):
+                    break
+                page = page_of(answer)
+        raise DriverError(f"{method}: the listing could not be followed to its end")
 
     # ---- sandboxes
     def create(

@@ -29,6 +29,7 @@ from acf_proc import (
     parse_status,
     parse_unix_table,
     proc_status,
+    same_file,
     socket_inodes,
     thread_statuses,
     unix_socket_paths,
@@ -118,7 +119,8 @@ def test_our_own_status_is_readable_and_consistent() -> None:
 
 def test_a_namespace_has_an_identity_and_our_root_is_the_real_root() -> None:
     assert namespace(os.getpid(), "net").startswith("net:[")
-    assert host_path(os.getpid(), "/etc/hostname") == Path("/etc/hostname")
+    assert same_file(host_path(os.getpid(), "/etc/hostname"), Path("/etc/hostname"))
+    assert not same_file(host_path(os.getpid(), "/etc/hostname"), Path("/etc/passwd"))
 
 
 @needs_proc_net

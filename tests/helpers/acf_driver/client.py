@@ -2,7 +2,7 @@
 
 The suites know nothing about the client's Python package. They run the command named by ``$ACF_LOCAL``, look at
 its exit status, its two output streams and, with ``--json``, the one document it prints, and assert on the
-contract: answers, states, classes, exit codes (``apps/cli/README.md``).
+contract: answers, states, classes, exit codes (``apps/host-cli/README.md``).
 
 Two rules shape the API:
 
@@ -36,7 +36,7 @@ from acf_driver.wire import REPO, RawConnection, WireHost
 CLIENT_ENV: Final = "ACF_LOCAL"
 DEFAULT_SOCKET: Final = "/run/acf/host-agent.sock"
 NAME_PREFIX: Final = "it-"
-# Every variable acf-local itself reads (apps/cli/README.md, "Connecting"). The driver states the endpoint, the scope
+# Every variable acf-local itself reads (apps/host-cli/README.md, "Connecting"). The driver states the endpoint, the scope
 # and the timeouts on the command line; what the machine running the suites happens to export must not reach the
 # client, or a test would pass on one machine and fail on the next.
 CLIENT_VARIABLES: Final = (

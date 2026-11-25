@@ -1,0 +1,292 @@
+{
+  "name": "health_check",
+  "title": "Check the platform",
+  "description": "Report whether the platform is serving, which features it offers and which ceilings apply to this credential's project.",
+  "inputSchema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {},
+    "title": "EmptyInput",
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$defs": {
+      "Ceilings": {
+        "additionalProperties": false,
+        "properties": {
+          "vcpus": {
+            "title": "Vcpus",
+            "type": "integer"
+          },
+          "memory_mib": {
+            "title": "Memory Mib",
+            "type": "integer"
+          },
+          "disk_mib": {
+            "title": "Disk Mib",
+            "type": "integer"
+          },
+          "execution_timeout_seconds": {
+            "title": "Execution Timeout Seconds",
+            "type": "integer"
+          },
+          "sandbox_lifetime_seconds": {
+            "title": "Sandbox Lifetime Seconds",
+            "type": "integer"
+          },
+          "allowlist_entries": {
+            "title": "Allowlist Entries",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "vcpus",
+          "memory_mib",
+          "disk_mib",
+          "execution_timeout_seconds",
+          "sandbox_lifetime_seconds",
+          "allowlist_entries"
+        ],
+        "title": "Ceilings",
+        "type": "object"
+      },
+      "ErrorBody": {
+        "additionalProperties": false,
+        "description": "The members every error answer carries, on every interface.",
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "retry": {
+            "title": "Retry",
+            "type": "string"
+          },
+          "message": {
+            "description": "Human-readable. Never repeats request content. Never parsed.",
+            "title": "Message",
+            "type": "string"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Present on UNRESOLVED: the key to ask again with, unchanged.",
+            "title": "Idempotency Key"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "A bounded reason code that refines `code`.",
+            "title": "Reason"
+          },
+          "code_raw": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Code Raw"
+          }
+        },
+        "required": [
+          "code",
+          "kind",
+          "retry",
+          "message",
+          "request_id"
+        ],
+        "title": "ErrorBody",
+        "type": "object"
+      },
+      "Info": {
+        "additionalProperties": false,
+        "description": "Platform info. Without a credential: the API versions and whether the platform itself serves.",
+        "properties": {
+          "api_versions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Api Versions",
+            "type": "array"
+          },
+          "serving": {
+            "title": "Serving",
+            "type": "boolean"
+          },
+          "ready": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Whether the platform accepts granting work now.",
+            "title": "Ready"
+          },
+          "not_ready_reasons": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Not Ready Reasons"
+          },
+          "platform_features": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Platform Features"
+          },
+          "host_features": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Host Features"
+          },
+          "parameters": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Parameters"
+          },
+          "ceilings": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Ceilings"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "api_versions",
+          "serving"
+        ],
+        "title": "Info",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "ok": {
+        "description": "False when the call was refused, is unresolved, or its operation ended without success.",
+        "title": "Ok",
+        "type": "boolean"
+      },
+      "error": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ErrorBody"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "info": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Info"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      }
+    },
+    "required": [
+      "ok"
+    ],
+    "title": "HealthOutput",
+    "type": "object"
+  },
+  "annotations": {
+    "title": "Check the platform",
+    "readOnlyHint": true,
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false
+  },
+  "x-acf-method": "platform.info",
+  "x-acf-class": "read",
+  "x-acf-reversibility": null
+}

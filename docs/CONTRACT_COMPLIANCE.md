@@ -5,8 +5,10 @@ which tests can fail for it. Identifiers (`OP-2`, `T-REC-04`, `INV-026`, `§16.2
 
 This document maps; it does not report results. Whether a test was run, and at which evidence level, is in
 [VERIFICATION_STATUS.md](VERIFICATION_STATUS.md). The short form: everything at L0 to L3 runs without KVM and was
-run; **nothing at L4 or L5 has been run**, so every clause whose only decisive test is L4 is *implemented and
-instrumented*, not *demonstrated*.
+run. L4 ran on one machine, a development laptop with KVM nested inside WSL 2, where real microVMs were booted from
+this code. L5 ran for the `x86_64` supply chain: the Firecracker release archive, the base images, the guest
+kernel and the advisory databases. A clause whose decisive test passed there is demonstrated *on that machine*,
+not on bare metal and not on `aarch64`.
 
 Paths are relative to `execution/host-agent/src/` unless they start with another crate's directory. A test named
 `t_xxx_nn_…` lives in `testing/suites/`; other tests are named by the module they sit in.
@@ -51,10 +53,10 @@ Paths are relative to `execution/host-agent/src/` unless they start with another
 | TI-2 | kernel, root filesystem and snapshot artifacts: hashed while they are copied (`storage/hashcopy.rs`, `stage_file`). VMM and jailer: pinned by digest in the host configuration, hashed at startup before either is run and again before every launch (`backend/firecracker/verify.rs`). Release archive: `scripts/firecracker.lock` | `storage::hashcopy`, `storage::images`, `backend::firecracker::verify::tests::a_binary_is_run_only_from_a_trusted_path_with_the_pinned_bytes_and_the_pinned_version`; `backend::firecracker::backend::tests::a_binary_replaced_while_the_host_runs_is_never_launched` and `…::a_file_swapped_after_its_digest_was_recorded_is_never_staged` (T-SEC-07); `t_snap_01_…`; `fc_backend_tests::provisioning_rejects_a_corrupt_image_and_an_undersized_disk` (root) |
 | TI-3 | feature `testing`; `coordinator/mod.rs::fault!` expands to nothing without it | `scripts/check-release-purity.sh` and its test (T-SEC-06) |
 | TI-4 | `Cargo.lock`, `uv.lock`, `scripts/*.lock`, `tools/check_pins.py` | `tests/tools/test_check_pins.py` |
-| IS-1, IS-2 | `backend/firecracker/backend.rs` (prove step), `backend/process/identity.rs::SecurityPosture`, `BackendIdentity::security_profile_id` | `backend::process::identity` tests; `fc_backend_tests::a_vmm_that_fails_the_confinement_check_is_killed_before_it_is_configured` (root). T-SEC-04 is L4 |
+| IS-1, IS-2 | `backend/firecracker/backend.rs` (prove step at launch, and again once the guest is up), `backend/process/identity.rs::SecurityPosture` (the VMM's own seccomp filter, its root directory by device and inode: §4 reading 31), `BackendIdentity::security_profile_id` | `backend::process::identity` tests; `fc_backend_tests::a_vmm_that_fails_the_confinement_check_is_killed_before_it_is_configured` (root). T-SEC-04 is L4 |
 | IS-3 | `coordinator/sweep.rs` (idle), `coordinator/sandbox.rs::while_intact` (held), `config.rs::RecoveryConfig::posture_due_after` | `t_sec_05_a_control_lost_after_launch_ends_the_runtime_whether_the_sandbox_is_idle_or_held`; `recovery::decision` rows. T-SEC-05 itself is L4 |
 | IS-4, NW-2 | `backend/firecracker/backend.rs::network_gate` before `InstanceStart` and before resume | `backend::firecracker::backend::tests::no_vcpu_is_started_unless_the_host_side_network_evidence_holds` |
-| CS-1, CS-2, SEC-018 | inventory in [ARCHITECTURE.md](ARCHITECTURE.md) §15; the host never listens for a guest (`guest/connector.rs`) | T-SEC-02 is L4: not run |
+| CS-1, CS-2, SEC-018 | inventory in [ARCHITECTURE.md](ARCHITECTURE.md) §15; the host never listens for a guest (`guest/connector.rs`) | T-SEC-02 (L4): `host_control/test_host_control_surface.py`, passed on the test host |
 
 ### 2.2 Identity and authority (§8, §9)
 
@@ -194,7 +196,7 @@ Paths are relative to `execution/host-agent/src/` unless they start with another
 | PS-11, PS-12, VR-8 | `store/migrate.rs` | `store::migrate` tests (5); `t_pers_07_schema_changes` |
 | PS-13 | `store/records.rs`, `ActivationRecord.manifest` | `store::journal` tests |
 | OB-4 – OB-8, INV-023, SEC-015 | `telemetry/` | `telemetry` tests (T-OBS-04); `t_obs_01_t_obs_02_…`; `t_obs_03_every_standing_risk_measurement_moves_under_its_condition`; `t_exec_07_…` |
-| VR-1, VR-3, VR-4, INV-021 | `api/mod.rs` (`PROTOCOL`, `FEATURES`), `pipeline.rs` | `t_ver_01_t_ver_02_…`; `t_api_02_…`. VR-4 for the client: `apps/cli` tests (T-VER-03) |
+| VR-1, VR-3, VR-4, INV-021 | `api/mod.rs` (`PROTOCOL`, `FEATURES`), `pipeline.rs` | `t_ver_01_t_ver_02_…`; `t_api_02_…`. VR-4 for the client: `apps/host-cli` tests (T-VER-03) |
 | VR-6, VR-7 | `check_compat`; `snapshot.list` reports `incompatible` per snapshot | `storage::snapshots::manifest` tests; `t_snap_02_…` |
 | BK-1 – BK-5, INV-002, SEC-002 | `backend/mod.rs` | `t_back_01_nothing_above_the_backend_port_names_a_backend`; `t_back_03_an_undeclared_capability_is_refused_with_no_effect` |
 | §26.5 replacement verification | `testing/conformance.rs`: fifteen rules of the port, against `dyn SandboxBackend` only | `t_back_02_the_test_backend_passes_the_backend_conformance_suite`, `t_back_02_a_backend_that_declares_less_still_conforms` (L2); `fc_backend_tests::t_back_02_the_firecracker_adapter_passes_the_backend_conformance_suite` (root). The L4 half of T-BACK-02 is in `tests/integration` |
@@ -205,10 +207,13 @@ Paths are relative to `execution/host-agent/src/` unless they start with another
 
 ## 3. Invariants (§27)
 
-Every invariant maps to the tests the contract names for it; the table above places each of those tests. The
-invariants whose named tests are all L4, and therefore not demonstrated here, are **INV-001** (T-SEC-02) and
-**INV-030** (T-HOST-01). **INV-012** and **INV-013** name L4 tests too; their L1 and L2 analogues listed above were
-run. **INV-034** names T-DOC-01, which is a lint of the contract document and is not part of this repository.
+Every invariant maps to the tests the contract names for it; the table above places each of those tests. Four
+invariants name only L4 tests. **INV-001** (T-SEC-02), **INV-012** (T-SEC-04, T-SEC-05) and **INV-013** (T-NET-07,
+T-NET-08) passed at L4 on the one real host this was run on, a nested-virtualisation machine
+([VERIFICATION_STATUS.md](VERIFICATION_STATUS.md) §6). **INV-030** (T-HOST-01) failed there: the runtime ended
+about a second after the tolerance. That machine's monotonic clock runs 5.6 % slow against the wall clock the test
+measures by, so INV-030 is not demonstrated. **INV-034** names T-DOC-01, which is a lint of the contract document
+and is not part of this repository.
 
 ---
 
@@ -304,6 +309,34 @@ specific sentence rather than hunt for it in code.
     unique only within its tags. It is looked up in the requester's own tags first; an operator, who may read
     any record, then finds a sandbox of that name wherever it is the only one, and is told to use the id
     where several scopes use the name. Operation ids already followed this rule.
+30. **"The host answers when the operation ends or its wait is over" holds whatever the disk is doing (API-6,
+    API-7).** Found on the first real host: one create's answer never came, because every read, the one that
+    builds the answer included, waited for a concurrent commit's flush (ADR-034). An answer is built from
+    committed state only. A batch that is still being flushed is not committed, so a read does not wait for it;
+    it sees the state before that batch. Test: `store::journal::tests::a_read_is_answered_while_a_commit_waits_for_its_disk_flush`.
+31. **The seccomp filter IS-1 requires is the VMM's own, not one it inherited (IS-1, SEC-005).** A process
+    started from a systemd unit with `SystemCallFilter=` already carries that unit's filters, so "seccomp mode 2"
+    is true of a VMM that installed none (`--no-seccomp`). On the first real host such a VMM passed the
+    confinement check. The host now counts the filters each thread carries beyond those of the host process that
+    started it, in two stages. At launch, every thread but the first must carry one of its own. Firecracker
+    filters its API thread before it serves the API, and its main thread only once the guest starts. After the
+    guest is up, every thread must, and a VMM that does not makes the start fail. Tests:
+    `backend::process::identity` (`a_seccomp_filter_counts_only_if_it_is_the_vmms_own`,
+    `at_launch_the_first_thread_may_still_be_unfiltered_and_once_running_no_thread_may`); on a real host,
+    `process/test_guest_processes.py` and `host_control/test_host_control_surface.py`.
+32. **"The caller lists again in full" must always be possible (API-11 with PS-10).** The contract leaves paging
+    to the host. This host pages a list by revision and continues it with `changed_since`. Found on the first
+    real host, once it had run for longer than `change_retention`: every full listing longer than one page ended
+    with a cursor that was already refused. Retained records older than the newest forgotten tombstone put the
+    first page's `next` below the change floor. The reading has two parts. The change floor bounds only the
+    lists that have tombstones (sandboxes, snapshots); an operation is removed by retention without a tombstone,
+    so a forgotten sandbox tombstone does not expire an operation cursor. And a page never ends below the floor.
+    Below it lie only sandboxes and snapshots unchanged for longer than `change_retention`, bounded by the
+    host's capacity, so such a page stays small. The reference client, for its part, lists again in full when
+    a continuation of a listing it began in full is refused with `CURSOR_EXPIRED`, up to three times. Tests:
+    `coordinator::query::tests::a_page_never_ends_below_the_change_floor`,
+    `t_api_04_a_full_listing_reaches_its_end_whatever_retention_has_forgotten`; in the client,
+    `test_a_full_listing_whose_cursor_expired_meanwhile_is_begun_again`.
 
 ---
 
@@ -321,13 +354,16 @@ specific sentence rather than hunt for it in code.
 
 ## 6. Known nonconformance and unverified areas
 
-* **Everything at L4 and L5.** No microVM has been booted from this code. The isolation claims, kernel enforcement
-  of limits, the lifetime enforcer against a real runtime, the allowlist through a real guest, and the restore
-  oracle on a real snapshot are implemented and tested against doubles only.
-* **The Firecracker backend's orchestration tests need root** (they create namespaces and give files to other
-  users). They are marked ignored and were not run in the environment this was written in.
-* **T-ENTRY-01** (the entry conditions of §4.1 on a real host and a real supply chain) is not met: the guest
-  kernel and base-image pins are still `UNSET`.
+* **L4 on one nested-virtualisation machine only.** The isolation claims, kernel enforcement of limits, both
+  network modes through a real guest, and the restore oracle on real snapshots were exercised on a laptop with KVM
+  nested inside WSL 2 (VERIFICATION_STATUS.md §6). Nothing has run on bare metal, on another kernel, or on
+  `aarch64`.
+* **INV-030, T-HOST-01.** On that machine the lifetime enforcer ended a runtime about a second after the tolerance,
+  measured by the wall clock. The machine's monotonic clock runs 5.6 % slow against it, so that result says
+  nothing either way about the enforcer. It has not been demonstrated.
+* **T-ENTRY-01** (the entry conditions of §4.1 on a real host and a real supply chain) is not met: every
+  `x86_64` input is pinned and was used, but the `aarch64` kernel pin is still `UNSET`, so the pin check a release
+  requires fails, as it must.
 * **T-DOC-01** is a lint of the contract document itself and has no counterpart here.
 * **The number of retained records has no ceiling of its own.** The contract bounds it by
   `operation_rate_limit` × `operation_retention` per peer (PS-10), and so does the host. With the default

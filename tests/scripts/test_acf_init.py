@@ -425,6 +425,12 @@ def test_set_resolver_writes_resolv_conf_only_when_the_host_gave_the_sandbox_a_n
     assert (result.returncode, result.stderr) == (0, "")
     assert list(no_network.iterdir()) == []
 
+    # ... and one the image carried is removed: a container build leaves the build machine's resolvers in it.
+    (no_network / "resolv.conf").write_text("nameserver 1.1.1.1\nnameserver 1.0.0.1\n")
+    result = sh(shell, 'set_resolver "$1" "$2"', str(lab.root / "pnp-empty"), str(no_network))
+    assert (result.returncode, result.stderr) == (0, "")
+    assert list(no_network.iterdir()) == [], "a sandbox without a network has no resolver"
+
 
 @pytest.mark.parametrize("shell", SHELLS)
 def test_set_resolver_replaces_a_resolv_conf_that_is_a_dangling_link(shell: str, sh: ShellRunner, lab: Lab) -> None:

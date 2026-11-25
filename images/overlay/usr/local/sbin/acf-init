@@ -250,15 +250,20 @@ loopback_up() {
     fi
 }
 
-# Give libc the resolver the host chose, if the host gave this sandbox a network. Nothing is written
-# otherwise: a sandbox without a network has no resolver, and a stale file would only produce timeouts.
+# Give libc the resolver the host chose, if the host gave this sandbox a network. Otherwise the sandbox
+# has no resolver, so whatever resolv.conf the image carries is removed: a container build leaves the
+# build machine's resolvers in it, and a sandbox must not claim to have one. (Found on the first real
+# image: its resolv.conf named the build host's public resolvers.)
 # An image may ship /etc/resolv.conf as a link into a directory that does not exist here; it is replaced.
 #
 # set_resolver [PNP_FILE [ETC_DIR]] — the optional arguments exist so tests can aim it at a scratch directory.
 set_resolver() {
     _conf=$(render_resolv "${1:-/proc/net/pnp}")
-    [ -n "$_conf" ] || return 0
     _etc=${2:-/etc}
+    if [ -z "$_conf" ]; then
+        rm -f "$_etc/resolv.conf" 2>/dev/null
+        return 0
+    fi
     rm -f "$_etc/resolv.conf" 2>/dev/null
     { printf '%s\n' "$_conf" >"$_etc/resolv.conf"; } 2>/dev/null
 }

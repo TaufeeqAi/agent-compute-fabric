@@ -51,6 +51,7 @@ import contextlib
 import enum
 import json
 import os
+import re
 import shutil
 import signal
 import stat
@@ -190,6 +191,18 @@ class HostEnv:
     def control_plane(self) -> bool:
         return self.mode is Mode.CONTROL_PLANE
 
+    @property
+    def peer_id(self) -> str:
+        """The peer the suites' own requests are recorded under: what a record's owner says.
+
+        The test host enrols the user who starts it as ``local-operator``. A production host's table is the
+        operator's (the shipped one enrols root as ``local-root``): it is read, never assumed. (Found on the first
+        run against a real host, where three tests had hardcoded the test host's name.)
+        """
+        if self.control_plane:
+            return "local-operator"
+        return enrolled_peer_id(Path(self.config.text("paths.enrolment_path")), os.geteuid())
+
     # ---- bounds, from the files
     @property
     def vmm_overhead_mib(self) -> int:
@@ -299,6 +312,27 @@ def private_host(
         yield PrivateHost(host=host, acf=acf.as_peer(Target(socket=host.socket)))
     finally:
         host.destroy()
+
+
+def enrolled_peer_id(enrolment: Path, uid: int) -> str:
+    """The ``peer_id`` an enrolment table gives the local user ``uid`` (``match: { local_uid: N }``).
+
+    The table is a list of mappings, which :class:`Settings` deliberately does not read; this reads only the two
+    keys it needs and fails if the user is not enrolled exactly once.
+    """
+    found: list[str] = []
+    peer: str | None = None
+    for raw in enrolment.read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0]
+        if m := re.match(r"\s*-\s*peer_id:\s*([A-Za-z0-9._:/@=+-]+)\s*$", line):
+            peer = m.group(1)
+        elif peer is not None and (m := re.search(r"\blocal_uid:\s*([0-9]+)\b", line)) and int(m.group(1)) == uid:
+            found.append(peer)
+    if len(found) != 1:
+        raise DriverError(
+            f"{enrolment} must enrol uid {uid} exactly once with `match: {{ local_uid: {uid} }}`; found {found}"
+        )
+    return found[0]
 
 
 def edited_copy(source: Path, destination: Path, replacements: Mapping[str, str]) -> Path:
@@ -413,6 +447,18 @@ class HostUnit(SystemdUnit):
 
 
 # ----------------------------------------------------------------------------------------------- is it ready?
+def _present(path: Path) -> bool:
+    """Whether ``path`` is a file, where a path this user may not even look at counts as present.
+
+    The host's state and configuration directories are closed to other users, so on a machine with a host installed
+    an unprivileged run cannot tell. That is the "not root" entry, already listed: one missing thing is listed once.
+    """
+    try:
+        return path.is_file()
+    except PermissionError:
+        return True
+
+
 def machine_problems(env: HostEnv, *, euid: int | None = None) -> list[str]:
     """Everything about THIS MACHINE that stops the suites from meaning anything against a production host.
 
@@ -431,12 +477,12 @@ def machine_problems(env: HostEnv, *, euid: int | None = None) -> list[str]:
         )
     elif not os.access(kvm, os.R_OK | os.W_OK):
         problems.append("/dev/kvm is not readable and writable by this user")
-    if not env.config.path.is_file():
+    if not _present(env.config.path):
         problems.append(
             f"the host configuration {env.config.path} does not exist: `scripts/host-setup.sh install` "
             "(or set ACF_HOST_CONFIG to the file the host was started with)"
         )
-    if not env.profile.path.is_file():
+    if not _present(env.profile.path):
         problems.append(f"the safety profile {env.profile.path} does not exist: `scripts/host-setup.sh install`")
     try:
         mode = env.socket.stat().st_mode
@@ -448,7 +494,7 @@ def machine_problems(env: HostEnv, *, euid: int | None = None) -> list[str]:
     else:
         if not stat.S_ISSOCK(mode):
             problems.append(f"{env.socket} exists but is not a socket")
-    if not (env.image_dir / "manifest.json").is_file():
+    if not _present(env.image_dir / "manifest.json"):
         problems.append(
             f"image {env.image!r} is not installed ({env.image_dir}/manifest.json): "
             f"`scripts/build-image.sh --image {env.image} --kernel <vmlinux> --install`"
@@ -469,7 +515,7 @@ def _doctor_failures(env: HostEnv) -> list[str]:
     """What the host's own preflight (``acf-host doctor --json``) says cannot hold on this machine."""
     if not env.host_binary.is_file():
         return [f"the host binary {env.host_binary} does not exist (set ACF_HOST_BIN): its `doctor` is the preflight"]
-    if not env.config.path.is_file():
+    if not os.access(env.config.path, os.R_OK):  # missing, or closed to this user: listed above
         return []
     done = subprocess.run(
         [str(env.host_binary), "doctor", "--config", str(env.config.path), "--json"],

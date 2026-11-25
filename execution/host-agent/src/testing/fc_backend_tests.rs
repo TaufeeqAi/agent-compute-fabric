@@ -69,7 +69,16 @@ impl ProcessInspector for Scripted {
 }
 
 fn good_posture() -> SecurityPosture {
-    SecurityPosture { uid: UID, gid: UID, seccomp_mode: 2, no_new_privs: true, caps_dropped: true, chrooted: true }
+    SecurityPosture {
+        uid: UID,
+        gid: UID,
+        seccomp_mode: 2,
+        no_new_privs: true,
+        caps_dropped: true,
+        seccomp_own_filter: true,
+        seccomp_own_filter_at_launch: true,
+        chrooted: true,
+    }
 }
 
 /// Where the emulated VMM publishes itself once its API socket is bound.
@@ -101,12 +110,14 @@ struct Harness {
 }
 
 fn write_fake_jailer(path: &Path, argv_has_id: bool) {
-    // Parses the real jailer flags, builds <base>/<exe>/<id>/root and "daemonizes" a long sleep
-    // whose argv contains the jail id (as Firecracker's own `--id` does).
+    // Parses the real jailer flags, builds <base>/<exe>/<id>/root and "daemonizes" one long-lived
+    // process whose argv carries the jail id (as Firecracker's own `--id` does). One process, like a
+    // real VMM: `setsid` does not fork here and the shell `exec`s, so the pid in the pid file is the
+    // process itself and nothing outlives it when it is ended.
     let body = if argv_has_id {
-        r#"nohup setsid sh -c 'sleep 600' "$ID" >/dev/null 2>&1 &"#
+        r#"nohup setsid sh -c 'exec python3 -c "import time; time.sleep(600)" "--id=$0"' "$ID" >/dev/null 2>&1 &"#
     } else {
-        r#"nohup setsid sh -c 'sleep 600' unrelated >/dev/null 2>&1 &"#
+        r#"nohup setsid sh -c 'exec python3 -c "import time; time.sleep(600)" --id=unrelated' "$ID" >/dev/null 2>&1 &"#
     };
     let script = format!(
         "#!/bin/sh\nID=\"\"; BASE=\"\"; EXE=\"\"\nwhile [ $# -gt 0 ]; do case \"$1\" in --id) ID=\"$2\"; shift 2;; --chroot-base-dir) BASE=\"$2\"; shift 2;; --exec-file) EXE=\"$2\"; shift 2;; --) shift; break;; *) shift;; esac; done\nROOT=\"$BASE/$(basename \"$EXE\")/$ID/root\"\nmkdir -p \"$ROOT\" || exit 1\n{body}\necho $! > \"$ROOT/firecracker.pid\"\nexit 0\n"

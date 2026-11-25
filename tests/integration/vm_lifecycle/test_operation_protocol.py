@@ -74,7 +74,7 @@ def test_t_op_02_one_id_names_one_request(acf: AcfLocal) -> None:
     assert wire.inspect(name).resources["memory_mib"] == 256, "the conflicting body changed the sandbox"
 
 
-def test_an_operation_id_belongs_to_one_peer_in_one_owner_scope(acf: AcfLocal) -> None:
+def test_an_operation_id_belongs_to_one_peer_in_one_owner_scope(acf: AcfLocal, host_env: HostEnv) -> None:
     wire, elsewhere = acf.wire, acf.wire.in_scope("it-other-scope")
     operation_id = new_operation_id()
     mine = wire.call("sandbox.create", _create_params(acf, acf.name("a")), operation_id=operation_id).succeeded()
@@ -82,7 +82,7 @@ def test_an_operation_id_belongs_to_one_peer_in_one_owner_scope(acf: AcfLocal) -
     assert mine.sandbox_result().sandbox_id != theirs.sandbox_result().sandbox_id, (
         "the same id in another owner scope is another operation"
     )
-    assert (mine.owner, theirs.owner) == (("local-operator", "default"), ("local-operator", "it-other-scope"))
+    assert (mine.owner, theirs.owner) == ((host_env.peer_id, "default"), (host_env.peer_id, "it-other-scope"))
 
 
 def test_t_op_03_a_request_outside_the_acceptance_horizon_is_refused(acf: AcfLocal, host_env: HostEnv) -> None:
@@ -172,13 +172,13 @@ def test_a_listing_can_be_followed_page_by_page_to_the_same_end(acf: AcfLocal) -
     assert {s.sandbox_id for s in paged.sandboxes()} == made, "following the cursor must reach every record"
 
 
-def test_an_operation_can_be_read_back_by_id_and_is_in_the_list(acf: AcfLocal) -> None:
+def test_an_operation_can_be_read_back_by_id_and_is_in_the_list(acf: AcfLocal, host_env: HostEnv) -> None:
     wire = acf.wire
     box = wire.ready(acf.name("read"))
     ran = wire.run(box, ["true"])
     by_id = acf.ok("operation", "get", ran.operation_id).accepted()
     assert (by_id.operation_id, by_id.operation_type, by_id.state) == (ran.operation_id, "exec.run", "SUCCEEDED")
-    assert (by_id.run_id, by_id.target, by_id.owner) == (ran.run_id, box.sandbox_id, ("local-operator", "default"))
+    assert (by_id.run_id, by_id.target, by_id.owner) == (ran.run_id, box.sandbox_id, (host_env.peer_id, "default"))
     assert by_id.issuer == "PEER"
     listed = {op.operation_id: op for op in wire.operations()}
     assert listed[ran.operation_id].operation_type == "exec.run"

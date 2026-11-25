@@ -295,9 +295,9 @@ impl FirecrackerBackend {
 
     // ---------- file staging: hash the bytes we copy, compare, then use ----------
 
+    /// Synchronous and disk-bound: called through [`crate::durability::blocking`].
     #[allow(clippy::too_many_arguments)]
     fn stage_file(
-        &self,
         src: &mut std::fs::File,
         want_sha: &str,
         max: u64,
@@ -439,7 +439,9 @@ impl FirecrackerBackend {
                 return Err(e.with_possible_side_effect());
             }
         };
-        let violations = posture.violations(h.uid);
+        // Before configuration: the seccomp rule of this moment (the API thread filtered, the rest
+        // filtered once the instance starts). `finish_boot` applies the full rule once the guest is up.
+        let violations = posture.launch_violations(h.uid);
         let in_ns = self.inspector.in_netns(pid, &ns_path);
         if !violations.is_empty() || !in_ns {
             self.kill(&ident).await;
@@ -513,7 +515,8 @@ impl FirecrackerBackend {
         &self,
         h: &BackendHandle,
         ident: ProcessIdentity,
-        posture: crate::backend::process::SecurityPosture,
+        // What the launch check saw. Replaced by a fresh reading once the guest is up.
+        _at_launch: crate::backend::process::SecurityPosture,
         in_ns: bool,
         nic_count: usize,
         started: Instant,
@@ -523,6 +526,14 @@ impl FirecrackerBackend {
             .wait_ready(Duration::from_millis(self.cfg.firecracker.guest_ready_timeout_ms))
             .await
             .map_err(|e| e.with_possible_side_effect())?;
+        // IS-1, now that every thread of the VMM exists and has installed its filter: the full posture,
+        // read again from the kernel. A VMM whose threads run with inherited filters only is refused here.
+        let posture = self.inspector.posture(ident.pid, &self.root_path(&h.sandbox)).map_err(|e| e.with_possible_side_effect())?;
+        let late = posture.violations(h.uid);
+        if !late.is_empty() {
+            return Err(AcfError::security(format!("VMM confinement check failed once the guest was up: {}", late.join("; ")))
+                .with_possible_side_effect());
+        }
         let network = match h.resources.network.mode() {
             NetworkMode::None => {
                 // The guest report only ever *adds* evidence; if it cannot be obtained we say so.
@@ -588,11 +599,11 @@ impl SandboxBackend for FirecrackerBackend {
                 req.resources.disk_mib, r.size
             )));
         }
-        let staged = (|| -> Result<()> {
-            self.stage_file(&mut kf, &k.sha256, MAX_KERNEL_BYTES.max(k.size), &payload, "vmlinux", 0o400, uid, uid, None)?;
-            self.stage_file(&mut rf, &r.sha256, r.size, &payload, "rootfs.ext4", 0o600, uid, uid, Some(disk_bytes))?;
+        let staged = crate::durability::blocking(|| -> Result<()> {
+            Self::stage_file(&mut kf, &k.sha256, MAX_KERNEL_BYTES.max(k.size), &payload, "vmlinux", 0o400, uid, uid, None)?;
+            Self::stage_file(&mut rf, &r.sha256, r.size, &payload, "rootfs.ext4", 0o600, uid, uid, Some(disk_bytes))?;
             Ok(())
-        })();
+        });
         if let Err(e) = staged {
             return Err(e.with_possible_side_effect());
         }
@@ -763,12 +774,14 @@ impl SandboxBackend for FirecrackerBackend {
                 crate::durability::sync_all(&out)?;
                 Ok(FileDigest { name: dst.to_owned(), bytes: c.bytes, sha256: c.sha256 })
             };
-            let art = SnapshotArtifacts {
-                vmstate: copy("snap.vmstate", "vmstate")?,
-                mem: copy("snap.mem", "mem")?,
-                disk: copy("rootfs.ext4", "disk")?,
-                vmm_version: info.vmm_version.clone(),
-            };
+            let art = crate::durability::blocking(|| -> Result<SnapshotArtifacts> {
+                Ok(SnapshotArtifacts {
+                    vmstate: copy("snap.vmstate", "vmstate")?,
+                    mem: copy("snap.mem", "mem")?,
+                    disk: copy("rootfs.ext4", "disk")?,
+                    vmm_version: info.vmm_version.clone(),
+                })
+            })?;
             // The jail copies are scratch; drop them so the next snapshot starts clean.
             let _ = root.remove_file("snap.vmstate");
             let _ = root.remove_file("snap.mem");
@@ -795,13 +808,18 @@ impl SandboxBackend for FirecrackerBackend {
         let e = req.expected;
         // Verify-by-copying: a corrupt vmstate would terminate Firecracker (CRC failure), and a
         // swapped file must never be loaded, so nothing is used that did not hash to the manifest.
-        for (src_name, dst, d, mode) in
-            [("vmstate", "snap.vmstate", &e.vmstate, 0o400), ("mem", "snap.mem", &e.mem, 0o400), ("disk", "rootfs.ext4", &e.disk, 0o600)]
-        {
-            let mut f = req.source.open(src_name)?.into_std();
-            self.stage_file(&mut f, &d.sha256, d.bytes.max(1), &payload, dst, mode, uid, uid, None)
-                .map_err(|er| er.with_possible_side_effect())?;
-        }
+        crate::durability::blocking(|| -> Result<()> {
+            for (src_name, dst, d, mode) in [
+                ("vmstate", "snap.vmstate", &e.vmstate, 0o400),
+                ("mem", "snap.mem", &e.mem, 0o400),
+                ("disk", "rootfs.ext4", &e.disk, 0o600),
+            ] {
+                let mut f = req.source.open(src_name)?.into_std();
+                Self::stage_file(&mut f, &d.sha256, d.bytes.max(1), &payload, dst, mode, uid, uid, None)
+                    .map_err(|er| er.with_possible_side_effect())?;
+            }
+            Ok(())
+        })?;
         self.create_netns(&jail_id).await.map_err(|er| er.with_possible_side_effect())?;
         let handle =
             BackendHandle { sandbox: s.clone(), uid, gid: uid, resources: req.resources.clone(), boot_args: String::new(), process: None };
@@ -1042,7 +1060,6 @@ mod tests {
     #[test]
     fn a_file_swapped_after_its_digest_was_recorded_is_never_staged() {
         let d = tempfile::tempdir().unwrap();
-        let b = backend(d.path());
         std::fs::create_dir(d.path().join("staging")).unwrap();
         let staging = Dir::open_ambient_dir(d.path().join("staging"), cap_std::ambient_authority()).unwrap();
         let (uid, gid) = (rustix::process::geteuid().as_raw(), rustix::process::getegid().as_raw());
@@ -1051,7 +1068,7 @@ mod tests {
         let source = d.path().join("rootfs.img");
         let stage = |name: &str, max: u64, grow_to: Option<u64>| {
             let mut f = std::fs::File::open(&source).unwrap();
-            b.stage_file(&mut f, &recorded, max, &staging, name, 0o600, uid, gid, grow_to)
+            FirecrackerBackend::stage_file(&mut f, &recorded, max, &staging, name, 0o600, uid, gid, grow_to)
         };
         let staged = |name: &str| d.path().join("staging").join(name);
 

@@ -1,0 +1,1565 @@
+{
+  "name": "sandbox_create",
+  "title": "Create a sandbox",
+  "description": "Create an isolated sandbox from an image. The sandbox is created and not started: start it before running a command. The default network is `none`; an allowlist is given only if the credential's grant allows it. Returns the operation, or a handle to it if it is still running. A result with `replayed: true` reports work that already existed and started nothing new. An operation in state UNKNOWN, or an error with code OUTCOME_LOST, means the outcome is not known: inspect the sandbox before acting again, and do not repeat the call blindly.",
+  "inputSchema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$defs": {
+      "AllowName": {
+        "additionalProperties": false,
+        "description": "Outbound TLS to an exact DNS name, on the listed ports.",
+        "properties": {
+          "name": {
+            "maxLength": 253,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "ports": {
+            "items": {
+              "$ref": "#/$defs/PortRange"
+            },
+            "maxItems": 64,
+            "minItems": 1,
+            "title": "Ports",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "ports"
+        ],
+        "title": "AllowName",
+        "type": "object"
+      },
+      "AllowNetwork": {
+        "additionalProperties": false,
+        "description": "Outbound TCP to an IPv4 network in CIDR form, on the listed ports.",
+        "properties": {
+          "network": {
+            "maxLength": 18,
+            "minLength": 9,
+            "title": "Network",
+            "type": "string"
+          },
+          "ports": {
+            "items": {
+              "$ref": "#/$defs/PortRange"
+            },
+            "maxItems": 64,
+            "minItems": 1,
+            "title": "Ports",
+            "type": "array"
+          }
+        },
+        "required": [
+          "network",
+          "ports"
+        ],
+        "title": "AllowNetwork",
+        "type": "object"
+      },
+      "NetworkAllowlist": {
+        "additionalProperties": false,
+        "description": "Outbound connections to the listed destinations only.",
+        "properties": {
+          "mode": {
+            "const": "allowlist",
+            "title": "Mode",
+            "type": "string"
+          },
+          "entries": {
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AllowName"
+                },
+                {
+                  "$ref": "#/$defs/AllowNetwork"
+                }
+              ]
+            },
+            "maxItems": 256,
+            "title": "Entries",
+            "type": "array"
+          }
+        },
+        "required": [
+          "mode",
+          "entries"
+        ],
+        "title": "NetworkAllowlist",
+        "type": "object"
+      },
+      "NetworkNone": {
+        "additionalProperties": false,
+        "description": "No network device exists in the sandbox.",
+        "properties": {
+          "mode": {
+            "const": "none",
+            "default": "none",
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "title": "NetworkNone",
+        "type": "object"
+      },
+      "PortRange": {
+        "additionalProperties": false,
+        "description": "One inclusive range of TCP ports.",
+        "properties": {
+          "from": {
+            "maximum": 65535,
+            "minimum": 1,
+            "title": "From",
+            "type": "integer"
+          },
+          "to": {
+            "maximum": 65535,
+            "minimum": 1,
+            "title": "To",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "from",
+          "to"
+        ],
+        "title": "PortRange",
+        "type": "object"
+      },
+      "Resources": {
+        "additionalProperties": false,
+        "description": "What a sandbox is given. Integers: vCPUs and MiB.",
+        "properties": {
+          "vcpus": {
+            "maximum": 255,
+            "minimum": 1,
+            "title": "Vcpus",
+            "type": "integer"
+          },
+          "memory_mib": {
+            "maximum": 4194304,
+            "minimum": 1,
+            "title": "Memory Mib",
+            "type": "integer"
+          },
+          "disk_mib": {
+            "maximum": 268435456,
+            "minimum": 1,
+            "title": "Disk Mib",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "vcpus",
+          "memory_mib",
+          "disk_mib"
+        ],
+        "title": "Resources",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "name": {
+        "description": "A name for the sandbox, unique in the project. Required.",
+        "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]{0,62}$",
+        "title": "Name",
+        "type": "string"
+      },
+      "image": {
+        "description": "Image alias, for example `python`.",
+        "maxLength": 128,
+        "minLength": 1,
+        "title": "Image",
+        "type": "string"
+      },
+      "resources": {
+        "$ref": "#/$defs/Resources"
+      },
+      "network": {
+        "discriminator": {
+          "mapping": {
+            "allowlist": "#/$defs/NetworkAllowlist",
+            "none": "#/$defs/NetworkNone"
+          },
+          "propertyName": "mode"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/$defs/NetworkNone"
+          },
+          {
+            "$ref": "#/$defs/NetworkAllowlist"
+          }
+        ],
+        "title": "Network"
+      },
+      "lifetime_seconds": {
+        "anyOf": [
+          {
+            "maximum": 31536000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Lifetime Seconds"
+      },
+      "idempotency_key": {
+        "anyOf": [
+          {
+            "description": "Leave this out. It is accepted only to repeat a call whose earlier result carried this exact value, and any other value is refused.",
+            "maxLength": 255,
+            "minLength": 1,
+            "pattern": "^[\\x21-\\x7e]+$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Idempotency Key"
+      }
+    },
+    "required": [
+      "name",
+      "image",
+      "resources"
+    ],
+    "title": "SandboxCreateInput",
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$defs": {
+      "Actor": {
+        "additionalProperties": false,
+        "description": "Who asked for an operation, as the host recorded it.",
+        "properties": {
+          "principal_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Principal Id"
+          },
+          "agent_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Agent Label",
+            "x-provenance": "THIRD_PARTY"
+          }
+        },
+        "title": "Actor",
+        "type": "object"
+      },
+      "AllowEntryView": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Name"
+          },
+          "network": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Network"
+          },
+          "ports": {
+            "items": {
+              "$ref": "#/$defs/PortRangeView"
+            },
+            "title": "Ports",
+            "type": "array"
+          }
+        },
+        "required": [
+          "ports"
+        ],
+        "title": "AllowEntryView",
+        "type": "object"
+      },
+      "Durations": {
+        "additionalProperties": false,
+        "properties": {
+          "guest_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Guest Ms",
+            "x-provenance": "GUEST_REPORTED"
+          },
+          "wall_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Wall Ms",
+            "x-provenance": "HOST_OBSERVED"
+          }
+        },
+        "title": "Durations",
+        "type": "object"
+      },
+      "ErrorBody": {
+        "additionalProperties": false,
+        "description": "The members every error answer carries, on every interface.",
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "retry": {
+            "title": "Retry",
+            "type": "string"
+          },
+          "message": {
+            "description": "Human-readable. Never repeats request content. Never parsed.",
+            "title": "Message",
+            "type": "string"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Present on UNRESOLVED: the key to ask again with, unchanged.",
+            "title": "Idempotency Key"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "A bounded reason code that refines `code`.",
+            "title": "Reason"
+          },
+          "code_raw": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Code Raw"
+          }
+        },
+        "required": [
+          "code",
+          "kind",
+          "retry",
+          "message",
+          "request_id"
+        ],
+        "title": "ErrorBody",
+        "type": "object"
+      },
+      "Execution": {
+        "additionalProperties": false,
+        "description": "One command run in one generation of one sandbox.",
+        "properties": {
+          "execution_id": {
+            "title": "Execution Id",
+            "type": "string"
+          },
+          "operation_id": {
+            "title": "Operation Id",
+            "type": "string"
+          },
+          "project": {
+            "title": "Project",
+            "type": "string"
+          },
+          "sandbox_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Sandbox Id"
+          },
+          "generation": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Generation"
+          },
+          "state": {
+            "description": "State of the operation that runs the command.",
+            "title": "State",
+            "type": "string"
+          },
+          "state_raw": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "State Raw"
+          },
+          "terminal": {
+            "title": "Terminal",
+            "type": "boolean"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Status",
+            "x-provenance": "GUEST_REPORTED"
+          },
+          "status_raw": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Status Raw"
+          },
+          "exit_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Exit Code",
+            "x-provenance": "GUEST_REPORTED"
+          },
+          "signal": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Signal",
+            "x-provenance": "GUEST_REPORTED"
+          },
+          "durations": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Durations"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "stdout": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/OutputSummary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "x-provenance": "GUEST_REPORTED"
+          },
+          "stderr": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/OutputSummary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "x-provenance": "GUEST_REPORTED"
+          },
+          "host_backstop_fired": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Host Backstop Fired",
+            "x-provenance": "HOST_OBSERVED"
+          },
+          "runtime_ended": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Runtime Ended",
+            "x-provenance": "HOST_OBSERVED"
+          },
+          "evidence_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Evidence Status",
+            "x-provenance": "HOST_OBSERVED"
+          },
+          "evidence_status_raw": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Evidence Status Raw"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Note",
+            "x-provenance": "HOST_OBSERVED"
+          },
+          "provenance": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "The provenance label of each field of this result: HOST_OBSERVED or GUEST_REPORTED.",
+            "title": "Provenance",
+            "type": "object"
+          }
+        },
+        "required": [
+          "execution_id",
+          "operation_id",
+          "project",
+          "state",
+          "terminal"
+        ],
+        "title": "Execution",
+        "type": "object"
+      },
+      "Failure": {
+        "additionalProperties": false,
+        "description": "Why an operation, a sandbox or a snapshot failed, as the host reported it.",
+        "properties": {
+          "code": {
+            "description": "A failure class of the public vocabulary, or UNRECOGNIZED.",
+            "title": "Code",
+            "type": "string"
+          },
+          "code_raw": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The host's value, when `code` is UNRECOGNIZED.",
+            "title": "Code Raw"
+          },
+          "retry": {
+            "title": "Retry",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "side_effect": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Side Effect"
+          },
+          "side_effect_raw": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The host's value, when `side_effect` is UNRECOGNIZED.",
+            "title": "Side Effect Raw"
+          }
+        },
+        "required": [
+          "code",
+          "retry",
+          "message"
+        ],
+        "title": "Failure",
+        "type": "object"
+      },
+      "Image": {
+        "additionalProperties": false,
+        "properties": {
+          "alias": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Alias"
+          },
+          "digest": {
+            "description": "Identity of the image the sandbox runs.",
+            "title": "Digest",
+            "type": "string"
+          }
+        },
+        "required": [
+          "digest"
+        ],
+        "title": "Image",
+        "type": "object"
+      },
+      "NetworkView": {
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "title": "Mode",
+            "type": "string"
+          },
+          "mode_raw": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Mode Raw"
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/$defs/AllowEntryView"
+            },
+            "title": "Entries",
+            "type": "array"
+          }
+        },
+        "required": [
+          "mode"
+        ],
+        "title": "NetworkView",
+        "type": "object"
+      },
+      "Operation": {
+        "additionalProperties": false,
+        "description": "One accepted mutation. Exactly one host operation stands behind it.",
+        "properties": {
+          "operation_id": {
+            "title": "Operation Id",
+            "type": "string"
+          },
+          "project": {
+            "title": "Project",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          },
+          "type_raw": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Type Raw"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "state_raw": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "State Raw"
+          },
+          "terminal": {
+            "description": "False for every state this version does not know.",
+            "title": "Terminal",
+            "type": "boolean"
+          },
+          "effect": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Effect"
+          },
+          "effect_raw": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Effect Raw"
+          },
+          "failure": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Failure"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "cleanup": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cleanup"
+          },
+          "cleanup_raw": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cleanup Raw"
+          },
+          "cancelled_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cancelled By"
+          },
+          "cancelled_by_raw": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cancelled By Raw"
+          },
+          "target": {
+            "$ref": "#/$defs/OperationTarget"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/OperationResult"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "initiated_by": {
+            "title": "Initiated By",
+            "type": "string"
+          },
+          "initiated_by_raw": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Initiated By Raw"
+          },
+          "actor": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Actor"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Updated At"
+          },
+          "replayed": {
+            "default": false,
+            "description": "True when this answer reports work that existed before the request that received it.",
+            "title": "Replayed",
+            "type": "boolean"
+          },
+          "recorded": {
+            "default": false,
+            "description": "True when the host no longer holds the operation and this is the terminal outcome the platform recorded while it did.",
+            "title": "Recorded",
+            "type": "boolean"
+          },
+          "idempotency_key_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key Digest"
+          }
+        },
+        "required": [
+          "operation_id",
+          "project",
+          "type",
+          "state",
+          "terminal",
+          "target",
+          "initiated_by"
+        ],
+        "title": "Operation",
+        "type": "object"
+      },
+      "OperationResult": {
+        "additionalProperties": false,
+        "description": "The resource an operation produced, as of this answer. Absent in a recorded view.",
+        "properties": {
+          "sandbox": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Sandbox"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "snapshot": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Snapshot"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "execution": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Execution"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "title": "OperationResult",
+        "type": "object"
+      },
+      "OperationTarget": {
+        "additionalProperties": false,
+        "description": "Identifiers of what an operation acts on and of what it produced.",
+        "properties": {
+          "sandbox_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Sandbox Id"
+          },
+          "generation": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Generation"
+          },
+          "snapshot_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Snapshot Id"
+          },
+          "snapshot_generation": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Snapshot Generation"
+          },
+          "execution_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Execution Id"
+          }
+        },
+        "title": "OperationTarget",
+        "type": "object"
+      },
+      "OutputSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "stored_bytes": {
+            "title": "Stored Bytes",
+            "type": "integer"
+          },
+          "produced_bytes": {
+            "title": "Produced Bytes",
+            "type": "integer"
+          },
+          "completeness": {
+            "title": "Completeness",
+            "type": "string"
+          },
+          "completeness_raw": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Completeness Raw"
+          }
+        },
+        "required": [
+          "stored_bytes",
+          "produced_bytes",
+          "completeness"
+        ],
+        "title": "OutputSummary",
+        "type": "object"
+      },
+      "PortRangeView": {
+        "additionalProperties": false,
+        "properties": {
+          "from": {
+            "title": "From",
+            "type": "integer"
+          },
+          "to": {
+            "title": "To",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "from",
+          "to"
+        ],
+        "title": "PortRangeView",
+        "type": "object"
+      },
+      "ResourcesView": {
+        "additionalProperties": false,
+        "properties": {
+          "vcpus": {
+            "title": "Vcpus",
+            "type": "integer"
+          },
+          "memory_mib": {
+            "title": "Memory Mib",
+            "type": "integer"
+          },
+          "disk_mib": {
+            "title": "Disk Mib",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "vcpus",
+          "memory_mib",
+          "disk_mib"
+        ],
+        "title": "ResourcesView",
+        "type": "object"
+      },
+      "Sandbox": {
+        "additionalProperties": false,
+        "properties": {
+          "sandbox_id": {
+            "title": "Sandbox Id",
+            "type": "string"
+          },
+          "project": {
+            "title": "Project",
+            "type": "string"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Name",
+            "x-provenance": "THIRD_PARTY"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "state_raw": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "State Raw"
+          },
+          "generation": {
+            "title": "Generation",
+            "type": "integer"
+          },
+          "revision": {
+            "description": "Opaque validator, also sent as ETag. Compare for equality only.",
+            "title": "Revision",
+            "type": "string"
+          },
+          "image": {
+            "$ref": "#/$defs/Image"
+          },
+          "resources": {
+            "$ref": "#/$defs/ResourcesView"
+          },
+          "network": {
+            "$ref": "#/$defs/NetworkView"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "string"
+          },
+          "last_execution": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Last Execution"
+          },
+          "quarantined": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Quarantined"
+          },
+          "failure": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Failure"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "source_snapshot": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SnapshotRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Notes",
+            "type": "array",
+            "x-provenance": "HOST_OBSERVED"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sandbox_id",
+          "project",
+          "state",
+          "generation",
+          "revision",
+          "image",
+          "resources",
+          "network",
+          "expires_at",
+          "updated_at"
+        ],
+        "title": "Sandbox",
+        "type": "object"
+      },
+      "SandboxRef": {
+        "additionalProperties": false,
+        "properties": {
+          "sandbox_id": {
+            "title": "Sandbox Id",
+            "type": "string"
+          },
+          "generation": {
+            "title": "Generation",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sandbox_id",
+          "generation"
+        ],
+        "title": "SandboxRef",
+        "type": "object"
+      },
+      "Snapshot": {
+        "additionalProperties": false,
+        "properties": {
+          "snapshot_id": {
+            "title": "Snapshot Id",
+            "type": "string"
+          },
+          "snapshot_generation": {
+            "title": "Snapshot Generation",
+            "type": "integer"
+          },
+          "project": {
+            "title": "Project",
+            "type": "string"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Name",
+            "x-provenance": "THIRD_PARTY"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "state_raw": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "State Raw"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "string"
+          },
+          "source_sandbox": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SandboxRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "size_bytes": {
+            "title": "Size Bytes",
+            "type": "integer"
+          },
+          "restore_count": {
+            "title": "Restore Count",
+            "type": "integer"
+          },
+          "incompatible": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Incompatible",
+            "type": "array",
+            "x-provenance": "HOST_OBSERVED"
+          },
+          "failure": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Failure"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "snapshot_id",
+          "snapshot_generation",
+          "project",
+          "state",
+          "revision",
+          "size_bytes",
+          "restore_count",
+          "created_at"
+        ],
+        "title": "Snapshot",
+        "type": "object"
+      },
+      "SnapshotRef": {
+        "additionalProperties": false,
+        "properties": {
+          "snapshot_id": {
+            "title": "Snapshot Id",
+            "type": "string"
+          },
+          "snapshot_generation": {
+            "title": "Snapshot Generation",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "snapshot_id",
+          "snapshot_generation"
+        ],
+        "title": "SnapshotRef",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "description": "Result of a tool that creates an operation: the operation, or a handle to it while it runs.",
+    "properties": {
+      "ok": {
+        "description": "False when the call was refused, is unresolved, or its operation ended without success.",
+        "title": "Ok",
+        "type": "boolean"
+      },
+      "error": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ErrorBody"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "replayed": {
+        "default": false,
+        "title": "Replayed",
+        "type": "boolean"
+      },
+      "idempotency_key": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Identifies this call. Nothing has to be done with it.",
+        "title": "Idempotency Key"
+      },
+      "operation": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Operation"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "sandbox": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Sandbox"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "snapshot": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Snapshot"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      }
+    },
+    "required": [
+      "ok"
+    ],
+    "title": "OperationOutput",
+    "type": "object"
+  },
+  "annotations": {
+    "title": "Create a sandbox",
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "idempotentHint": false,
+    "openWorldHint": false
+  },
+  "x-acf-method": "sandbox.create",
+  "x-acf-class": "granting",
+  "x-acf-reversibility": "COMPENSATABLE"
+}

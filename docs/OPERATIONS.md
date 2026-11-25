@@ -8,8 +8,8 @@ same order, so a green run of that workflow is a rehearsal of this document. Unt
 hardware, treat the procedures as unrehearsed on a KVM host (see [VERIFICATION_STATUS.md](VERIFICATION_STATUS.md)):
 expect to correct something on first contact, and send the correction back.
 
-The client is not described here. The reference client lives in `apps/cli` and speaks the host API over the
-local socket or over mutual TLS; its commands are in [`apps/cli/README.md`](../apps/cli/README.md). This manual
+The client is not described here. The reference client lives in `apps/host-cli` and speaks the host API over the
+local socket or over mutual TLS; its commands are in [`apps/host-cli/README.md`](../apps/host-cli/README.md). This manual
 names API *methods* (`host.info`, `host.set_mode`, …): call them with that client or with your own.
 
 ---
@@ -111,8 +111,8 @@ sudo systemctl enable --now acf-cgroup.service acf-lifetime.service acf-host.ser
 |---|---|---|
 | Firecracker tarball, per architecture | `scripts/firecracker.lock` (`VERSION`, `SHA256_<arch>`) | pinned. `install-firecracker.sh` measures what it downloads and refuses on any difference; `--print-digest` prints the measurement without installing. |
 | The installed `firecracker` and `jailer` binaries | `host.yaml`: `firecracker.firecracker_sha256`, `firecracker.jailer_sha256` | unset in the example on purpose: the installer prints both for the files it installed from the verified tarball. The host hashes each file at startup and before every launch. |
-| Base images (registry digests) | `images/images.lock` `BASE_DIGEST_<name>` | `UNSET`: `scripts/pin-images.sh --write` resolves them (`crane`, `skopeo` or `docker buildx`) |
-| Guest kernel, per architecture | `images/images.lock` `KERNEL_SHA256_<arch>` | `UNSET`: `sha256sum` your uncompressed `vmlinux` into the lock (`images/README.md` says where kernels come from) |
+| Base images (registry digests) | `images/images.lock` `BASE_DIGEST_<name>` | pinned, all four, on 2026-11-18. To move one: change its tag, then `scripts/pin-images.sh --write` resolves it (`crane`, `skopeo` or `docker buildx`) |
+| Guest kernel, per architecture | `images/images.lock` `KERNEL_SHA256_<arch>` | `x86_64` pinned (Firecracker's CI `vmlinux-6.1.188`; the lock says where it came from). `aarch64` is `UNSET`: `sha256sum` your uncompressed `vmlinux` into the lock (`images/README.md` says where kernels come from) |
 
 `make check-pins` keeps the pin files consistent with each other and with `config/host.example.yaml`;
 `make check-pins-release` fails while anything is `UNSET` and is the release gate. `build-image.sh` exits 3 on an
@@ -284,8 +284,11 @@ nothing in memory that it cannot rebuild from its tickets.
 After a **reboot** no runtime exists. The tickets and namespace handles were on `/run`; the core marks what was
 running as failed, and every sandbox's expiry is carried over, never lengthened.
 
-**Hardening of the units** is explained in the unit files. One rule for anyone adding a drop-in to
-`acf-host.service`: no option that gives the unit a mount namespace of its own (`ProtectSystem=`, `ProtectHome=`,
+**Hardening of the units** is explained in the unit files. Two rules for anyone adding a drop-in to
+`acf-host.service`. First: no `User=` or `Group=`, not even `root`. With `NoNewPrivileges=yes`, systemd then
+drops `CAP_SETUID` from the core's effective set, and the core can no longer start its edge under the edge's
+user: the edge fails with `EPERM` and no endpoint opens. The core runs as root because the unit names no user.
+Second: no option that gives the unit a mount namespace of its own (`ProtectSystem=`, `ProtectHome=`,
 `PrivateTmp=`, `ReadWritePaths=` and the like), no device restriction, no `ProtectControlGroups=`. A sandbox's
 network namespace is kept alive by a bind mount under `/run/acf/netns`; made inside a private mount namespace it
 is invisible to the next activation, which then cannot prove that an adopted VM is inside its namespace and
@@ -443,6 +446,14 @@ what the current records need. What the host keeps is bounded by `operations.rat
 `operations.operation_retention_ms` for each peer, and all of it is held in memory, so size those two for the
 machine. The core does not open a store above 256 MiB. If a store ever gets there, stop the core and run
 `journal compact`: the tool opens it whatever its size, and the core opens the result.
+
+**Disk speed.** The store shares `state_root`, and therefore one filesystem, with the kernels, root filesystems
+and snapshots that sandboxes are made from. A create copies and flushes its root filesystem (hundreds of
+megabytes). On ext4 a commit's flush waits for the filesystem-journal transaction that carries those blocks,
+so commits made during a create are as slow as the disk is at that moment. Reads are not: they never wait for a
+flush (ADR-034). On a disk that writes only a few megabytes a second, a create takes minutes and its answer can
+arrive after a caller's own deadline. The client then resolves the operation by its id, as with any lost answer.
+Put `state_root` on local storage that can take the payloads' rate.
 
 ## 10. Backup
 

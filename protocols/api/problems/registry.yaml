@@ -1,0 +1,301 @@
+# Generated from the implementation. Do not edit: run `make platform-artifacts`.
+# The contract governs this file; a difference between the two is a defect in the encoding.
+schema_version: 1
+kinds:
+  REFUSED: the request was not accepted; nothing exists
+  UNRESOLVED: the platform could not establish whether the request was accepted
+retry:
+  SAME_REQUEST_LATER: repeat the same request, with the same idempotency key, later
+  AFTER_CHANGE: change something first
+  NEVER: do not repeat it
+codes:
+- code: INVALID_REQUEST
+  type: urn:acf:problem:invalid-request
+  title: Invalid request
+  decided_by: either
+  kind: REFUSED
+  retry: NEVER
+  http_status: 400
+  retry_after: false
+  sdk_exception: InvalidRequestError
+  error_answer: true
+- code: UNAUTHENTICATED
+  type: urn:acf:problem:unauthenticated
+  title: Unauthenticated
+  decided_by: platform
+  kind: REFUSED
+  retry: NEVER
+  http_status: 401
+  retry_after: false
+  sdk_exception: AuthenticationError
+  error_answer: true
+- code: PERMISSION_DENIED
+  type: urn:acf:problem:permission-denied
+  title: Permission denied
+  decided_by: platform
+  kind: REFUSED
+  retry: NEVER
+  http_status: 403
+  retry_after: false
+  sdk_exception: PermissionDeniedError
+  error_answer: true
+- code: SAFETY_CONTROL_DENIED
+  type: urn:acf:problem:safety-control-denied
+  title: Denied by the host safety profile
+  decided_by: host
+  kind: REFUSED
+  retry: AFTER_CHANGE
+  http_status: 403
+  retry_after: false
+  sdk_exception: SafetyControlDeniedError
+  error_answer: true
+- code: NOT_FOUND
+  type: urn:acf:problem:not-found
+  title: Not found
+  decided_by: either
+  kind: REFUSED
+  retry: NEVER
+  http_status: 404
+  retry_after: false
+  sdk_exception: NotFoundError
+  error_answer: true
+- code: STATE_CONFLICT
+  type: urn:acf:problem:state-conflict
+  title: State conflict
+  decided_by: host
+  kind: REFUSED
+  retry: AFTER_CHANGE
+  http_status: 409
+  retry_after: false
+  sdk_exception: StateConflictError
+  error_answer: true
+- code: QUARANTINED
+  type: urn:acf:problem:quarantined
+  title: Quarantined
+  decided_by: host
+  kind: REFUSED
+  retry: AFTER_CHANGE
+  http_status: 409
+  retry_after: false
+  sdk_exception: QuarantinedError
+  error_answer: true
+- code: REVISION_CONFLICT
+  type: urn:acf:problem:revision-conflict
+  title: Revision conflict
+  decided_by: host
+  kind: REFUSED
+  retry: AFTER_CHANGE
+  http_status: 412
+  retry_after: false
+  sdk_exception: RevisionConflictError
+  error_answer: true
+- code: IDEMPOTENCY_CONFLICT
+  type: urn:acf:problem:idempotency-conflict
+  title: Idempotency key reused for a different request
+  decided_by: platform
+  kind: REFUSED
+  retry: NEVER
+  http_status: 422
+  retry_after: false
+  sdk_exception: IdempotencyConflictError
+  error_answer: true
+- code: REQUEST_IN_PROGRESS
+  type: urn:acf:problem:request-in-progress
+  title: An earlier request with this idempotency key is still being decided
+  decided_by: platform
+  kind: UNRESOLVED
+  retry: SAME_REQUEST_LATER
+  http_status: 409
+  retry_after: true
+  sdk_exception: RequestInProgressError
+  error_answer: true
+- code: RATE_LIMITED
+  type: urn:acf:problem:rate-limited
+  title: Rate limited
+  decided_by: platform
+  kind: REFUSED
+  retry: SAME_REQUEST_LATER
+  http_status: 429
+  retry_after: true
+  sdk_exception: RateLimitError
+  error_answer: true
+- code: RESOURCE_EXHAUSTED
+  type: urn:acf:problem:resource-exhausted
+  title: The host has no capacity for this request
+  decided_by: host
+  kind: REFUSED
+  retry: SAME_REQUEST_LATER
+  http_status: 503
+  retry_after: true
+  sdk_exception: CapacityError
+  error_answer: true
+- code: HOST_NOT_SERVING
+  type: urn:acf:problem:host-not-serving
+  title: The host is not serving this kind of request
+  decided_by: host
+  kind: REFUSED
+  retry: SAME_REQUEST_LATER
+  http_status: 503
+  retry_after: true
+  sdk_exception: ServiceUnavailableError
+  error_answer: true
+- code: UNSUPPORTED
+  type: urn:acf:problem:unsupported
+  title: Unsupported
+  decided_by: either
+  kind: REFUSED
+  retry: AFTER_CHANGE
+  http_status: 422
+  retry_after: false
+  sdk_exception: UnsupportedFeatureError
+  error_answer: true
+- code: REQUEST_TOO_LARGE
+  type: urn:acf:problem:request-too-large
+  title: Request too large
+  decided_by: platform
+  kind: REFUSED
+  retry: NEVER
+  http_status: 413
+  retry_after: false
+  sdk_exception: InvalidRequestError
+  error_answer: true
+- code: CURSOR_EXPIRED
+  type: urn:acf:problem:cursor-expired
+  title: Cursor expired
+  decided_by: host
+  kind: REFUSED
+  retry: AFTER_CHANGE
+  http_status: 410
+  retry_after: false
+  sdk_exception: CursorExpiredError
+  error_answer: true
+- code: INTEGRITY_FAILURE
+  type: urn:acf:problem:integrity-failure
+  title: Integrity failure
+  decided_by: host
+  kind: REFUSED
+  retry: AFTER_CHANGE
+  http_status: 409
+  retry_after: false
+  sdk_exception: IntegrityFailureError
+  error_answer: true
+- code: INCOMPATIBLE_RUNTIME
+  type: urn:acf:problem:incompatible-runtime
+  title: Incompatible runtime
+  decided_by: host
+  kind: REFUSED
+  retry: AFTER_CHANGE
+  http_status: 409
+  retry_after: false
+  sdk_exception: IncompatibleRuntimeError
+  error_answer: true
+- code: CLOCK_SKEW
+  type: urn:acf:problem:clock-skew
+  title: The platform's clock and the host's differ beyond tolerance
+  decided_by: platform
+  kind: REFUSED
+  retry: SAME_REQUEST_LATER
+  http_status: 503
+  retry_after: true
+  sdk_exception: ServiceUnavailableError
+  error_answer: true
+- code: UPSTREAM_UNAVAILABLE
+  type: urn:acf:problem:upstream-unavailable
+  title: A dependency of the platform is unavailable; nothing was sent
+  decided_by: platform
+  kind: REFUSED
+  retry: SAME_REQUEST_LATER
+  http_status: 503
+  retry_after: true
+  sdk_exception: ServiceUnavailableError
+  error_answer: true
+- code: OUTCOME_UNRESOLVED
+  type: urn:acf:problem:outcome-unresolved
+  title: The outcome of the request could not be established
+  decided_by: platform
+  kind: UNRESOLVED
+  retry: SAME_REQUEST_LATER
+  http_status: 503
+  retry_after: true
+  sdk_exception: OutcomeUnresolvedError
+  error_answer: true
+- code: OUTCOME_LOST
+  type: urn:acf:problem:outcome-lost
+  title: The outcome of the request is lost; inspect the target before acting again
+  decided_by: platform
+  kind: UNRESOLVED
+  retry: NEVER
+  http_status: 410
+  retry_after: false
+  sdk_exception: OutcomeLostError
+  error_answer: true
+- code: INTERNAL_ERROR
+  type: urn:acf:problem:internal-error
+  title: Internal error
+  decided_by: either
+  kind: REFUSED
+  retry: AFTER_CHANGE
+  http_status: 500
+  retry_after: false
+  sdk_exception: InternalError
+  error_answer: true
+- code: TIMEOUT
+  type: urn:acf:problem:timeout
+  title: Timed out
+  decided_by: host
+  kind: null
+  retry: SAME_REQUEST_LATER
+  http_status: null
+  retry_after: false
+  sdk_exception: OperationFailedError
+  error_answer: false
+- code: DEPENDENCY_UNAVAILABLE
+  type: urn:acf:problem:dependency-unavailable
+  title: A dependency of the host was unavailable
+  decided_by: host
+  kind: null
+  retry: SAME_REQUEST_LATER
+  http_status: null
+  retry_after: false
+  sdk_exception: OperationFailedError
+  error_answer: false
+- code: SECURITY_CONTROL_FAILURE
+  type: urn:acf:problem:security-control-failure
+  title: A security control could not be confirmed
+  decided_by: host
+  kind: null
+  retry: AFTER_CHANGE
+  http_status: null
+  retry_after: false
+  sdk_exception: OperationFailedError
+  error_answer: false
+- code: PARTIAL_COMPLETION
+  type: urn:acf:problem:partial-completion
+  title: The operation completed in part
+  decided_by: host
+  kind: null
+  retry: AFTER_CHANGE
+  http_status: null
+  retry_after: false
+  sdk_exception: OperationFailedError
+  error_answer: false
+- code: UNKNOWN_OUTCOME
+  type: urn:acf:problem:unknown-outcome
+  title: The outcome of the operation is unknown
+  decided_by: host
+  kind: null
+  retry: AFTER_CHANGE
+  http_status: null
+  retry_after: false
+  sdk_exception: OutcomeUnknownError
+  error_answer: false
+- code: UNRECOGNIZED
+  type: urn:acf:problem:unrecognized
+  title: A failure class this version does not know
+  decided_by: host
+  kind: REFUSED
+  retry: NEVER
+  http_status: null
+  retry_after: false
+  sdk_exception: RefusedError
+  error_answer: true

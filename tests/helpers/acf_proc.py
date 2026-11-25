@@ -130,8 +130,23 @@ def unix_socket_paths(pid: int) -> list[str]:
 
 
 def host_path(pid: int, path_in_its_root: str) -> Path:
-    """The path, on THIS machine, of a file ``pid`` sees at ``path_in_its_root`` (resolves its chroot)."""
-    return Path((PROC / str(pid) / "root").readlink()) / path_in_its_root.lstrip("/")
+    """A path on THIS machine that reaches the file ``pid`` sees at ``path_in_its_root``.
+
+    Through ``/proc/PID/root``, which the kernel resolves in the process's own root. Reading the link instead
+    would not do: a jailer gives the VMM a mount namespace of its own and moves its root there with
+    ``pivot_root``, and seen from here the link then reads ``/``. Compare what this path reaches with
+    :func:`same_file`, not its text.
+    """
+    return PROC / str(pid) / "root" / path_in_its_root.lstrip("/")
+
+
+def same_file(a: Path, b: Path) -> bool:
+    """Whether ``a`` and ``b`` are the same file or directory: the same device and inode, through links."""
+    try:
+        x, y = a.stat(), b.stat()
+    except OSError:
+        return False
+    return (x.st_dev, x.st_ino) == (y.st_dev, y.st_ino)
 
 
 def parse_net_dev(text: str) -> list[str]:
@@ -368,9 +383,15 @@ class Confinement:
     no_new_privs: bool
     #: Seccomp mode per thread name (2 is "filter").
     seccomp_by_thread: dict[str, str]
+    #: How many seccomp filters each thread carries, and how many it could have inherited from the process
+    #: that started it: mode 2 proves nothing under a service manager, because filters are inherited.
+    seccomp_filters_by_thread: dict[str, int]
+    inherited_filters: int
     #: How many PID namespaces deep the process is (1: the namespace of this machine's init).
     pid_namespace_depth: int
-    root: Path
+    #: The device and inode of its root directory, and whether that is this machine's root.
+    root_identity: tuple[int, int]
+    machine_root: bool
     #: Kinds of namespace it SHARES with the process that is looking.
     shared_namespaces: tuple[str, ...]
 
@@ -389,19 +410,40 @@ class Confinement:
         unfiltered = sorted(name for name, mode in self.seccomp_by_thread.items() if mode != "2")
         if unfiltered or not self.seccomp_by_thread:
             found.append(f"threads without a system-call filter: {unfiltered or 'no thread could be read'}")
+        inherited_only = sorted(
+            name for name, count in self.seccomp_filters_by_thread.items() if count <= self.inherited_filters
+        )
+        if inherited_only:
+            found.append(f"threads with no system-call filter of their own, only inherited ones: {inherited_only}")
         if self.pid_namespace_depth < 2:
             found.append("it is not in a PID namespace of its own")
-        if self.root == Path("/"):
+        if self.machine_root:
             found.append("its root directory is the machine's root")
         if self.shared_namespaces:
             found.append(f"it shares these namespaces with an ordinary process: {', '.join(self.shared_namespaces)}")
         return found
 
+    def has_root(self, directory: Path) -> bool:
+        """Whether its root directory is ``directory`` (by identity, not by name)."""
+        found = directory.stat()
+        return self.root_identity == (found.st_dev, found.st_ino)
 
-def confinement(pid: int, *, compared_with: int) -> Confinement:
-    """The confinement of ``pid`` as the kernel reports it; namespaces are compared with those of ``compared_with``."""
+
+def seccomp_filters(pid: int) -> int:
+    """How many seccomp filters ``pid``'s first thread carries (0 when the kernel does not say)."""
+    return int(proc_status(pid).get("Seccomp_filters", "0") or 0)
+
+
+def confinement(pid: int, *, compared_with: int, inherited_from: int | None = None) -> Confinement:
+    """The confinement of ``pid`` as the kernel reports it.
+
+    Namespaces are compared with those of ``compared_with``. ``inherited_from`` is the process that started it
+    (for a VMM: the host's core): a filter counts as the process's own only beyond the ones that one carries.
+    """
     status = proc_status(pid)
     threads = {tid: thread for tid, thread in thread_statuses(pid).items() if "Seccomp" in thread}
+    root = (PROC / str(pid) / "root").stat()
+    machine = Path("/").stat()
     return Confinement(
         uids=ids(status, "Uid"),
         gids=ids(status, "Gid"),
@@ -409,8 +451,14 @@ def confinement(pid: int, *, compared_with: int) -> Confinement:
         permitted_capabilities=status["CapPrm"],
         no_new_privs=status.get("NoNewPrivs") == "1",
         seccomp_by_thread={f"{thread.get('Name', '?')}/{tid}": thread["Seccomp"] for tid, thread in threads.items()},
+        seccomp_filters_by_thread={
+            f"{thread.get('Name', '?')}/{tid}": int(thread.get("Seccomp_filters", "0") or 0)
+            for tid, thread in threads.items()
+        },
+        inherited_filters=seccomp_filters(inherited_from) if inherited_from is not None else 0,
         pid_namespace_depth=len(status.get("NSpid", "").split()),
-        root=(PROC / str(pid) / "root").readlink(),
+        root_identity=(root.st_dev, root.st_ino),
+        machine_root=(root.st_dev, root.st_ino) == (machine.st_dev, machine.st_ino),
         shared_namespaces=tuple(
             kind for kind in ("net", "pid", "mnt") if namespace(pid, kind) == namespace(compared_with, kind)
         ),

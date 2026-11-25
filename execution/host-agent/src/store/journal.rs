@@ -22,11 +22,21 @@
 //!   one is a stale writer and is never believed.
 //!
 //! # Durability and ordering (PS-4, PS-7)
-//! `commit_with` holds one mutex across *check → append → fsync → apply*. That single critical
-//! section is what makes idempotent BEGIN, atomic admission and fencing correct without further
-//! locking. State is applied in memory **only after** the fsync succeeds, so memory never runs
-//! ahead of disk. Before every append the file must still have the length this writer left it at:
-//! if it does not, another writer exists and this activation fences itself.
+//! `commit_with` holds the *writer* lock across *check → append → fsync → apply*. That single
+//! critical section is what makes idempotent BEGIN, atomic admission and fencing correct without
+//! further locking. State is applied in memory **only after** the fsync succeeds, so memory never
+//! runs ahead of disk. Before every append the file must still have the length this writer left it
+//! at: if it does not, another writer exists and this activation fences itself.
+//!
+//! Readers never take the writer lock. The committed state sits behind a lock of its own, which a
+//! writer takes only to apply a batch that is already durable. A read therefore never waits for a
+//! disk flush: while a commit is being made durable, a reader sees the state before it, which is
+//! exactly what is committed. (An `fsync` can take as long as the filesystem needs to write out
+//! everything that is in the same filesystem journal transaction, including a multi-gigabyte root
+//! filesystem being staged beside the store; no answer may depend on that.)
+//!
+//! Lock order: writer, then committed state. Nothing that holds the committed-state lock takes the
+//! writer lock.
 //!
 //! # Corruption (PS-8) — nothing corrupt is silently believed
 //! * **Torn tail** (partial final line, or a bad final record): the signature of a crash during
@@ -53,7 +63,7 @@ use std::{
     io::{Read, Seek, SeekFrom, Write},
     os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 
 use serde::{Deserialize, Serialize};
@@ -361,15 +371,15 @@ impl Reserve {
     }
 }
 
+/// What only a writer touches. Every mutation of the store takes this lock first, so mutations are
+/// serialised and the check in `commit_with` sees exactly the state its append extends.
 #[derive(Debug)]
-struct Inner {
+struct Writer {
     file: File,
-    state: JournalState,
     next_seq: u64,
+    /// The length this writer left the file at (fencing, PS-5).
     len: u64,
     epoch: u64,
-    blocked: Option<WriteBlock>,
-    reserve_released: bool,
     /// Length of the file when it was last current state only (at open, or after a compaction).
     compacted_len: u64,
     #[cfg(any(test, feature = "testing"))]
@@ -380,6 +390,20 @@ struct Inner {
     /// Test-only: the next failed append also cannot be rolled back (the commit is uncertain).
     #[cfg(any(test, feature = "testing"))]
     lose_next_rollback: bool,
+    /// Test-only: the next append says it has begun, then waits to be released (a slow flush).
+    #[cfg(any(test, feature = "testing"))]
+    stall_next_append: Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>,
+}
+
+/// What readers see: committed state only. A writer changes it while holding [`Writer`], and only
+/// to apply what is already durable, so holding it never means waiting for a disk.
+#[derive(Debug)]
+struct Committed {
+    state: JournalState,
+    blocked: Option<WriteBlock>,
+    reserve_released: bool,
+    /// The length of the file as of the last commit.
+    len: u64,
 }
 
 /// Test-only observer of committed state (the joint-state invariants hold "after every commit").
@@ -404,7 +428,8 @@ pub struct Journal {
     reserve: Option<Reserve>,
     /// `store.compact_at_bytes`.
     compact_at: u64,
-    inner: Mutex<Inner>,
+    writer: Mutex<Writer>,
+    committed: RwLock<Committed>,
 }
 
 pub(crate) fn encode(batch: &Batch) -> Result<Vec<u8>> {
@@ -598,29 +623,14 @@ impl Journal {
             last_seq: r.state.last_seq,
             migrated_from,
         };
-        let inner = Inner {
-            file,
-            state: r.state,
-            next_seq: r.next_seq,
-            len,
-            epoch,
-            blocked,
-            reserve_released: false,
-            compacted_len: len,
-            #[cfg(any(test, feature = "testing"))]
-            fail_next_append: None,
-            #[cfg(any(test, feature = "testing"))]
-            after_commit: None,
-            #[cfg(any(test, feature = "testing"))]
-            lose_next_rollback: false,
-        };
         let j = Self {
             path: path.to_owned(),
             lineage: lineage.clone(),
             epoch,
             reserve,
             compact_at: opts.compact_at_bytes.max(1),
-            inner: Mutex::new(inner),
+            writer: Mutex::new(Writer::new(file, r.next_seq, len, epoch)),
+            committed: RwLock::new(Committed { state: r.state, blocked, reserve_released: false, len }),
         };
         if created {
             // A new store: its first record says what it is.
@@ -653,22 +663,6 @@ impl Journal {
         };
         let report =
             OpenReport { integrity, batches: 0, bytes: len, lineage: "unknown".into(), epoch: 0, last_seq: 0, migrated_from: None };
-        let inner = Inner {
-            file,
-            state: JournalState::default(),
-            next_seq: 1,
-            len,
-            epoch: 0,
-            blocked: Some(blocked),
-            reserve_released: false,
-            compacted_len: len,
-            #[cfg(any(test, feature = "testing"))]
-            fail_next_append: None,
-            #[cfg(any(test, feature = "testing"))]
-            after_commit: None,
-            #[cfg(any(test, feature = "testing"))]
-            lose_next_rollback: false,
-        };
         // A blocked store is never written, so it is never compacted either.
         let j = Self {
             path: path.to_owned(),
@@ -676,18 +670,30 @@ impl Journal {
             epoch: 0,
             reserve: None,
             compact_at: u64::MAX,
-            inner: Mutex::new(inner),
+            writer: Mutex::new(Writer::new(file, 1, len, 0)),
+            committed: RwLock::new(Committed { state: JournalState::default(), blocked: Some(blocked), reserve_released: false, len }),
         };
         (j, report)
     }
 
-    fn lock(&self) -> Result<std::sync::MutexGuard<'_, Inner>> {
-        self.inner.lock().map_err(|_| AcfError::internal("store mutex poisoned by a panic"))
+    /// The writer lock. Held for a whole mutation, disk flush included; readers never take it.
+    fn writer(&self) -> Result<MutexGuard<'_, Writer>> {
+        self.writer.lock().map_err(|_| AcfError::internal("store writer lock poisoned by a panic"))
     }
 
-    /// Read-only view of committed state.
+    fn committed(&self) -> Result<RwLockReadGuard<'_, Committed>> {
+        self.committed.read().map_err(|_| AcfError::internal("store state lock poisoned by a panic"))
+    }
+
+    /// Only with the writer lock held, and only for what is already durable (or for a write block).
+    fn committed_mut(&self) -> Result<RwLockWriteGuard<'_, Committed>> {
+        self.committed.write().map_err(|_| AcfError::internal("store state lock poisoned by a panic"))
+    }
+
+    /// Read-only view of committed state. It never waits for a commit to reach the disk: a commit
+    /// that is still being made durable is not committed yet, and becomes visible once it is.
     pub fn read<R>(&self, f: impl FnOnce(&JournalState) -> R) -> Result<R> {
-        Ok(f(&self.lock()?.state))
+        Ok(f(&self.committed()?.state))
     }
 
     pub fn lineage(&self) -> &str {
@@ -701,97 +707,114 @@ impl Journal {
 
     /// Sequence of the last committed batch.
     pub fn last_seq(&self) -> u64 {
-        self.lock().map(|g| g.state.last_seq).unwrap_or(0)
+        self.committed().map(|c| c.state.last_seq).unwrap_or(0)
     }
 
     /// Why the store refuses writes, if it does.
     pub fn write_block(&self) -> Option<WriteBlock> {
-        self.lock().ok().and_then(|g| g.blocked.clone())
+        self.committed().ok().and_then(|c| c.blocked.clone())
     }
 
     /// The ballast was released to make room for a commit (PS-9). New privilege is refused meanwhile.
     pub fn reserve_released(&self) -> bool {
-        self.lock().map(|g| g.reserve_released).unwrap_or(false)
+        self.committed().map(|c| c.reserve_released).unwrap_or(false)
     }
 
     /// Try to take the ballast back (called periodically once space may have returned).
     pub fn restore_reserve(&self) -> bool {
         let Some(res) = &self.reserve else { return true };
-        let Ok(mut g) = self.lock() else { return false };
-        if !g.reserve_released {
+        let Ok(_w) = self.writer() else { return false };
+        if !self.reserve_released() {
             return true;
         }
         if res.hold().is_ok() {
-            g.reserve_released = false;
-            true
+            self.committed_mut().map(|mut c| c.reserve_released = false).is_ok()
         } else {
             let _ = res.release();
             false
         }
     }
 
-    fn append(g: &mut Inner, line: &[u8]) -> std::io::Result<()> {
+    fn append(w: &mut Writer, line: &[u8]) -> std::io::Result<()> {
         #[cfg(any(test, feature = "testing"))]
-        if let Some(kind) = g.fail_next_append.take() {
+        if let Some(kind) = w.fail_next_append.take() {
             return Err(std::io::Error::new(kind, "injected store append failure"));
         }
-        g.file.write_all(line).and_then(|()| crate::durability::sync_data(&g.file))
+        #[cfg(any(test, feature = "testing"))]
+        if let Some((begun, release)) = w.stall_next_append.take() {
+            let _ = begun.send(());
+            let _ = release.recv();
+        }
+        w.file.write_all(line).and_then(|()| crate::durability::sync_data(&w.file))
     }
 
     /// Atomic **check → append → fsync → apply**.
     ///
     /// `f` sees the committed state and returns the entries to append plus a value for the caller.
-    /// Returning `Err` (or an empty entry list) writes nothing. The closure runs while the store
-    /// mutex is held, so it must be quick and must not call back into the store.
+    /// Returning `Err` (or an empty entry list) writes nothing. The closure runs while the store's
+    /// locks are held, so it must be quick and must not call back into the store.
     pub fn commit_with<T>(&self, f: impl FnOnce(&JournalState) -> Result<(Vec<Entry>, T)>) -> Result<T> {
-        let mut g = self.lock()?;
-        if let Some(why) = &g.blocked {
-            return Err(AcfError::new(FailureClass::HostNotServing, why.message()));
-        }
-        let (mut entries, out) = f(&g.state)?;
+        let mut w = self.writer()?;
+        // Only a writer changes the committed state, and this one holds the writer lock until its
+        // batch is applied: what `f` decides on is still the state when the batch lands.
+        let (mut entries, out) = {
+            let c = self.committed()?;
+            if let Some(why) = &c.blocked {
+                return Err(AcfError::new(FailureClass::HostNotServing, why.message()));
+            }
+            f(&c.state)?
+        };
         if entries.is_empty() {
             return Ok(out);
         }
-        let seq = g.next_seq;
+        let seq = w.next_seq;
         for e in &mut entries {
             e.stamp(seq);
         }
-        let batch = Batch { seq, epoch: g.epoch, jump: false, entries };
-        Self::write_batch(&mut g, &batch, self.reserve.as_ref())?;
+        let batch = Batch { seq, epoch: w.epoch, jump: false, entries };
+        self.write_batch(&mut w, &batch)?;
         Ok(out)
     }
 
-    fn write_batch(g: &mut Inner, batch: &Batch, reserve: Option<&Reserve>) -> Result<()> {
+    /// Record why the store refuses writes from now on. Only with the writer lock held.
+    fn block(&self, why: WriteBlock) {
+        if let Ok(mut c) = self.committed_mut() {
+            c.blocked = Some(why);
+        }
+    }
+
+    fn write_batch(&self, w: &mut Writer, batch: &Batch) -> Result<()> {
         let line = encode(batch)?;
         // Fencing (PS-5): the file must be exactly as this writer left it.
-        let on_disk = g.file.metadata().map(|m| m.len()).unwrap_or(u64::MAX);
-        if on_disk != g.len {
-            let why = format!("the store file is {on_disk} bytes, this activation left it at {}; another writer exists", g.len);
-            g.blocked = Some(WriteBlock::Fenced(why.clone()));
+        let on_disk = w.file.metadata().map(|m| m.len()).unwrap_or(u64::MAX);
+        if on_disk != w.len {
+            let why = format!("the store file is {on_disk} bytes, this activation left it at {}; another writer exists", w.len);
+            self.block(WriteBlock::Fenced(why.clone()));
             return Err(AcfError::new(FailureClass::HostNotServing, why));
         }
-        let prev_len = g.len;
-        let mut written = Self::append(g, &line);
+        let prev_len = w.len;
+        // The append and its flush happen with only the writer lock held: readers go on reading.
+        let mut written = Self::append(w, &line);
         if let Err(e) = &written
             && matches!(e.kind(), std::io::ErrorKind::StorageFull | std::io::ErrorKind::QuotaExceeded)
-            && let Some(res) = reserve
-            && !g.reserve_released
+            && let Some(res) = self.reserve.as_ref()
+            && !self.reserve_released()
         {
             // Remove any partial line, release the ballast, and try once more (PS-9).
-            if g.file.set_len(prev_len).and_then(|()| crate::durability::sync_data(&g.file)).is_ok() && res.release().is_ok() {
-                g.reserve_released = true;
-                written = Self::append(g, &line);
+            if w.file.set_len(prev_len).and_then(|()| crate::durability::sync_data(&w.file)).is_ok() && res.release().is_ok() {
+                self.committed_mut()?.reserve_released = true;
+                written = Self::append(w, &line);
             }
         }
         if let Err(e) = written {
             // Best effort: remove a partial line so the tail stays well-formed. If even that fails
             // the on-disk tail is unknowable: the commit is uncertain and this activation stops.
             #[cfg(any(test, feature = "testing"))]
-            let rollback_lost = std::mem::take(&mut g.lose_next_rollback);
+            let rollback_lost = std::mem::take(&mut w.lose_next_rollback);
             #[cfg(not(any(test, feature = "testing")))]
             let rollback_lost = false;
-            if rollback_lost || g.file.set_len(prev_len).and_then(|()| crate::durability::sync_data(&g.file)).is_err() {
-                g.blocked = Some(WriteBlock::Uncertain(format!("append failed and could not be rolled back: {e}")));
+            if rollback_lost || w.file.set_len(prev_len).and_then(|()| crate::durability::sync_data(&w.file)).is_err() {
+                self.block(WriteBlock::Uncertain(format!("append failed and could not be rolled back: {e}")));
             }
             let class = if matches!(e.kind(), std::io::ErrorKind::StorageFull | std::io::ErrorKind::QuotaExceeded) {
                 FailureClass::ResourceExhausted
@@ -800,25 +823,28 @@ impl Journal {
             };
             return Err(AcfError::new(class, format!("store append failed: {e}")));
         }
-        g.len += line.len() as u64;
-        g.next_seq = batch.seq + 1;
+        w.len += line.len() as u64;
+        w.next_seq = batch.seq + 1;
+        // Durable: now, and only now, it becomes what readers see.
+        let mut c = self.committed_mut()?;
         for e in &batch.entries {
-            g.state.apply(e);
+            c.state.apply(e);
         }
-        g.state.last_seq = batch.seq;
+        c.state.last_seq = batch.seq;
+        c.len = w.len;
         #[cfg(any(test, feature = "testing"))]
-        if let Some(observer) = &g.after_commit {
-            (observer.0)(&g.state);
+        if let Some(observer) = &w.after_commit {
+            (observer.0)(&c.state);
         }
         Ok(())
     }
 
     /// Test-only: call `f` with the committed state after every commit of this activation. `f` runs
-    /// while the store lock is held, so it must not call back into the store.
+    /// while the store's locks are held, so it must not call back into the store.
     #[cfg(any(test, feature = "testing"))]
     pub fn observe_commits(&self, f: impl Fn(&JournalState) + Send + Sync + 'static) {
-        if let Ok(mut g) = self.lock() {
-            g.after_commit = Some(CommitObserver(std::sync::Arc::new(f)));
+        if let Ok(mut w) = self.writer() {
+            w.after_commit = Some(CommitObserver(std::sync::Arc::new(f)));
         }
     }
 
@@ -830,37 +856,44 @@ impl Journal {
     /// Advance the commit sequence past `to` (LN-2): after an operator acknowledges a store that is
     /// older than the system it describes, every new record must sort after every marker on disk.
     pub fn jump_sequence(&self, to: u64, entries: Vec<Entry>) -> Result<u64> {
-        let mut g = self.lock()?;
-        if let Some(why) = &g.blocked {
+        let mut w = self.writer()?;
+        if let Some(why) = self.write_block() {
             return Err(AcfError::new(FailureClass::HostNotServing, why.message()));
         }
-        let seq = g.next_seq.max(to.saturating_add(1));
+        let seq = w.next_seq.max(to.saturating_add(1));
         let mut entries = entries;
         for e in &mut entries {
             e.stamp(seq);
         }
-        let batch = Batch { seq, epoch: g.epoch, jump: seq != g.next_seq, entries };
-        Self::write_batch(&mut g, &batch, self.reserve.as_ref())?;
+        let batch = Batch { seq, epoch: w.epoch, jump: seq != w.next_seq, entries };
+        self.write_batch(&mut w, &batch)?;
         Ok(seq)
     }
 
+    /// The length of the store file as of the last commit.
     pub fn len_bytes(&self) -> u64 {
-        self.lock().map(|g| g.len).unwrap_or(0)
+        self.committed().map(|c| c.len).unwrap_or(0)
     }
 
     /// Rewrite the file as live state only, dropping all but the newest `keep_terminal_ops` terminal
     /// operations. Revisions and the commit sequence are preserved. Crash-safe: write a temporary
     /// file, fsync, rename, fsync the directory.
     pub fn compact(&self, keep_terminal_ops: usize) -> Result<u64> {
-        let mut g = self.lock()?;
-        if let Some(why) = &g.blocked {
-            return Err(AcfError::new(FailureClass::HostNotServing, why.message()));
-        }
-        let mut terminal: Vec<&OperationRecord> = g.state.operations.values().filter(|o| o.is_terminal()).collect();
-        terminal.sort_by(|a, b| b.revision.cmp(&a.revision).then_with(|| b.operation_id.cmp(&a.operation_id)));
-        let drop_keys: Vec<OpKey> = terminal.iter().skip(keep_terminal_ops).map(|o| o.key()).collect();
-
-        let mut state = g.state.clone();
+        let mut w = self.writer()?;
+        // Readers keep reading the current state while the new file is written and flushed; it
+        // says the same thing, so they are switched to it only once it has the store's name.
+        let mut state = {
+            let c = self.committed()?;
+            if let Some(why) = &c.blocked {
+                return Err(AcfError::new(FailureClass::HostNotServing, why.message()));
+            }
+            c.state.clone()
+        };
+        let drop_keys: Vec<OpKey> = {
+            let mut terminal: Vec<&OperationRecord> = state.operations.values().filter(|o| o.is_terminal()).collect();
+            terminal.sort_by(|a, b| b.revision.cmp(&a.revision).then_with(|| b.operation_id.cmp(&a.operation_id)));
+            terminal.iter().skip(keep_terminal_ops).map(|o| o.key()).collect()
+        };
         let mut floor = state.change_floor;
         for k in &drop_keys {
             if let Some(op) = state.operations.remove(k) {
@@ -889,10 +922,10 @@ impl Journal {
         // and the records inside keep the revisions they already carry.
         let tmp = self.path.with_extension("wal.compacting");
         let mut out = OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp)?;
-        let mut seq = g.next_seq;
+        let mut seq = w.next_seq;
         let mut written = 0u64;
         for chunk in entries.chunks(64) {
-            let line = encode(&Batch { seq, epoch: g.epoch, jump: false, entries: chunk.to_vec() })?;
+            let line = encode(&Batch { seq, epoch: w.epoch, jump: false, entries: chunk.to_vec() })?;
             out.write_all(&line)?;
             written += line.len() as u64;
             seq += 1;
@@ -904,12 +937,16 @@ impl Journal {
         // and leave the journal appending to a file that no longer has a name.
         let switched = OpenOptions::new().read(true).append(true).open(&tmp)?;
         fs::rename(&tmp, &self.path)?;
-        g.file = switched;
+        w.file = switched;
         state.last_seq = seq.saturating_sub(1).max(state.last_seq);
-        g.state = state;
-        g.next_seq = seq;
-        g.len = written;
-        g.compacted_len = written;
+        w.next_seq = seq;
+        w.len = written;
+        w.compacted_len = written;
+        {
+            let mut c = self.committed_mut()?;
+            c.state = state;
+            c.len = written;
+        }
         // The switch must survive a power cut, or a later commit could be appended to a file the
         // directory no longer names. If that cannot be confirmed the commit history is uncertain,
         // which is a fail-stop (FS-9): the next activation reads whichever file the directory has.
@@ -917,7 +954,7 @@ impl Journal {
             && let Err(e) = fsync_dir(dir)
         {
             let why = format!("the compacted store could not be made durable: {}", e.message);
-            g.blocked = Some(WriteBlock::Uncertain(why.clone()));
+            self.block(WriteBlock::Uncertain(why.clone()));
             return Err(AcfError::internal(why).with_possible_side_effect());
         }
         Ok(drop_keys.len() as u64)
@@ -930,8 +967,8 @@ impl Journal {
     /// Returns whether the file was rewritten.
     pub fn compact_if_grown(&self) -> Result<bool> {
         let due = {
-            let g = self.lock()?;
-            g.blocked.is_none() && g.len > self.compact_at && g.len >= g.compacted_len.saturating_mul(2)
+            let w = self.writer()?;
+            self.write_block().is_none() && w.len > self.compact_at && w.len >= w.compacted_len.saturating_mul(2)
         };
         if due {
             self.compact(usize::MAX)?;
@@ -946,17 +983,49 @@ impl Journal {
 
     #[cfg(any(test, feature = "testing"))]
     pub fn inject_append_error_once(&self, kind: std::io::ErrorKind) {
-        if let Ok(mut g) = self.lock() {
-            g.fail_next_append = Some(kind);
+        if let Ok(mut w) = self.writer() {
+            w.fail_next_append = Some(kind);
         }
     }
 
     /// Test-only: the next append fails **and** what reached the disk cannot be established.
     #[cfg(any(test, feature = "testing"))]
     pub fn inject_uncertain_append_once(&self) {
-        if let Ok(mut g) = self.lock() {
-            g.fail_next_append = Some(std::io::ErrorKind::Other);
-            g.lose_next_rollback = true;
+        if let Ok(mut w) = self.writer() {
+            w.fail_next_append = Some(std::io::ErrorKind::Other);
+            w.lose_next_rollback = true;
+        }
+    }
+
+    /// Test-only: the next append stalls, as on a disk that is slow to flush. The first receiver
+    /// yields once the append has begun; the append goes on when the sender is used or dropped.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn stall_next_append(&self) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>) {
+        let (begun_tx, begun_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        if let Ok(mut w) = self.writer() {
+            w.stall_next_append = Some((begun_tx, release_rx));
+        }
+        (begun_rx, release_tx)
+    }
+}
+
+impl Writer {
+    fn new(file: File, next_seq: u64, len: u64, epoch: u64) -> Self {
+        Self {
+            file,
+            next_seq,
+            len,
+            epoch,
+            compacted_len: len,
+            #[cfg(any(test, feature = "testing"))]
+            fail_next_append: None,
+            #[cfg(any(test, feature = "testing"))]
+            after_commit: None,
+            #[cfg(any(test, feature = "testing"))]
+            lose_next_rollback: false,
+            #[cfg(any(test, feature = "testing"))]
+            stall_next_append: None,
         }
     }
 }
@@ -1172,6 +1241,41 @@ pub(crate) mod tests {
         };
         assert!(try_begin(), "first caller wins");
         assert!(!try_begin(), "second caller observes the first's commit");
+    }
+
+    #[test]
+    fn a_read_is_answered_while_a_commit_waits_for_its_disk_flush() {
+        use std::{sync::Arc, time::Duration};
+        let d = tempfile::tempdir().unwrap();
+        let (j, _) = Journal::open(&d.path().join("j.wal")).unwrap();
+        let j = Arc::new(j);
+        let before = j.last_seq();
+        let (begun, release) = j.stall_next_append();
+        let writer = {
+            let j = Arc::clone(&j);
+            std::thread::spawn(move || j.commit(vec![Entry::Operation(Box::new(op("op-aaaaaaaa", false)))]))
+        };
+        begun.recv_timeout(Duration::from_secs(10)).expect("the commit reached its append");
+
+        // Everything an answer needs, asked from another thread while the flush has not returned.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let reader = {
+            let j = Arc::clone(&j);
+            std::thread::spawn(move || {
+                let seen = j.read(|s| (s.last_seq, s.operations.len())).unwrap();
+                let _ = tx.send((seen, j.last_seq(), j.write_block().is_none(), j.reserve_released(), j.len_bytes()));
+            })
+        };
+        let answered = rx.recv_timeout(Duration::from_secs(10));
+        drop(release);
+        writer.join().unwrap().unwrap();
+        reader.join().unwrap();
+        let ((seq, ops), last_seq, writable, reserve_released, _) = answered.expect("a read must not wait for a commit's flush");
+        assert_eq!((seq, ops, last_seq), (before, 0, before), "a commit that is not durable yet is not visible");
+        assert!(writable && !reserve_released);
+
+        assert_eq!(j.last_seq(), before + 1, "once durable, it is");
+        assert_eq!(j.read(|s| s.operations.len()).unwrap(), 1);
     }
 
     #[test]

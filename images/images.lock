@@ -13,28 +13,33 @@
 # is what Firecracker's own rootfs builder (tools/functions: build_rootfs) pulls from, and it avoids
 # Docker Hub's anonymous pull rate limits.
 #
-# The tags below were chosen by the author from knowledge of the Debian 13 ("trixie") generation; the
-# registries could not be reached from the environment this repository was written in, so they were
-# NOT re-resolved. `scripts/pin-images.sh` resolves each tag to a digest (and fails loudly on a tag that
-# does not exist). Bump a base by changing the tag, re-running it, and committing both lines together.
+# The tags are of the Debian 13 ("trixie") generation. Resolved 2026-11-18 by `scripts/pin-images.sh`
+# (Docker's view of the registry) and again by the registry's own API without Docker; both gave the
+# digests below, each the digest of the tag's multi-architecture index. `scripts/pin-images.sh` fails
+# loudly on a tag that does not exist. Bump a base by changing the tag, re-running it, and committing
+# both lines together.
 
 BASE_REF_base=public.ecr.aws/docker/library/debian:trixie-slim
-BASE_DIGEST_base=UNSET
+BASE_DIGEST_base=sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
 
 BASE_REF_python=public.ecr.aws/docker/library/python:3.14-slim-trixie
-BASE_DIGEST_python=UNSET
+BASE_DIGEST_python=sha256:9aaa474097d094040649f2162a627c0049b408f52138d980916788d80f04802f
 
 BASE_REF_node=public.ecr.aws/docker/library/node:24-trixie-slim
-BASE_DIGEST_node=UNSET
+BASE_DIGEST_node=sha256:af02d57b57719b9657a45199a79264a9437940cd55b3c7b3fc99615654f124a0
 
 # The browser image derives from the python image's base (Debian + chromium from the Debian archive).
 BASE_REF_browser=public.ecr.aws/docker/library/python:3.14-slim-trixie
-BASE_DIGEST_browser=UNSET
+BASE_DIGEST_browser=sha256:9aaa474097d094040649f2162a627c0049b408f52138d980916788d80f04802f
 
 # Guest kernel: an UNCOMPRESSED vmlinux with the options in tools/check_kernel_config.py built in.
 # Firecracker publishes recipes and configs (resources/guest_configs/, kernel-policy.md); its CI
 # artifacts are on S3 and its microVM kernel sources are under github.com/amazonlinux/linux tags
 # microvm-kernel-*. Whichever you use, pin the file you actually boot:
 #   sha256sum vmlinux-6.1.*   ->  KERNEL_SHA256_x86_64
-KERNEL_SHA256_x86_64=UNSET
+# x86_64 pinned 2026-11-18: vmlinux-6.1.188 of Firecracker's CI artifact set 20261105-6ea6634994fa-0
+# (s3://spec.ccfc.min/firecracker-ci/20261105-6ea6634994fa-0/x86_64/vmlinux-6.1.188, 45188080 bytes; the
+# download matched the bucket's multipart ETag 14ffe1175044abb2657a86d673acadac-6). Its embedded
+# configuration and its published .config both pass tools/check_kernel_config.py.
+KERNEL_SHA256_x86_64=31fe88d6c72b93d5c9c63cca599ccadec49fd35673bbfd04850d6c00ff27f032
 KERNEL_SHA256_aarch64=UNSET

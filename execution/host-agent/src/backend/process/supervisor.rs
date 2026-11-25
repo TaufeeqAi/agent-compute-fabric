@@ -47,6 +47,14 @@ impl VmProcess {
         let pidfd = match pidfd_open(pid, PidfdFlags::empty()) {
             Ok(fd) => fd,
             Err(rustix::io::Errno::SRCH) => return Ok(TerminateOutcome::AlreadyGone),
+            // The number still names something, but no process: the kernel keeps a process id alive
+            // after its process is gone while it still names a process group or a session with a live
+            // member (a VMM that was a session leader, with a descendant that outlived it). The same
+            // holds when the number now belongs to a thread of another process. Either way there is no
+            // process by that id to signal, and the recorded instance is gone.
+            Err(rustix::io::Errno::INVAL) if self.check(boot_id) != IdentityCheck::Match => {
+                return Ok(TerminateOutcome::AlreadyGone);
+            }
             Err(e) => return Err(AcfError::internal(format!("pidfd_open({pid:?}) failed: {e}"))),
         };
         match self.check(boot_id) {
@@ -107,5 +115,35 @@ mod tests {
         let id = ProcessIdentity { pid: child.id() as i32, start_time_ticks: 1, boot_id: boot.clone() };
         child.wait().unwrap();
         assert_eq!(VmProcess::new(id).terminate(&boot, Duration::from_millis(100)).await.unwrap(), TerminateOutcome::AlreadyGone);
+    }
+
+    /// A VMM that led its own session can end while a descendant lives on. The kernel then keeps the
+    /// leader's process id alive as the id of the session and the process group, with no process
+    /// behind it, and `pidfd_open` answers `EINVAL` rather than `ESRCH`. That is a stopped runtime,
+    /// so stopping it again is idempotent; it is not an internal error. (Found by running the
+    /// Firecracker adapter's tests as root.)
+    #[tokio::test]
+    async fn a_session_leader_that_is_gone_while_its_session_lives_on_is_already_gone() {
+        use std::io::{BufRead, Write};
+        // `setsid` makes the shell the leader of a new session (it does not fork: the test's child is
+        // not a process-group leader). The shell starts a descendant in that session, says its pid and
+        // then waits for one line on stdin, so its identity can be captured while it is alive.
+        let mut leader = std::process::Command::new("setsid")
+            .args(["sh", "-c", "sleep 60 & echo $!; read _"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut line = String::new();
+        std::io::BufReader::new(leader.stdout.take().unwrap()).read_line(&mut line).unwrap();
+        let descendant: i32 = line.trim().parse().unwrap();
+        let boot = SystemClock.boot_id();
+        let id = identity::capture(leader.id() as i32, &boot).unwrap();
+        writeln!(leader.stdin.take().unwrap()).unwrap();
+        leader.wait().unwrap();
+
+        let out = VmProcess::new(id).terminate(&boot, Duration::from_millis(200)).await;
+        let _ = std::process::Command::new("kill").arg(descendant.to_string()).status();
+        assert_eq!(out.unwrap(), TerminateOutcome::AlreadyGone);
     }
 }

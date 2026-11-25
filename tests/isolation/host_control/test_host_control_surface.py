@@ -42,6 +42,7 @@ from acf_proc import (
     inet_sockets,
     inet_sockets_in_namespace_of,
     interfaces_in_namespace_of,
+    same_file,
     unix_socket_paths,
 )
 
@@ -459,8 +460,10 @@ def test_t_sec_02_what_the_host_opens_is_the_inventory_and_a_guest_reaches_none_
         pid = vmms[box.sandbox_id]
         jail = host_env.jail_root(box)
         assert [str(s) for s in inet_sockets(pid)] == [], "a VMM holds a network socket"
-        bound = sorted(str(host_path(pid, path)) for path in unix_socket_paths(pid) if path.startswith("/"))
-        assert bound == sorted(str(jail / name) for name in ("api.sock", "v.sock")), bound
+        bound = sorted(path for path in unix_socket_paths(pid) if path.startswith("/"))
+        assert bound == ["/api.sock", "/v.sock"], bound
+        for path in bound:
+            assert same_file(host_path(pid, path), jail / path.lstrip("/")), f"{path} is not the jail's {path}"
         initiated_by_guest = sorted(path.name for path in jail.glob("v.sock_*"))
         assert initiated_by_guest == [], f"a listener for guest-initiated connections exists: {initiated_by_guest}"
     assert interfaces_in_namespace_of(vmms[closed.sandbox_id]) == ["lo"], "mode `none`: the namespace must be empty"
@@ -508,9 +511,9 @@ def test_the_vmm_runs_unprivileged_in_its_own_jail_and_shares_no_identity(acf: A
     uids: list[int] = []
     for box in boxes:
         pid = vmm_of(box)[0]
-        facts = confinement(pid, compared_with=os.getpid())
+        facts = confinement(pid, compared_with=os.getpid(), inherited_from=SystemdUnit(host_env.unit).main_pid())
         assert facts.violations(uid_range=uid_range) == [], f"the VMM of {box.sandbox_id} is not confined: {facts}"
-        assert facts.root == host_env.jail_root(box), "the VMM's root directory is not its generation's jail"
+        assert facts.has_root(host_env.jail_root(box)), "the VMM's root directory is not its generation's jail"
         assert pid in cgroup_pids(host_env.cgroup_dir(box)), "the VMM is not in its generation's control group"
         uids.append(facts.uids[0])
     assert uids[0] != uids[1], "two VMs must never share a user id"

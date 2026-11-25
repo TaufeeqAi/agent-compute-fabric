@@ -79,17 +79,21 @@ impl SnapshotStore {
     }
 
     /// Re-hash every artifact from disk (post-write verification: state `VERIFYING` of contract §12.3).
+    /// A guest's memory is as large as the guest, so this is disk-bound work (see
+    /// [`crate::durability::blocking`]).
     pub fn verify_artifacts(&self, dir: &Dir, a: &SnapshotArtifacts) -> Result<u64> {
-        let mut total = 0;
-        for f in [&a.vmstate, &a.mem, &a.disk] {
-            let mut r = dir.open(&f.name)?.into_std();
-            let c = hash_reader(&mut r, f.bytes.saturating_add(1))?;
-            if c.bytes != f.bytes || c.sha256 != f.sha256 {
-                return Err(AcfError::corrupt(format!("snapshot artifact `{}` does not match its recorded digest/size", f.name)));
+        crate::durability::blocking(|| {
+            let mut total = 0;
+            for f in [&a.vmstate, &a.mem, &a.disk] {
+                let mut r = dir.open(&f.name)?.into_std();
+                let c = hash_reader(&mut r, f.bytes.saturating_add(1))?;
+                if c.bytes != f.bytes || c.sha256 != f.sha256 {
+                    return Err(AcfError::corrupt(format!("snapshot artifact `{}` does not match its recorded digest/size", f.name)));
+                }
+                total += c.bytes;
             }
-            total += c.bytes;
-        }
-        Ok(total)
+            Ok(total)
+        })
     }
 
     /// Remove one snapshot generation (and the per-snapshot directory if now empty).

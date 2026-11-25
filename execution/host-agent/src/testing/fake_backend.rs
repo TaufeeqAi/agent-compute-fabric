@@ -392,8 +392,16 @@ impl FakeBackend {
     }
 
     fn outcome(&self, p: ProcessIdentity) -> StartOutcome {
-        let posture =
-            SecurityPosture { uid: 100_000, gid: 100_000, seccomp_mode: 2, no_new_privs: true, caps_dropped: true, chrooted: true };
+        let posture = SecurityPosture {
+            uid: 100_000,
+            gid: 100_000,
+            seccomp_mode: 2,
+            no_new_privs: true,
+            caps_dropped: true,
+            seccomp_own_filter: true,
+            seccomp_own_filter_at_launch: true,
+            chrooted: true,
+        };
         StartOutcome {
             process: p,
             posture,

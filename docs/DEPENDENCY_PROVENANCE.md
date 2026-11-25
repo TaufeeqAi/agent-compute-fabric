@@ -26,7 +26,7 @@ Three kinds of statement are kept apart:
 
 Every request used a generic client name and public URLs only.
 
-Manifests carry floors, the committed lock files (`Cargo.lock`, `uv.lock`, `apps/cli/uv.lock`) carry the exact
+Manifests carry floors, the committed lock files (`Cargo.lock`, `uv.lock`, `apps/host-cli/uv.lock`) carry the exact
 resolution, and builds use `--locked`, which fails instead of silently resolving again. A floor is the oldest
 version the code was tested against; the lock is what was built.
 
@@ -116,7 +116,7 @@ classifiers and was not run.
 Both lock files were regenerated with `uv` 0.13.1 and are accepted unchanged (`uv lock --check`) by 0.13.9, the
 release the workflows pin.
 
-`apps/cli` (the `acf-local` client; **verified** and **exercised** on 2026-11-18):
+`apps/host-cli` (the `acf-local` client; **verified** and **exercised** on 2026-11-18):
 
 | Package | Floor | Locked | Cap and reason |
 |---|---|---|---|
@@ -160,11 +160,12 @@ commit.
 | Input | State | Evidence |
 |---|---|---|
 | Firecracker | **`v1.17.0`** in `scripts/firecracker.lock` and in the example configuration | Release published 2026-09-10. Its changelog lists the `sync_snapshot_files` snapshot parameter this host uses, and a fix for an ownership race in the jailer. |
-| Firecracker tarball digests | **pinned** for `x86_64` and `aarch64` | Each value was read from two published sources that agree: the release's asset metadata and the `.sha256.txt` file beside the tarball. They were not measured from a downloaded tarball here. The installer measures what it downloads and refuses on any difference, so a wrong value fails closed. |
+| Firecracker tarball digests | **pinned** for `x86_64` and `aarch64` | Each value was read from two published sources that agree: the release's asset metadata and the `.sha256.txt` file beside the tarball. The `x86_64` tarball was then downloaded and installed by `scripts/install-firecracker.sh` on the test host, and the digest the installer measured equals the pin. The `aarch64` tarball was not downloaded. The installer measures what it downloads and refuses on any difference, so a wrong value fails closed. |
 | The installed `firecracker` and `jailer` binaries | **pinned per host**, not in the repository | `firecracker.firecracker_sha256` and `firecracker.jailer_sha256` in the host configuration. The installer prints the digest of each file it installed from the verified tarball; the host hashes both at startup and before every launch. The example configuration leaves them unset: a digest that nobody measured would be worse than none. |
-| Firecracker `v1.18.0` | **not adopted** | Published 2026-11-09. It adds a new device type and changes none of the API calls or jailer flags this host uses. The pin moves only together with a run of the integration suites on a KVM host, which was not available. |
-| Guest kernel digests | **`UNSET`** | No kernel was built or downloaded. |
-| Base image digests | **`UNSET`** | The image registries were not consulted. `scripts/pin-images.sh` resolves the tags to digests and fails on a tag that does not exist. |
+| Firecracker `v1.18.0` | **not adopted** | Published 2026-11-09. It adds a new device type and changes none of the API calls or jailer flags this host uses. The pin moves only together with a run of the integration suites on a KVM host. That run exists for `v1.17.0`, not for `v1.18.0`. |
+| Guest kernel digest, `x86_64` | **pinned** | `vmlinux-6.1.188` of Firecracker's CI artifact set `20261105-6ea6634994fa-0`, 45,188,080 bytes. The download matched the bucket's multipart ETag. Its embedded configuration and its published `.config` both pass `tools/check_kernel_config.py`. It booted every guest of the integration run (see [VERIFICATION_STATUS.md](VERIFICATION_STATUS.md)). |
+| Guest kernel digest, `aarch64` | **`UNSET`** | No `aarch64` kernel was downloaded and no `aarch64` machine was available. `make check-pins-release` therefore still fails, as it must. |
+| Base image digests | **pinned**, all four | Resolved by `scripts/pin-images.sh` (Docker's view of the registry) and again by the registry's own API without Docker; both gave the same digest of each tag's multi-architecture index. The `python` image was built from its pin and booted. `base`, `node` and `browser` were pinned and not built. |
 
 Security notices read while choosing the pin: CVE-2026-1386, published in January 2026, by which the jailer could
 be made to overwrite a host file through a symbolic link
@@ -178,11 +179,12 @@ way closed to other users) is the defence in depth against the same class of pro
 
 ## 8. What could not be verified
 
-* **A KVM host and root.** Nothing here has booted a microVM, and the Firecracker binaries were not downloaded or
-  executed. See [VERIFICATION_STATUS.md](VERIFICATION_STATUS.md).
-* **Container registries.** Base-image tags were not resolved; every base-image digest is `UNSET`.
-* **Advisory databases.** `cargo audit` and `pip-audit` were not run on these lock files. `audit.yml` runs them
-  where the databases are reachable.
+* **Bare metal and `aarch64`.** The microVMs of the integration run were booted under nested virtualisation, on
+  `x86_64`, inside WSL 2. See [VERIFICATION_STATUS.md](VERIFICATION_STATUS.md).
+* **The `base`, `node` and `browser` images.** Their bases are pinned; the images were not built.
+* **Advisory databases, over time.** `cargo audit --deny warnings` (cargo-audit 0.23.0) over the 229 locked crates
+  and `pip-audit` (2.10.1) over both Python lock files reported nothing on 2026-11-18. An advisory published later
+  is found only by running them again; `audit.yml` does that on a schedule.
 * **Upstream changelogs of every bumped crate.** The bumps in §3 were judged by building and by the full test
   suites, not by reading each changelog.
 * **Python 3.13.**
@@ -219,7 +221,7 @@ them and applied here.
 cargo update --dry-run
 
 # Python: does each lock match its manifest, and is anything newer?
-uv lock --check && uv --directory apps/cli lock --check
+uv lock --check && uv --directory apps/host-cli lock --check
 uv lock --upgrade --dry-run
 
 # Actions: the commit a tag points at (an annotated tag shows a second, peeled line)

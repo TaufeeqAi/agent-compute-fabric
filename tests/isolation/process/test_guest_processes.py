@@ -146,7 +146,12 @@ print(json.dumps({
 }))
 """
 
-GUEST_ENVIRONMENT = "import json, os; print(json.dumps(dict(os.environ)))"
+# The environment the command was started with, as the kernel recorded it at exec: not `os.environ`, which
+# Python changes at startup (in the C locale it adds LC_CTYPE=C.UTF-8 itself, PEP 538). Found on a real guest.
+GUEST_ENVIRONMENT = (
+    "import json; raw = open('/proc/self/environ', 'rb').read().decode(); "
+    "print(json.dumps(dict(e.split('=', 1) for e in raw.split(chr(0)) if e)))"
+)
 
 GUEST_DESCRIPTORS = """
 import json, os
@@ -226,8 +231,10 @@ def test_the_workload_environment_is_exactly_what_the_request_gave_it(
     assert asked == {"PATH": DEFAULT_PATH, "LANG": "C.UTF-8", "TZ": "UTC"}
     assert secret not in json.dumps([bare, asked]), "the host's environment reached the guest"
 
-    custom = acf.python(box.sandbox_id, GUEST_ENVIRONMENT, options=["--env", "PATH=/usr/bin:/bin"]).stdout_json()
-    assert custom == {"PATH": "/usr/bin:/bin"}, "a PATH the request sets must never be replaced"
+    custom = acf.python(
+        box.sandbox_id, GUEST_ENVIRONMENT, options=["--env", "PATH=/usr/local/bin:/usr/bin"]
+    ).stdout_json()
+    assert custom == {"PATH": "/usr/local/bin:/usr/bin"}, "a PATH the request sets must never be replaced"
 
 
 def test_the_workload_inherits_nothing_from_the_guest_agent_but_its_standard_streams(acf: AcfLocal) -> None:
@@ -273,7 +280,12 @@ def test_an_interrupted_command_is_cancelled_with_its_whole_tree_and_the_sandbox
     finally:
         running.kill()
     assert done.returncode == EXIT_INTERRUPTED, done.describe()
+    # The client asks for the cancel and exits; the host completes it once the guest confirms.
+    deadline = time.monotonic() + 60
     operation = acf.wire.operation(operation_id)
+    while operation.state in {"ACCEPTED", "IN_PROGRESS"} and time.monotonic() < deadline:
+        time.sleep(0.5)
+        operation = acf.wire.operation(operation_id)
     assert (operation.state, operation.cancelled_by) == ("CANCELLED", "CALLER"), operation
     assert operation.run_id is not None
     assert acf.ok("run", "inspect", operation.run_id).run().status == "CANCELLED"

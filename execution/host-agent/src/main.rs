@@ -48,7 +48,11 @@ enum Cmd {
     Edge,
     /// Internal role: guest-traffic for one sandbox. Started by the backend.
     #[command(hide = true)]
-    GuestTraffic,
+    GuestTraffic {
+        /// The generation it serves. Not an input: everything the role uses arrives over its channel.
+        /// It is on the command line so that a later activation can find the process by it.
+        jail_id: String,
+    },
     /// Run the lifetime enforcer: end every runtime at its expiry, whether or not the core runs.
     Lifetime {
         #[arg(long, default_value = DEFAULT_CONFIG)]
@@ -160,7 +164,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
     match cli.cmd {
         Cmd::Serve { config } => serve(config).await.map(|()| ExitCode::SUCCESS),
         Cmd::Edge => edge::role_main(shutdown_on_signal()).await.map(|()| ExitCode::SUCCESS),
-        Cmd::GuestTraffic => traffic::role_main().await.map(|()| ExitCode::SUCCESS),
+        Cmd::GuestTraffic { jail_id: _ } => traffic::role_main().await.map(|()| ExitCode::SUCCESS),
         Cmd::Lifetime { config } => lifetime_role(config).await.map(|()| ExitCode::SUCCESS),
         Cmd::Doctor { config, json } => {
             let (cfg, _) = app::load_config(&config, &[0])?;
@@ -238,4 +242,27 @@ fn main() -> ExitCode {
             }
         }
     })
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic, reason = "a test fails loudly")]
+mod tests {
+    use clap::Parser;
+
+    use super::{Cli, Cmd};
+
+    /// The command lines the core itself builds to start its roles (`privsep::spawn_role` with
+    /// `edge` and `guest-traffic <jail-id>`) must parse. They are not typed by anyone, so nothing else
+    /// would notice if they stopped. (Found the first time a real guest-traffic role was started: the
+    /// subcommand took no argument, and every `allowlist` sandbox failed to start.)
+    #[test]
+    fn the_command_lines_the_core_starts_its_roles_with_parse() {
+        assert!(matches!(Cli::try_parse_from(["acf-host", "edge"]).unwrap().cmd, Cmd::Edge));
+        let jail = "sbx-01a1ef9a031675e990b0a6f2ff9a7c19-g1";
+        match Cli::try_parse_from(["acf-host", "guest-traffic", jail]).unwrap().cmd {
+            Cmd::GuestTraffic { jail_id } => assert_eq!(jail_id, jail),
+            _ => panic!("guest-traffic did not parse as itself"),
+        }
+        assert!(Cli::try_parse_from(["acf-host", "guest-traffic"]).is_err(), "the jail id is how a process is found again");
+    }
 }

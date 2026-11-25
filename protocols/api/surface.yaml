@@ -1,0 +1,220 @@
+# Generated from the implementation. Do not edit: run `make platform-artifacts`.
+# The contract governs this file; a difference between the two is a defect in the encoding.
+schema_version: 1
+api_version: v1
+operations:
+- method: sandbox.create
+  class: granting
+  rest: POST /v1/projects/{project}/sandboxes
+  tool: sandbox_create
+  sdk: sandboxes.create()
+  cli: acf sandbox create
+  idempotency_key: true
+  reversibility: COMPENSATABLE
+  reaches_host: true
+  summary: Create a sandbox. It is created and not started.
+- method: sandbox.start
+  class: granting
+  rest: POST /v1/projects/{project}/sandboxes/{sandbox}/start
+  tool: sandbox_start
+  sdk: sandbox.start()
+  cli: acf sandbox start
+  idempotency_key: true
+  reversibility: COMPENSATABLE
+  reaches_host: true
+  summary: Start a sandbox that was created and has not been started.
+- method: execution.create
+  class: granting
+  rest: POST /v1/projects/{project}/sandboxes/{sandbox}/executions
+  tool: sandbox_exec
+  sdk: sandbox.exec()
+  cli: acf exec run
+  idempotency_key: true
+  reversibility: IRREVERSIBLE
+  reaches_host: true
+  summary: Run one command in a started sandbox.
+- method: execution.get
+  class: read
+  rest: GET /v1/projects/{project}/executions/{execution}
+  tool: exec_status
+  sdk: executions.get()
+  cli: acf exec status
+  idempotency_key: false
+  reversibility: null
+  reaches_host: true
+  summary: Read the status and result of an execution.
+- method: execution.output
+  class: read
+  rest: GET /v1/projects/{project}/executions/{execution}/output
+  tool: exec_output
+  sdk: execution.output()
+  cli: acf exec output
+  idempotency_key: false
+  reversibility: null
+  reaches_host: true
+  summary: Read a slice of one output stream of an execution that has ended.
+- method: execution.cancel
+  class: containment
+  rest: POST /v1/projects/{project}/executions/{execution}/cancel
+  tool: exec_cancel
+  sdk: execution.cancel()
+  cli: acf exec cancel
+  idempotency_key: true
+  reversibility: IRREVERSIBLE
+  reaches_host: true
+  summary: Cancel a running execution on the host.
+- method: snapshot.create
+  class: granting
+  rest: POST /v1/projects/{project}/sandboxes/{sandbox}/snapshots
+  tool: sandbox_snapshot
+  sdk: sandbox.snapshot()
+  cli: acf snapshot create
+  idempotency_key: true
+  reversibility: COMPENSATABLE
+  reaches_host: true
+  summary: Take a snapshot of a sandbox.
+- method: snapshot.restore
+  class: granting
+  rest: POST /v1/projects/{project}/snapshots/{snapshot}/restore
+  tool: sandbox_restore
+  sdk: sandbox.restore()
+  cli: acf snapshot restore
+  idempotency_key: true
+  reversibility: IRREVERSIBLE
+  reaches_host: true
+  summary: Restore a snapshot, into an existing sandbox or as a new one.
+- method: sandbox.list
+  class: read
+  rest: GET /v1/projects/{project}/sandboxes
+  tool: sandbox_list
+  sdk: sandboxes.list()
+  cli: acf sandbox list
+  idempotency_key: false
+  reversibility: null
+  reaches_host: true
+  summary: List the sandboxes of the project.
+- method: sandbox.get
+  class: read
+  rest: GET /v1/projects/{project}/sandboxes/{sandbox}
+  tool: sandbox_inspect
+  sdk: sandboxes.get()
+  cli: acf sandbox inspect
+  idempotency_key: false
+  reversibility: null
+  reaches_host: true
+  summary: Read one sandbox, by identifier or by name.
+- method: snapshot.list
+  class: read
+  rest: GET /v1/projects/{project}/snapshots
+  tool: snapshot_list
+  sdk: snapshots.list()
+  cli: acf snapshot list
+  idempotency_key: false
+  reversibility: null
+  reaches_host: true
+  summary: List the snapshots of the project.
+- method: sandbox.stop
+  class: containment
+  rest: POST /v1/projects/{project}/sandboxes/{sandbox}/stop
+  tool: sandbox_stop
+  sdk: sandbox.stop()
+  cli: acf sandbox stop
+  idempotency_key: true
+  reversibility: IRREVERSIBLE
+  reaches_host: true
+  summary: Stop a sandbox. A running execution is cancelled.
+- method: sandbox.destroy
+  class: containment
+  rest: DELETE /v1/projects/{project}/sandboxes/{sandbox}
+  tool: sandbox_destroy
+  sdk: sandbox.destroy()
+  cli: acf sandbox destroy
+  idempotency_key: true
+  reversibility: IRREVERSIBLE
+  reaches_host: true
+  summary: Destroy a sandbox. It is never resurrected.
+- method: snapshot.delete
+  class: containment
+  rest: DELETE /v1/projects/{project}/snapshots/{snapshot}
+  tool: snapshot_delete
+  sdk: snapshot.delete()
+  cli: acf snapshot delete
+  idempotency_key: true
+  reversibility: IRREVERSIBLE
+  reaches_host: true
+  summary: Delete a snapshot. It is never resurrected.
+- method: operation.get
+  class: read
+  rest: GET /v1/projects/{project}/operations/{operation}
+  tool: operation_get
+  sdk: operations.get()
+  cli: acf operation get
+  idempotency_key: false
+  reversibility: null
+  reaches_host: true
+  summary: Read an operation, or wait for it to end.
+- method: operation.list
+  class: read
+  rest: GET /v1/projects/{project}/operations
+  tool: null
+  sdk: operations.list()
+  cli: acf operation list
+  idempotency_key: false
+  reversibility: null
+  reaches_host: true
+  summary: List the operations of the project.
+- method: agent_credential.mint
+  class: platform
+  rest: POST /v1/projects/{project}/agent-credentials
+  tool: null
+  sdk: auth.mint_agent_credential()
+  cli: acf auth agent-key create
+  idempotency_key: false
+  reversibility: null
+  reaches_host: false
+  summary: Mint an agent credential, narrower and shorter-lived than the credential that mints it.
+- method: agent_credential.list
+  class: read
+  rest: GET /v1/projects/{project}/agent-credentials
+  tool: null
+  sdk: auth.agent_credentials()
+  cli: acf auth agent-key list
+  idempotency_key: false
+  reversibility: null
+  reaches_host: false
+  summary: List the agent credentials this credential minted.
+- method: agent_credential.revoke
+  class: platform
+  rest: DELETE /v1/projects/{project}/agent-credentials/{credential}
+  tool: null
+  sdk: auth.revoke_agent_credential()
+  cli: acf auth agent-key revoke
+  idempotency_key: false
+  reversibility: null
+  reaches_host: false
+  summary: Revoke an agent credential this credential minted. Revoking twice is the same as revoking once.
+- method: platform.info
+  class: read
+  rest: GET /v1/info
+  tool: health_check
+  sdk: fabric.info()
+  cli: acf info
+  idempotency_key: false
+  reversibility: null
+  reaches_host: true
+  summary: 'Platform info: API versions and, for an authenticated caller, features, parameters and ceilings.'
+- method: auth.whoami
+  class: read
+  rest: GET /v1/auth/whoami
+  tool: null
+  sdk: fabric.whoami()
+  cli: acf policy inspect
+  idempotency_key: false
+  reversibility: null
+  reaches_host: false
+  summary: The calling credential's principal, project and effective grants.
+classes:
+  granting: creates privilege or work; subject to every check of the pipeline
+  containment: removes privilege; never refused for load
+  read: served from the host every time
+  platform: changes the platform's own records; reaches no host

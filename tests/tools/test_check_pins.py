@@ -31,15 +31,21 @@ def test_the_shipped_pins_are_consistent_even_though_some_digests_are_unset(repo
     assert check_pins.check(repo, require_pinned=False) == []
 
 
-def test_the_release_gate_names_every_unset_input(repo: Path) -> None:
-    problems = "\n".join(check_pins.check(repo, require_pinned=True))
-    # The VMM tarballs are pinned (two published sources agreed); the image inputs are not yet. The file name is
-    # part of what is compared: "KERNEL_SHA256_x86_64 is UNSET" contains "SHA256_x86_64 is UNSET".
-    assert "scripts/firecracker.lock: SHA256_x86_64 is UNSET" not in problems
-    assert "scripts/firecracker.lock: SHA256_aarch64 is UNSET" not in problems
+def test_the_release_gate_names_exactly_the_inputs_the_repository_has_not_pinned(repo: Path) -> None:
+    problems = check_pins.check(repo, require_pinned=True)
+    # The VMM tarballs, the four base images and the x86_64 kernel are pinned, each from a measurement. No aarch64
+    # kernel was measured, so a release is still refused, and for that one input only.
+    assert problems == ["images/images.lock: KERNEL_SHA256_aarch64 is UNSET (a release must pin every input)"]
+
+
+def test_the_release_gate_names_every_unset_input(unpinned_tree: Path) -> None:
+    problems = "\n".join(check_pins.check(unpinned_tree, require_pinned=True))
+    # The file name is part of what is compared: "KERNEL_SHA256_x86_64 is UNSET" contains "SHA256_x86_64 is UNSET".
     assert "scripts/firecracker.lock" not in problems
-    assert "images/images.lock: BASE_DIGEST_python is UNSET" in problems
+    for key in ("BASE_DIGEST_base", "BASE_DIGEST_python", "BASE_DIGEST_node", "BASE_DIGEST_browser"):
+        assert f"images/images.lock: {key} is UNSET" in problems
     assert "images/images.lock: KERNEL_SHA256_x86_64 is UNSET" in problems
+    assert "images/images.lock: KERNEL_SHA256_aarch64 is UNSET" in problems
 
 
 def test_a_fully_pinned_tree_passes_the_release_gate(tree: Path) -> None:
@@ -68,11 +74,12 @@ def test_a_version_that_is_not_a_release_tag_is_reported(tree: Path) -> None:
         "BASE_DIGEST_base=sha256:" + "c" * 63,  # too short
     ],
 )
-def test_a_malformed_base_digest_is_reported(tree: Path, bad: str) -> None:
-    lock = tree / "images" / "images.lock"
+def test_a_malformed_base_digest_is_reported(unpinned_tree: Path, bad: str) -> None:
+    lock = unpinned_tree / "images" / "images.lock"
     lock.write_text(lock.read_text().replace("BASE_DIGEST_base=UNSET", bad))
     assert any(
-        "BASE_DIGEST_base" in p and "not a valid digest" in p for p in check_pins.check(tree, require_pinned=False)
+        "BASE_DIGEST_base" in p and "not a valid digest" in p
+        for p in check_pins.check(unpinned_tree, require_pinned=False)
     )
 
 

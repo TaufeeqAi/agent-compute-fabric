@@ -30,7 +30,7 @@ from typing import Any
 import pytest
 
 from acf_driver import REPO, AcfLocal
-from acf_integration import ENTRY_RECORD, HostEnv, require_root, vmm_of
+from acf_integration import ENTRY_RECORD, HostEnv, SystemdUnit, require_root, vmm_of
 from acf_proc import confinement, file_identities
 
 pytestmark = [pytest.mark.integration, pytest.mark.usefixtures("clean_host")]
@@ -158,7 +158,11 @@ def test_t_entry_01_the_entry_conditions_are_met_and_recorded(
         host_env.config.integer("firecracker.uid_range_start"),
         host_env.config.integer("firecracker.uid_range_size"),
     )
-    facts = confinement(vmm_of(acf.wire.refresh(box))[0], compared_with=os.getpid())
+    facts = confinement(
+        vmm_of(acf.wire.refresh(box))[0],
+        compared_with=os.getpid(),
+        inherited_from=SystemdUnit(host_env.unit).main_pid(),
+    )
     record["E-3"]["confinement"] = {
         "uids": facts.uids,
         "gids": facts.gids,
@@ -166,11 +170,13 @@ def test_t_entry_01_the_entry_conditions_are_met_and_recorded(
         "no_new_privs": facts.no_new_privs,
         "seccomp_by_thread": facts.seccomp_by_thread,
         "pid_namespace_depth": facts.pid_namespace_depth,
-        "root": str(facts.root),
+        "root_is_machine_root": facts.machine_root,
+        "seccomp_filters_by_thread": facts.seccomp_filters_by_thread,
+        "inherited_filters": facts.inherited_filters,
         "shared_namespaces": facts.shared_namespaces,
     }
     assert facts.violations(uid_range=uid_range) == [], f"the jailer's confinement does not hold: {facts}"
-    assert facts.root == host_env.jail_root(box)
+    assert facts.has_root(host_env.jail_root(box)), "the VMM's root directory is not its generation's jail"
 
     # ---- E-1: recorded
     record["E-1"] = "observed by the real-VMM suites of this run; see the test report this record is part of"

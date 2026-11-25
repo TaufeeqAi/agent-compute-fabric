@@ -214,5 +214,5 @@ def test_the_paths_are_the_defaults_of_the_shipped_host_config() -> None:
 
 def test_the_manual_describes_what_it_is_not_which_stage_of_a_plan_it_belongs_to() -> None:
     assert not re.search(r"phase[ -]?\d", DOC, re.IGNORECASE)
-    assert "apps/cli/README.md" in DOC, "the client's commands live with the client"
+    assert "apps/host-cli/README.md" in DOC, "the client's commands live with the client"
     assert not re.search(r"\bacf-local\b", DOC), "the manual names API methods, not one client's command line"

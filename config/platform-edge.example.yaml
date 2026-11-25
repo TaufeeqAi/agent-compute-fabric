@@ -1,0 +1,63 @@
+# Agent Compute Fabric — developer platform: configuration of an edge process (schema_version 1).
+#
+# An edge process terminates TLS, bounds and decodes what callers send, and encodes the core's answers.
+# It holds nothing: no host credential, no store, no secret but its TLS key. The same file format
+# configures both edge programs:
+#
+#   acf-api edge --config /etc/acf-platform/rest.yaml      the REST adapter            (account acf-rest)
+#   acf-mcp      --config /etc/acf-platform/mcp.yaml       the agent-protocol adapter  (account acf-mcp)
+#
+# Each runs under an unprivileged account of its own, never as the core's account and never as root.
+# You may run as many edge processes as you like: every limit that concerns a principal or a project is
+# kept in the core, so it holds for the deployment whatever their number.
+#
+#   install -m 0640 -o root -g acf-rest config/platform-edge.example.yaml /etc/acf-platform/rest.yaml
+#   install -m 0640 -o root -g acf-mcp  config/platform-edge.example.yaml /etc/acf-platform/mcp.yaml
+#
+# and then, in mcp.yaml, set listen.port to 8444 and the two `tls` paths to /etc/acf-platform/mcp/.
+# The units in deploy/platform/systemd allow each process its own port and no other: if you change a
+# port here, change `SocketBindAllow=` in its unit too.
+
+schema_version: 1
+
+listen:
+  host: 0.0.0.0
+  port: 8443
+
+# The TLS key of this endpoint: the only secret an edge process holds. Without `tls` the edge listens on
+# a loopback address only, for a TLS-terminating proxy on the same machine.
+tls:
+  certificate: /etc/acf-platform/rest/tls.crt
+  private_key: /etc/acf-platform/rest/tls.key
+
+# The core's command socket (paths.command_socket in the core's configuration).
+command_socket: /run/acf-platform/command.sock
+
+# Transport bounds, per edge process. Bytes from a caller are bounded before they are parsed.
+limits:
+  max_public_request_bytes: 1048576
+  edge_max_connections: 1024
+  edge_max_header_bytes: 16384
+  edge_max_commands_in_flight: 256
+  # Must equal the core's `public_wait_max`.
+  public_wait_max: 30
+  edge_core_deadline_margin: 2
+  body_read_timeout: 20
+  keep_alive_timeout: 15
+
+# Read only by the agent-protocol adapter.
+mcp:
+  path: /mcp
+  # Origins a browser may call from. An `Origin` that is present and not listed is refused with 403.
+  allowed_origins: []
+  # `Host` values the endpoint answers to. Empty: the listen address and `localhost`.
+  allowed_hosts: []
+  # Set these three only when the core is configured with `oauth`: the adapter then publishes the
+  # protected-resource metadata that agent hosts read. It verifies no token; the core does.
+  # resource: https://acf.example.org/mcp
+  # authorization_servers: ["https://login.example.org"]
+  # scopes_supported: ["acf:sandbox.list", "acf:execution.create"]
+  tool_wait: 25
+  serve_2025_11_25: false
+
+log_level: INFO

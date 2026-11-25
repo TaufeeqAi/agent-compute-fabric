@@ -63,8 +63,10 @@ StartLimitBurst=5
 
 [Service]
 Type=exec
-User=root
-Group=root
+# The core runs as root, which a system service does by default. `User=` is deliberately NOT set: with
+# `User=` set, even to root, and `NoNewPrivileges=yes`, systemd starts the process without CAP_SETUID in
+# its effective set, and the core could then not start its edge and guest-traffic roles under their own
+# unprivileged users (`setresuid` fails with EPERM). Found the first time the core ran under this unit.
 
 # Optional operator overrides (RUST_LOG=debug, ACF_LOG_FORMAT=json). The dash makes it optional.
 # Nothing the core runs is found through PATH: Firecracker, the jailer, ip, nft, nsenter and unshare

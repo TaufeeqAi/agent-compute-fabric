@@ -3,9 +3,9 @@ requires = ["hatchling>=1.33.0"]
 build-backend = "hatchling.build"
 
 [project]
-name = "acf-cli"
+name = "agent-compute-cli"
 dynamic = ["version"]
-description = "acf-local: reference command-line client of the Agent Compute Fabric host agent (protocol acf.host/2, Unix socket and mutual TLS)."
+description = "acf: the developer's command-line client of Agent Compute Fabric, and the stdio relay of its agent interface."
 readme = "README.md"
 requires-python = ">=3.12"
 license = "Apache-2.0"
@@ -14,46 +14,65 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
     "Intended Audience :: Developers",
-    "Intended Audience :: System Administrators",
-    "Operating System :: POSIX :: Linux",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
-    "Topic :: System :: Systems Administration",
+    "Topic :: Software Development",
     "Typing :: Typed",
 ]
-# Deliberately tiny runtime surface: this process talks to a privileged host agent, so every
-# dependency is supply-chain surface. TLS is the standard library's `ssl`. Floors are the newest
-# releases verified against PyPI on 2026-11-18 (docs/DEPENDENCY_PROVENANCE.md describes the method);
-# caps are the next incompatible major/minor line.
+# Four runtime dependencies, each of which earns its place. This program holds an API key, so every
+# dependency is supply-chain surface. Floors are the releases found on PyPI on 2026-11-19 and the ones the
+# tests ran against; caps are the next line that may break. The lock file fixes every version and every
+# file by its hash.
 dependencies = [
-    "typer>=0.29.1,<0.30",
-    "pydantic>=2.14.3,<3",
-    "rich>=15.0.0,<16",  # imported directly (tables, text); typer also depends on it
+    # The SDK. Every command but `acf mcp` is a call of it: configuration, idempotency keys, retries,
+    # following an operation and the error classes are its rules, written once. A release of this tool
+    # goes with one minor line of the SDK, because the exit statuses are a function of its error classes.
+    "agent-compute>=0.1.0,<0.2",
+    # The command tree, option parsing and `--help`. This release carries its own copy of click as a
+    # private module and no longer depends on the click distribution; this package imports only typer's
+    # public names. The cap is one minor line because a library below 1.0 may change them in the next.
+    "typer>=0.29.2,<0.30",
+    # Tables and key-value views for people. Imported directly; typer also depends on it.
+    "rich>=15.0.0,<16",
+    # Used directly by `acf mcp`, which carries another protocol to the same platform and therefore does
+    # not go through the SDK. Same range as the SDK declares, so one copy serves both.
+    "httpx2>=2.16.2,<3",
 ]
 
 [project.scripts]
-acf-local = "acf_cli.main:main"
+acf = "agentcompute_cli.main:main"
 
 [dependency-groups]
 dev = [
     "pytest>=9.2.0",
     "pytest-timeout>=2.4.0",
     "pytest-cov>=7.1.0",
-    "jsonschema>=4.26.0",
-    "types-jsonschema>=4.26.0.20261006",
+    # To drive the command tests from the generated table of public operations (protocols/api/surface.yaml).
+    "PyYAML>=6.0.3",
+    "types-PyYAML>=6.0.12.20261113",
     "mypy>=2.4.1",
-    "ruff>=0.17.5",
+    "ruff>=0.17.6",
 ]
 
+# During development the SDK is the one in this repository. A built distribution carries the range above.
+[tool.uv.sources]
+agent-compute = { path = "../../sdks/python", editable = true }
+
+# The version of this package lives in a source file. By default uv considers a package of this checkout
+# unchanged while its pyproject.toml is unchanged, and would hand an environment an older build of it.
+[tool.uv]
+cache-keys = [{ file = "pyproject.toml" }, { file = "src/**" }]
+
 [tool.hatch.version]
-path = "src/acf_cli/__init__.py"
+path = "src/agentcompute_cli/_version.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/acf_cli"]
+packages = ["src/agentcompute_cli"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/acf_cli", "tests", "main.py", "README.md", "pyproject.toml", "uv.lock"]
+include = ["src/agentcompute_cli", "tests", "README.md", "pyproject.toml", "uv.lock"]
 
 # --------------------------------------------------------------------------------------------
 [tool.ruff]
@@ -67,43 +86,32 @@ select = [
     "T20", "ARG", "S", "ANN", "ERA", "PIE", "RET", "TRY", "FBT", "DTZ", "ISC", "ICN", "G", "LOG",
 ]
 ignore = [
-    "TRY003",  # long messages in exception constructors are fine for a CLI
-    "FBT001", "FBT002",  # boolean flags are idiomatic in Typer commands
-    "PLR0913", "PLR0917",  # Typer commands legitimately take many options (invoked by keyword)
-    "N818",  # exception names mirror the contract vocabulary (Refused, OutcomeUnknown, ...) on purpose
-    "RET505",  # explicit else after return is sometimes clearer
+    "TRY003",  # an error message that says what to do next is long, and belongs where the error is raised
+    "FBT001", "FBT002",  # a flag of a command is a boolean parameter of the function typer calls
+    "PLR0913", "PLR0917",  # a command takes the options the operation has, and typer passes them by keyword
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "S311", "S603", "S607", "PLR2004", "ANN", "ARG", "FBT", "T20", "PLR0915", "S108", "SLF001"]
+"tests/**" = ["S101", "S105", "S106", "S108", "S311", "PLR2004", "ANN", "ARG", "FBT", "T20", "PLR0915", "SLF001"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["acf_cli"]
+known-first-party = ["agentcompute_cli"]
 
 # --------------------------------------------------------------------------------------------
 [tool.mypy]
 python_version = "3.12"
 strict = true
-plugins = ["pydantic.mypy"]
-files = ["src", "tests", "main.py"]
+files = ["src", "tests"]
 warn_unreachable = true
-
-[tool.pydantic-mypy]
-init_forbid_extra = true
-init_typed = true
-warn_required_dynamic_aliases = true
 
 # --------------------------------------------------------------------------------------------
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers --strict-config"
 timeout = 60
-markers = [
-    "e2e: runs the real host (the acf-host-fake binary named by $ACF_HOST_FAKE) over its Unix socket and over mutual TLS; skipped without it unless ACF_REQUIRE_E2E=1",
-]
 
 [tool.coverage.run]
-source = ["acf_cli"]
+source = ["agentcompute_cli"]
 branch = true
 
 [tool.coverage.report]

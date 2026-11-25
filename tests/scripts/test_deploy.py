@@ -116,8 +116,16 @@ def test_every_program_a_unit_starts_is_one_that_host_setup_installs(unit: str) 
 def test_the_roles_run_as_root_from_the_one_binary_with_the_one_configuration(unit: str) -> None:
     role = {LIFETIME: "lifetime", HOST: "serve"}[unit]
     assert one(unit, "Service", "ExecStart") == f"/opt/acf/bin/acf-host {role} --config /etc/acf/host.yaml"
-    assert one(unit, "Service", "User") == "root"
-    assert one(unit, "Service", "Group") == "root"
+    if unit == HOST:
+        # Root by default. `User=` together with `NoNewPrivileges=yes` makes systemd start the process without
+        # CAP_SETUID, and the core must switch to the edge's and the guest-traffic roles' users.
+        service = UNITS[unit]["Service"]
+        why = "acf-host.service must not set User= or Group=: with NoNewPrivileges=yes systemd then drops CAP_SETUID"
+        assert "User" not in service, why
+        assert "Group" not in service, why
+    else:
+        assert one(unit, "Service", "User") == "root"
+        assert one(unit, "Service", "Group") == "root"
     assert one(unit, "Service", "EnvironmentFile") == "-/etc/default/acf-host", "optional overrides, never required"
     assert one(unit, "Service", "NoNewPrivileges") == "yes"
     assert one(unit, "Service", "LimitCORE") == "0"

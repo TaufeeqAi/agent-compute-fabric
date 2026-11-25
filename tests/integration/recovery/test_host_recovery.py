@@ -191,7 +191,7 @@ def test_t_rec_06_force_destroy_releases_a_quarantined_generation_and_only_then_
     assert host_env.generation_dir(box).is_dir()
 
     released = acf.ok(*release, "force-destroy").succeeded()
-    assert (released.operation_type, released.owner[0]) == ("quarantine.release", "local-operator"), (
+    assert (released.operation_type, released.owner[0]) == ("quarantine.release", host_env.peer_id), (
         "the release is an operation that records which operator made the assertion"
     )
     after = wire.refresh(box)

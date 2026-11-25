@@ -1,0 +1,36 @@
+# Grant template `agent`: the default narrowing of an agent credential.
+#
+# An agent is an untrusted caller even when its developer is trusted. So the default is small: no
+# network, no minting, modest ceilings. Stop, destroy, cancel and snapshot deletion are allowed, because
+# they only remove privilege. When a developer mints an agent credential without a narrowing, this
+# template applies, cut down further to what the developer's own grant allows.
+schema_version: 1
+methods:
+  - sandbox.create
+  - sandbox.start
+  - sandbox.stop
+  - sandbox.destroy
+  - sandbox.get
+  - sandbox.list
+  - execution.create
+  - execution.get
+  - execution.output
+  - execution.cancel
+  - snapshot.create
+  - snapshot.restore
+  - snapshot.delete
+  - snapshot.list
+  - operation.get
+  - platform.info
+  - auth.whoami
+images: ["*"]
+network:
+  modes: [none]
+  destinations: []
+ceilings:
+  vcpus: 2
+  memory_mib: 4096
+  disk_mib: 8192
+  execution_timeout_seconds: 3600
+  sandbox_lifetime_seconds: 86400
+mint_agent_credentials: false

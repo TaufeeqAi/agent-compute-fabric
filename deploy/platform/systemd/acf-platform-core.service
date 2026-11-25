@@ -1,0 +1,129 @@
+# ACF developer platform, the core: the one process of a deployment that verifies credentials, decides,
+# and holds the host peer credential, the interface store and the security journal.
+#
+#   /opt/acf-platform/api/bin/acf-api core --config /etc/acf-platform/core.yaml
+#
+# The edge processes are units of their own (acf-platform-rest.service, acf-platform-mcp.service). They
+# run under other users, read the bytes callers send, and reach this process through one Unix socket.
+# Nothing else reaches it: the core listens on no network address.
+#
+# Install (docs/platform/OPERATIONS.md is the whole path, in order):
+#   install -D -m 0644 deploy/platform/sysusers.d/acf-platform.conf /etc/sysusers.d/acf-platform.conf && systemd-sysusers acf-platform.conf
+#   install -D -m 0644 deploy/platform/tmpfiles.d/acf-platform.conf /etc/tmpfiles.d/acf-platform.conf && systemd-tmpfiles --create acf-platform.conf
+#   install -m 0644 deploy/platform/systemd/acf-platform-*.service /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now acf-platform-core.service acf-platform-rest.service acf-platform-mcp.service
+#
+# Readiness. The core tells systemd that it serves (Type=notify) when its two sockets are open, which is
+# after it has verified the journal, opened the store under its lock and replayed the journal into the
+# registry. A unit ordered After= this one can therefore connect. The first recovery pass is still
+# running then: until it is done the core answers containment and reads, and refuses new work with
+# UPSTREAM_UNAVAILABLE and the reason `recovery_pass_pending`, which is an answer that clients retry
+# and not an outage.
+#
+# What a stop does. SIGTERM: the core refuses new work, lets what is in flight finish or reach the host
+# for up to `parameters.drain_timeout` (30 s by default), and exits. Whatever is still unresolved then is
+# resolved by the next start from the ledger; correctness never depends on the drain.
+#
+# What a failed start means. The core exits with status 78 when a precondition does not hold: an unknown
+# configuration key, a secret that others can read, an edge identity that could read the store, a journal
+# whose chain is broken, a store of another deployment. Restarting cannot repair any of these, so systemd
+# does not try (RestartPreventExitStatus). Read the reason with `journalctl -u acf-platform-core`.
+#
+# Deliberately NOT set, because it would break the platform:
+#   * PrivateUsers=. The core recognizes an edge by the uid the kernel reports for the peer of the
+#     command socket. In a user namespace of its own it would see every other account as `nobody` and
+#     refuse both edges.
+#   * DynamicUser=. The store, the journal and the secrets belong to one fixed account across restarts,
+#     and that account's separation from the edge accounts is what the core checks before it starts.
+#   * PrivateNetwork=, IPAddressDeny=any. The core dials the host. To pin it to that one address, add a
+#     drop-in with `IPAddressDeny=any` and `IPAddressAllow=<the host's address>` (and the address of the
+#     authorization server's key set, if `oauth` is configured with a `jwks_uri`).
+# Do not add them in a drop-in either.
+
+[Unit]
+Description=ACF developer platform (core: credentials, decisions, ledger, host binding)
+Documentation=https://github.com/OWNER/agent-compute-fabric/blob/main/docs/platform/OPERATIONS.md
+Wants=network-online.target
+After=network-online.target local-fs.target systemd-tmpfiles-setup.service
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=notify
+NotifyAccess=main
+User=acf-core
+Group=acf-core
+
+# Optional operator overrides. The dash makes the file optional. Nothing the core runs is found through
+# PATH: it starts no other program.
+EnvironmentFile=-/etc/default/acf-platform-core
+# The interpreter and its packages are owned by root; this account cannot write a byte-code cache there.
+Environment=PYTHONDONTWRITEBYTECODE=1
+
+ExecStart=/opt/acf-platform/api/bin/acf-api core --config /etc/acf-platform/core.yaml
+# Verifying the journal's chain and replaying it are linear in its length. Raise this for a very old
+# deployment rather than weakening the check.
+TimeoutStartSec=120
+
+KillSignal=SIGTERM
+# Longer than parameters.drain_timeout (30 s by default). Raise both together.
+TimeoutStopSec=45
+# The core ends itself when its store demands it (a commit whose outcome it cannot know, a second
+# writer); the next start re-establishes its state from the store and the journal.
+Restart=on-failure
+RestartSec=2s
+RestartPreventExitStatus=78
+
+# ---- What this process may touch ----------------------------------------------------------------
+# The whole file system is read-only except the four directories below, which
+# deploy/platform/tmpfiles.d/acf-platform.conf creates. Add the directory of `paths.journal_mirror`
+# in a drop-in if you configure one.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/acf-platform /var/lib/acf-platform-journal /run/acf-platform
+ReadWritePaths=-/var/log/acf-platform
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+# Everything this process creates is for itself alone unless the code says otherwise: the command
+# socket is opened to its group explicitly, after it is bound.
+UMask=0077
+
+# ---- What this process may do -------------------------------------------------------------------
+# It needs no privilege and can gain none.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+# The calls of an ordinary network service, without the ones that change identity, the clock, kernel
+# state or scheduling. `@chown` is given back: the core hands the command socket to the edge group,
+# which an unprivileged process may do only for a group it belongs to. A refused call is an error
+# (EPERM), never a killed process.
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallFilter=@chown
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+# Unix sockets (the command and admin sockets) and IP (the host; an authorization server's key set).
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# The core listens on no network address. This makes that a property of the unit, not of the code.
+SocketBindDeny=any
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+KeyringMode=private
+# A core dump of this process holds the host private key and the fingerprint key.
+LimitCORE=0
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

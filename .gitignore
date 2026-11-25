@@ -16,6 +16,9 @@ venv/
 htmlcov/
 *.egg-info/
 
+# Node (sdks/typescript, which ignores its own build output and coverage report)
+node_modules/
+
 # Editors and operating systems
 .DS_Store
 .idea/

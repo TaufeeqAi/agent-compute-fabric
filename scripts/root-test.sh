@@ -11,8 +11,8 @@
 # so that `cargo test` reports them as ignored instead of passing them unseen; asked for without
 # root they fail. This script is how they are asked for:
 #
-#   1. acf-host-agent, the ignored library tests in `fc_backend_tests`: the Firecracker backend
-#      against a scripted VMM.
+#   1. acf-host-agent, the ignored library tests in `fc_backend_tests` and `privsep`: the Firecracker
+#      backend against a scripted VMM, and a role started under another user id.
 #   2. acf-guest-agent, the ignored tests of tests/protocol.rs: the agent switching to an
 #      unprivileged uid.
 #
@@ -67,8 +67,8 @@ main() {
     backend="$(cargo_test_binary acf-host-agent --all-features --lib)"
     guest="$(cargo_test_binary acf-guest-agent --test protocol)"
 
-    run_test_binary "acf-host-agent: fc_backend_tests, as root" "$REPO/execution/host-agent" \
-        "${AS_ROOT[@]}" "$backend" fc_backend_tests --ignored ||
+    run_test_binary "acf-host-agent: fc_backend_tests and privsep, as root" "$REPO/execution/host-agent" \
+        "${AS_ROOT[@]}" "$backend" fc_backend_tests privsep:: --ignored ||
         die "the Firecracker backend tests failed"
 
     run_test_binary "acf-guest-agent: protocol, as root" "$REPO/execution/guest-agent" \

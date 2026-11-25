@@ -177,9 +177,14 @@ const RECENT_CAP: usize = 512;
 
 impl EventSink {
     pub fn open(dir: &Path, metrics: Arc<Metrics>) -> Self {
-        let file = std::fs::create_dir_all(dir)
-            .and_then(|()| OpenOptions::new().create(true).append(true).mode(0o600).open(dir.join("events.jsonl")))
-            .ok();
+        // Private like everything else the host keeps: events name sandboxes, peers and operations.
+        // (Found on a real host: the directory was 0755; the 0700 state root above it hid that.)
+        let private = || {
+            use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+            std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+        };
+        let file = private().and_then(|()| OpenOptions::new().create(true).append(true).mode(0o600).open(dir.join("events.jsonl"))).ok();
         Self { identity: Mutex::default(), seq: AtomicU64::new(0), file: Mutex::new(file), recent: Mutex::default(), metrics }
     }
 

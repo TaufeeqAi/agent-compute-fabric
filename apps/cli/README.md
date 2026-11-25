@@ -1,514 +1,336 @@
-# acf-local — reference client of the Agent Compute Fabric host agent
+# acf
 
-`acf-local` is the command-line client of the **host agent** (`acf-host`), the privileged
-execution plane that runs untrusted code in microVM sandboxes. It speaks the host's wire protocol
-`acf.host/2` over the host's local Unix socket or over its mutual TLS endpoint, and it is the
-reference implementation of the *caller's half* of that protocol: how to identify an operation,
-how to follow it, and what to do when an answer is lost.
+`acf` is the developer's command-line client of Agent Compute Fabric: create sandboxes, run commands
+in them, read what the commands wrote, snapshot and restore, and look at every operation the platform
+holds. One more command, `acf mcp`, lets an agent host reach the platform's agent interface over
+standard input and output.
 
-```console
-$ acf-local run once --image python --cpu 2 --memory 4096 -- python experiment.py
-```
+It is a thin layer over the Python SDK in `sdks/python`. A command parses its options, makes one call
+of the SDK, prints what the platform answered and picks an exit status. What is allowed and what
+happened is the platform's to say; whether to ask again is the SDK's. This tool decides neither.
 
-This process is only a client. It parses arguments, resolves names to ids, follows operations,
-renders answers and chooses exit codes. Who may ask, what is allowed, which transitions are legal
-and what actually happened are decided by the host agent; nothing here is trusted to enforce it.
-
-Contents: [Install](#install) · [Connecting](#connecting) · [How a command talks to the host](#how-a-command-talks-to-the-host) ·
-[Commands](#commands) · [Output](#output) · [Exit codes](#exit-codes) · [Mutual TLS setup](#mutual-tls-setup) ·
-[Development](#development)
+This is version 0.1.0, for version `v1` of the public API. It needs Python 3.12 or later and runs on
+Linux, macOS and Windows.
 
 ## Install
 
+The distributions in this repository are **not registered on any package index yet**. Do not install a
+package of a similar name from an index: it would not be this one. Install from a checkout of this
+repository, and give both paths in the same command, because the tool needs the SDK and both have to
+come from the checkout:
+
 ```console
-uv tool install ./apps/cli          # puts `acf-local` on your PATH
-# or with pip, into an environment of your choice:
-pip install ./apps/cli
-# or, from a checkout, without installing:
-python apps/cli/main.py --help
+python -m pip install ./sdks/python ./apps/cli
+acf --version
 ```
 
-Requires Python 3.12 or newer on Linux. Runtime dependencies are deliberately few (`typer`,
-`pydantic`, `rich`): this process talks to a privileged host agent, so every dependency is
-supply-chain surface. TLS is the standard library's `ssl`.
+To work on the tool itself, use the locked environment:
 
-## Connecting
+```console
+cd apps/cli
+uv sync --locked
+uv run --locked acf --help
+```
 
-Global options come before the command. Where the table names a variable, the option can also be
-set in the environment; what is typed on the command line wins.
+## Configure
 
-| Option | Environment | Default | Meaning |
+A command needs a key and the address of the platform.
+
+| What | Flag | Environment | Stored profile |
 |---|---|---|---|
-| `--socket PATH` | `ACF_SOCKET` | `/run/acf/host-agent.sock` | The host's local endpoint. |
-| `--tls HOST:PORT` | `ACF_TLS` | — | The host's network endpoint (mutual TLS 1.3) instead of the socket. |
-| `--cert FILE` | `ACF_TLS_CERT` | — | With `--tls`: your client certificate (PEM). Required. |
-| `--key FILE` | `ACF_TLS_KEY` | — | With `--tls`: its private key (PEM, without a passphrase). Required. |
-| `--ca FILE` | `ACF_TLS_CA` | system trust store | With `--tls`: the authority that signed the host's certificate. |
-| `--server-name NAME` | `ACF_TLS_SERVER_NAME` | the HOST of `--tls` | With `--tls`: the name the host's certificate must be valid for. |
-| `--scope LABEL` | `ACF_SCOPE` | `default` | Owner scope sent with every request. |
-| `--on-behalf-of LABEL` | `ACF_ON_BEHALF_OF` | — | Label recorded with every operation; never compared. |
-| `--connect-timeout SECONDS` | `ACF_CONNECT_TIMEOUT` | `5` | Time to connect and authenticate. |
-| `--verbose`, `-v` | — | off | Progress and extra detail on stderr. |
+| API key | none, on purpose | `ACF_API_KEY` | yes |
+| Address of the public API | `--base-url` | `ACF_BASE_URL` | yes |
+| Project | `--project` | `ACF_PROJECT` | yes |
+| Address of the MCP endpoint (`acf mcp` only) | `--endpoint` | `ACF_MCP_URL` | yes |
+| Certificate authorities to believe | `--ca-file`, on `acf auth login` | `ACF_CA_FILE` | yes |
+| Which profile | `--profile` | `ACF_PROFILE` | `default` |
 
-Operation commands additionally read `ACF_TIMEOUT` (see `--timeout` below).
+Each value is taken from the flag, then from the environment, then from the stored profile. Three
+things are deliberate:
 
-What you type has to be consistent: `--socket` together with `--tls`, or `--cert`, `--key`, `--ca`
-or `--server-name` without `--tls`, is a usage error. The environment only supplies defaults, and
-a default that does not apply is ignored: `--socket PATH` on the command line reaches the local
-socket although `ACF_TLS` is exported, and the `ACF_TLS_*` file variables mean nothing without a
-TLS endpoint. If `ACF_SOCKET` and `ACF_TLS` are both set and neither option is typed, the TLS
-endpoint is used.
+- **There is no flag for the key.** A key on a command line ends up in shell history and in process
+  listings.
+- **The project of a profile goes with the key of that profile.** A project belongs to a key, so a key
+  from the environment is asked for its own project, once, and is never given the stored one.
+- **The authorities of a profile go with the address of that profile.** They were named for one
+  platform and say nothing about another, so an address from a flag or the environment is not given
+  the stored ones.
 
-**Local socket.** The host identifies you by the credentials the kernel reports for the connecting
-process — nothing you send — and looks them up in its enrolment table. The kernel limits a Unix
-socket path to 107 bytes; when the path you give is longer than that (a deep directory, a bind
-mount), the client connects through a descriptor of the socket's directory instead of failing.
+### A platform with a certificate authority of its own
 
-**Mutual TLS.** `--tls` selects the network endpoint. The connection is TLS 1.3 only (pinned on
-both ends of the version range), the host's certificate is verified against `--ca` and against the
-server name, and your client certificate is always presented: there is no one-way TLS mode, so
-`--tls` without `--cert` and `--key` is a usage error. When `--ca` is given, the system trust
-store is not used. See [Mutual TLS setup](#mutual-tls-setup).
+A platform that you or your organisation run is usually certified by your own authority, which no
+system trusts by itself. Name that authority's certificate, a PEM file, once:
 
-**Who you are, and what you see.** An enrolled peer has one of three roles:
+```console
+acf auth login --base-url https://acf.internal.example --ca-file ./internal-ca.pem
+```
 
-| Role | May call |
-|---|---|
-| `observer` | `host info`, `host metrics` |
-| `caller` | everything except the operator commands, on records of its own owner scope |
-| `operator` | everything, on any record; plus `profile reload`, `quarantine release`, `host set-mode`, `host acknowledge` |
+The path is stored with the profile, as an absolute path, and every later command believes the
+authorities in that file **and no others**: not the ones your system trusts either. `acf mcp` believes
+the same ones about the MCP endpoint, so a file may hold more than one authority. In a script, set
+`ACF_CA_FILE` instead. A file that is missing, or holds no certificate, stops the command; it is never
+passed over in favour of the system's authorities, because those are exactly the ones it was meant to
+exclude. Nothing else about certificates or proxies is read from the environment.
 
-The **owner scope** (`--scope`) is an opaque label the host attaches to every sandbox, snapshot
-and operation you create. As a `caller` you see and act only on records whose peer and scope equal
-your own; anything else is reported as `NOT_FOUND`, so its existence is not revealed. A name is
-unique among your own live sandboxes, or among your own snapshots. The client never sends an
-`authority` field: that field is reserved by the protocol for a signed decision, and a host that
-does not offer the feature refuses any request that carries it.
+An address must be `https`. Plain `http` is accepted for this machine only. An address that carries
+user information or a query string is refused: a key is never accepted inside a URL. So is an address
+with a space or a line break in it: it is refused, not tidied, because an address that was typed wrong
+is one nobody looked at.
 
-## How a command talks to the host
+### Storing a key
 
-A request has one of three answers:
+```console
+acf auth login --base-url https://acf.example
+```
 
-| Answer | Meaning | Afterwards |
-|---|---|---|
-| `REFUSED` | the request was not accepted | nothing was applied; no operation record exists |
-| `OPERATION` | the request was accepted | a durable operation record exists; the answer is its state as of the response |
-| `RESULT` | a read, served from committed state | nothing changed |
+asks for the key without showing it, checks it with the platform, and stores it. It prints who the key
+is, the project it belongs to and where it was stored, and at no point the key. In a script, pipe the
+key in: `acf auth login --base-url https://acf.example --key-stdin < key-file`.
 
-Reads (`inspect`, `list`, `host info`, …) are one round trip. Every other command creates an
-**operation**, and the client drives it as follows.
-
-**One identity per intent.** The client generates an `operation_id` and stamps `issued_at` (UTC)
-once, before anything is sent. `--operation-id ID` supplies your own id (8–64 characters of
-`[A-Za-z0-9-]`): repeating a command with the same id and the same arguments returns the same
-operation, and nothing runs twice, for as long as the host keeps the record (`host info` reports
-its operation retention). The same id with *different* arguments is refused with
-`IDEMPOTENCY_CONFLICT`.
-
-**Waiting.** By default (`--wait`) the client follows the operation until it reaches a terminal
-state: it asks the host to hold the answer for up to 20 seconds, then observes the operation with
-`operation.get`, backing off from 0.1 s to 2 s between polls. `--timeout DURATION` (or
-`ACF_TIMEOUT`; `90`, `90s`, `5m`) bounds how long the client follows. It does **not** affect the
-operation: the host finishes what it accepted whether or not anyone is listening, within the
-operation's own deadline. Without `--timeout` the client follows until the operation ends.
-`--no-wait` asks the host to answer as soon as the operation is recorded and returns that state.
-
-**A lost response is resolved, never repeated.** If the request was written and no answer came
-back (the connection dropped, the read timed out), the host may have accepted it. The client then
-sends the **same `operation_id` and the same `issued_at`** again with `retry: true` — never a new
-id:
-
-* the host answers with the existing operation → the client follows it;
-* the host answers `NOT_FOUND` and `operation.get` confirms it holds no record → the request was
-  never accepted, and it is submitted again under the same id and the same `issued_at`. After
-  three submissions that the host never recorded the client stops: nothing was applied, exit `6`;
-* the host refuses the retry for another reason → that is not yet an answer about the operation.
-  A host resolves a request that names an operation it holds before it looks at its mode or at the
-  age of the request, but a lookup can still be refused for load, and a host that is starting
-  serves nothing. The client asks `operation.get`: if the operation exists it is followed; if it
-  does not, the refusal is the answer;
-* the host cannot be reached again → the client keeps trying for up to 60 seconds (or until
-  `--timeout`), then exits `8` and prints the operation id. The outcome is *not established*: ask
-  later with `acf-local operation get ID --wait`. Do not run the command again without
-  `--operation-id ID`: a new id would be a second operation.
-
-The same question (`operation.get`) is asked once when a first submission is refused with
-`INTERNAL_ERROR`, the one class with which a host says it does not know what went wrong.
-
-If the request never left this machine (no connection, a failed handshake), nothing was sent and
-the exit code is `6`.
-
-**An unknown outcome is reported as unknown.** An operation can end `UNKNOWN`: it may have been
-applied and the host cannot establish it. The client reports exactly that — exit code `5`, never
-success and never failure — and nothing is retried. The same holds for any state or other
-vocabulary word this client does not know: it is printed as the host sent it, marked
-`(not recognized by this client)`, and never treated as a known one.
-
-**Effect and cleanup.** Every terminal operation states its `effect`, and a failed or cancelled
-one states its `cleanup`. Both are always shown.
-
-| `effect` | Meaning |
-|---|---|
-| `APPLIED` | the operation's effect is in place |
-| `NOT_APPLIED` | nothing was applied; a new operation for the same intent is safe |
-| `MAY_BE_APPLIED` | it may have been applied; a new operation for the same intent is not known to be safe |
-
-| `cleanup` | Meaning |
-|---|---|
-| `COMPLETE` | everything the operation created is proven removed |
-| `PENDING` | something it created remains and still holds its capacity |
-| `QUARANTINED` | what it left is quarantined; an operator must release it |
-
-**Refusals** are reported with their class and the host's retry advice: `SAME_REQUEST_LATER`
-(nothing is wrong with the request; the host cannot take it now), `AFTER_CHANGE` (it can be
-accepted once the target, the host or the request changes) or `NEVER`.
-
-**Ctrl-C** during an operation prints the operation id and how to ask about it; the host still
-finishes what it accepted. During `sandbox exec` it also asks the host to cancel the execution and
-reports how the execution really ended. Exit code `130`.
+The file is `$XDG_CONFIG_HOME/acf/credentials.json` (`~/.config/acf/credentials.json` when the variable
+is not set), and `%APPDATA%\acf\credentials.json` on Windows. On Linux and macOS it is created readable
+and writable by its owner only (mode `0600`), in a directory only the owner can enter (mode `0700`),
+and it is replaced as a whole, never written in place. **A file that other users can read or change is
+refused**, with a message that says so: its key has to be considered seen. `acf auth logout` removes a
+profile from the file; the key itself stays valid until it expires or is revoked.
 
 ## Commands
 
-Every command accepts `--json`. Commands that create an operation also accept `--operation-id`,
-`--wait/--no-wait` and `--timeout`; `run once`, which is four operations, takes `--timeout` only,
-and it bounds each of its steps. A sandbox is named by id (`sbx-…`) or by name; a mutation always
-carries the id and the generation, never a name (see [Targets](#targets-and-preconditions)).
-
-### Sandboxes
-
-```console
-# create: resources reserved, storage provisioned, not yet started
-acf-local sandbox create --image python --cpu 2 --memory 4Gi --disk 2048 --name job-7 --lifetime 2h
-
-# with outbound connectivity limited to an allowlist (default: --network none)
-acf-local sandbox create --image python --network allowlist \
-    --allow pypi.org:443 --allow 198.51.100.0/24:5432-5433,8443
-
-acf-local sandbox start job-7                       # launch the runtime; ends READY
-acf-local sandbox exec job-7 -- python train.py --epochs 3
-acf-local sandbox exec job-7 --shell -c 'ls | wc -l' -e LANG=C.UTF-8 --cwd /workspace --time-limit 90s
-acf-local sandbox exec job-7 --secret-env API_TOKEN=ci-token -- python deploy.py
-acf-local sandbox inspect job-7
-acf-local sandbox list
-acf-local sandbox stop job-7                        # ends the runtime, keeps the storage
-acf-local sandbox destroy job-7 --yes               # irreversible; its snapshots are kept
+```text
+acf auth login [--base-url URL] [--profile NAME] [--key-stdin] [--mcp-url URL] [--ca-file FILE]
+acf auth logout [--profile NAME]
+acf auth agent-key create --label LABEL --lifetime DURATION [--narrowing FILE]
+acf auth agent-key list
+acf auth agent-key revoke CREDENTIAL [--contain]
+acf policy inspect
+acf info
+acf sandbox create --image IMAGE --cpu N --memory SIZE --disk SIZE [--network none|FILE] [--name NAME]
+                   [--lifetime DURATION] [--no-start] [--keep-on-start-failure]
+acf sandbox list | inspect SANDBOX | start SANDBOX | stop SANDBOX | destroy SANDBOX
+acf exec run SANDBOX [--cwd PATH] [--env NAME=VALUE ...] [--timeout DURATION] -- ARGV...
+acf exec run SANDBOX --shell 'COMMAND LINE'
+acf exec status EXECUTION | cancel EXECUTION
+acf exec output EXECUTION [--stream stdout|stderr] [--offset N] [--max-bytes N] [--raw [--force]]
+acf snapshot create SANDBOX [--name NAME] | list | delete SNAPSHOT
+acf snapshot restore SNAPSHOT [--into SANDBOX | --name NAME --lifetime DURATION]
+acf operation get OPERATION [--wait SECONDS] | list
+acf mcp [--endpoint URL] [--profile NAME]
+acf --version
 ```
 
-| Flag | Meaning |
-|---|---|
-| `--image ALIAS` | Image alias installed on the host and allowed by its safety profile. |
-| `--cpu N` | vCPUs: 1 or an even number. |
-| `--memory SIZE`, `--disk SIZE` | `4096` (MiB), `512Mi`, `4Gi`. |
-| `--network none\|allowlist` | `none`: no network device exists in the guest. `allowlist`: outbound TCP to the `--allow` entries only. |
-| `--allow DEST:PORTS` | Repeatable. `DEST` is an exact DNS name, an IPv4 network in CIDR form, or a single IPv4 address; `PORTS` is a comma-separated list of ports and `LOW-HIGH` ranges. Requires `--network allowlist`. |
-| `--lifetime DURATION` | How long the sandbox may live (`3600`, `90m`, `2h`, `1d`). The host destroys it at expiry. Default: the profile's. |
-| `--name NAME` | Alias, unique among your own live sandboxes. |
+Every command takes `--help`. A command that calls the platform takes `--json`, `--profile`,
+`--base-url`, `--project`, `--verbose` and `--timeout`. A command that changes something also takes
+`--idempotency-key`, `--follow-max` and `--no-wait`, and `--generation` where it acts on a sandbox.
 
-The host refuses a request that exceeds its safety profile (`SAFETY_CONTROL_DENIED`); it never
-reduces one to fit. Some destinations are always denied whatever the profile says (loopback,
-link-local and metadata addresses, multicast, the host itself); such an entry is refused with
-`INVALID_REQUEST`.
-
-`sandbox exec` flags:
-
-| Flag | Meaning |
-|---|---|
-| `-- ARGV…` or `--command "…"`, `-c` | The command. It is **not** run through a shell: `--command` is split POSIX-style into an argument vector. |
-| `--shell` | Run `--command` via `/bin/sh -c` inside the guest (pipes, globs, `&&`). |
-| `--env KEY=VALUE`, `-e` | Repeatable. The name must be on the profile's allowlist. |
-| `--secret-env VARIABLE=REFERENCE` | Repeatable. The host delivers the secret named `REFERENCE` as `VARIABLE`. See below. |
-| `--cwd DIR` | Working directory inside the guest; must be under a prefix the profile permits. |
-| `--time-limit DURATION` | Run time limit of the command (`90s`, `1500ms`, `2m`). Default: the profile's. |
-| `--max-pids N`, `--max-stdout SIZE`, `--max-stderr SIZE` | Process and captured-output limits (`65536`, `64KiB`, `1MiB`). |
-| `--raw` | Relay guest output byte-for-byte even to a terminal. |
-| `--propagate-exit-code` | Exit with the command's own status (128+N if killed by signal N) instead of `1`. |
-
-**Secrets are named by reference, only.** `--secret-env API_TOKEN=ci-token` asks the host to
-deliver the secret that the operator provisioned on the host under the name `ci-token`. The
-protocol has no field that could carry secret material, and neither has this client: a value that
-is not a well-formed reference (1–64 characters of `[A-Za-z0-9._-]`, not starting with a dot) is
-refused without being sent and without being repeated in the error message. Never pass a secret
-itself; `--env` values are ordinary, non-secret data.
-
-**Guest output is untrusted.** When stdout or stderr is a terminal, control and bidi characters
-are shown as visible escapes so a workload cannot retitle your terminal or rewrite earlier lines.
-When piped or redirected the bytes pass through exactly.
-
-### Snapshots
+A first session:
 
 ```console
-acf-local snapshot create job-7 --name baseline     # the sandbox must be idle
-acf-local snapshot list
-
-# restore in place: a NEW GENERATION of the same sandbox; it keeps its expiry
-acf-local snapshot restore baseline --into job-7
-
-# restore as a brand-new sandbox
-acf-local snapshot restore baseline --new --name job-7-copy --lifetime 1h
-
-acf-local snapshot delete baseline --yes            # refused while something depends on it
+acf sandbox create --image python --cpu 1 --memory 512MiB --disk 2GiB --name build
+acf exec run build -- python -c "print(6 * 7)"
+acf snapshot create build --name baseline
+acf sandbox destroy build
 ```
 
-`snapshot restore` needs exactly one of `--into SANDBOX` and `--new`; the client does not guess.
-A restore in place builds the new generation, verifies it, and only then makes it current: a
-failed restore never costs you the sandbox you had. A snapshot is identified by id and generation;
-a name, or an id without `--snapshot-generation N`, is looked up through `snapshot list` first.
+### What a few options mean
 
-### Targets and preconditions
+- **Sizes and durations.** `--memory` and `--disk` take a number of MiB (`512`) or a binary unit
+  (`512MiB`, `4GiB`). `--lifetime` and the `--timeout` of `exec run` take seconds (`90`) or `90s`,
+  `10m`, `2h`, `1d`. Anything that could mean two things is refused before a request is made: `4GB`,
+  `4G`, `1.5`.
+- **`--network`.** `none`, which is also the default, or a JSON file holding an allowlist:
+  `{"mode": "allowlist", "entries": [{"name": "packages.acf.example", "ports": [443]}]}`. There is no
+  third mode.
+- **`--timeout`.** How long one HTTP request may take. On `acf exec run` it is how long the command
+  may run on the host instead, and the request is bounded with `--request-timeout`.
+- **`--generation N|current`.** A command that changes a sandbox states the generation it acts on. By
+  default it reads the sandbox first and states the generation it saw, so a sandbox that was restored
+  in the meantime refuses the request. `current` says "whatever is there". Naming an identifier
+  together with a generation makes the read unnecessary.
+- **Names.** A sandbox or a snapshot can be named by its identifier or by its name. A name is only
+  used to find the record, once; the command then acts on the identifier it found.
 
-A command that changes a sandbox sends `(sandbox_id, expected_generation)`. Given a name — or an id
-without a generation — the client reads the sandbox first (`sandbox.inspect`) and uses the
-generation it saw. If the sandbox changed in between, the host answers `REVISION_CONFLICT` instead
-of acting on something you did not mean.
+### Running a command
 
-| Flag | Meaning |
-|---|---|
-| `--expected-generation N` | Act only if `N` is the sandbox's current generation. Together with an id, the client does not need to read the sandbox first. |
-| `--if-revision N` | Stronger: act only if the sandbox's revision (shown by `sandbox inspect`) still equals `N`. |
+The command is an **argument vector**: everything after `--`, passed as the list it is. No shell is
+involved and nothing is joined or split. The `--` is required, so that an option of your command can
+never be taken for an option of this tool. To run a command line through the sandbox's shell, say so:
+`--shell 'ls -l | wc -l'` sends `/bin/sh -c 'ls -l | wc -l'`.
 
-```console
-acf-local sandbox stop sbx-0190f3…  --expected-generation 2 --if-revision 31
-```
+`acf exec run` writes the command's standard output to standard output and its standard error to
+standard error, and exits 0 if the command exited with status 0 and 1 if it did not. With `--json` it
+prints the execution instead and relays no output; read it with `acf exec output`.
 
-### Listings and cursors
+### Operations, keys and waiting
 
-`sandbox list`, `snapshot list` and `operation list` return one page and print the **cursor** the
-listing stands at (`LINEAGE:SEQUENCE`).
+Everything that changes something is an operation on the platform, and it can outlive the command that
+started it. A command follows its operation until it has ended, or for `--follow-max` (30 minutes by
+default), and then says that it is still running. Stopping the wait cancels nothing, and neither does
+Ctrl-C: `acf exec cancel EXECUTION` is the explicit request.
 
-| Flag | Meaning |
-|---|---|
-| `--limit N` | Page size, 1–1000. |
-| `--changed-since CURSOR` | Only records that changed after the cursor — **including tombstones**: destroyed sandboxes and deleted snapshots. |
-| `--all` | Follow the listing to its end instead of stopping at one page. |
+Each such command gives its request one **idempotency key** before anything is sent: yours
+(`--idempotency-key`), or one it makes. Repeating the command with the same key and the same arguments
+returns the same operation and starts nothing twice. Every message that tells you to ask again names
+the key to ask with. `acf sandbox create` is two operations, create and then start, under one key: the
+same command with the same key picks the sequence up wherever it stopped.
 
-```console
-$ acf-local sandbox list
-…
-2 record(s); listing complete; cursor 5f3c8a1e9b7d42c6a0e1f2d3c4b5a697:41
-$ acf-local sandbox list --changed-since 5f3c8a1e9b7d42c6a0e1f2d3c4b5a697:41    # what changed since
-```
-
-A full listing shows what exists; a listing from a cursor shows what changed. With `--all`, pages
-after the first are changes: a later page replaces what an earlier page said about the same
-record. A cursor from another store, or older than the host's change retention, is refused with
-`CURSOR_EXPIRED`: list again without one.
-
-### Operations
-
-```console
-acf-local operation get op-3f2a…             # what does the host say happened? (never submits anything)
-acf-local operation get op-3f2a… --wait      # …and follow it until it has ended
-acf-local operation list --limit 50
-acf-local operation cancel op-3f2a…          # ask the host to cancel a running execution
-```
-
-`operation get` is the tool for a lost response: its exit code states the operation's condition
-(`0` succeeded, `4` failed or cancelled, `5` unknown, `8` not ended yet, `3` the host holds no
-such operation for you — which, within its operation retention, means the request was never
-accepted).
-
-`operation cancel` is itself an operation. It succeeds when the execution has ended — cancelled,
-or because it had already finished, in which case nothing changes. Only an execution in progress
-can be cancelled; anything else is refused with `STATE_CONFLICT`, because it is bounded by its own
-deadline and stopping or destroying the sandbox preempts it.
-
-### Executions
-
-```console
-# create a sandbox, start it, run one command, destroy it
-acf-local run once --image python --memory 2Gi -- python experiment.py
-acf-local run once --image python --keep --name scratch --command "pip list"
-
-acf-local run inspect run-0190f3…            # the record of an execution: status, metrics, limits, artifacts
-acf-local run output run-0190f3… --stream stderr
-acf-local run output run-0190f3… --offset 4096 --max-bytes 65536
-```
-
-`run once` takes the flags of `sandbox create` and of `sandbox exec`, plus `--keep`. It is composed
-from four operations (create, start, exec, destroy), each with its own operation id, and it
-reports them all. The sandbox is destroyed whatever happened — success, failure, an unknown
-outcome, a timeout, Ctrl-C — unless `--keep`: destroying is containment, the host never refuses it
-for load, and the record of every operation and the captured output outlive the sandbox. If it is
-not established whether the host accepted `create`, there is no sandbox id to act on; the report
-says so and names the operation to ask about. A cleanup that fails is reported loudly with the
-command that finishes it, and makes the exit code non-zero.
-
-Execution output is readable only through `run inspect` and `run output`. The host returns stored
-output in slices; `run output` asks for them in turn, from `--offset` to the end of the stream or
-`--max-bytes`, and accepts `--raw` like `sandbox exec`. An execution that has not ended has no
-result yet: `run inspect` then shows its operation and exits `8`.
-
-Two different questions are kept apart: *did the operation succeed?* (the host ran the command and
-recorded the result) and *did the workload succeed?* (it exited with status 0). A non-zero exit, a
-signal or a guest-side timeout is a **result** of a successful operation: exit code `1`.
-
-### Host and operator commands
-
-```console
-acf-local host info                          # version, protocols, features, mode, lineage, profile, bounds
-acf-local host metrics
-acf-local host set-mode draining             # operator: create no new privilege (planned restart)
-acf-local host set-mode serving
-acf-local host acknowledge store-regression --yes
-acf-local profile reload                     # operator: re-read the safety profile file
-acf-local quarantine release sbx-0190f3… --generation 2 --mode force-destroy --yes
-acf-local quarantine release sbx-0190f3… --generation 2 --mode declare-absent --yes
-```
-
-* **`host set-mode`** — while `DRAINING` the host refuses everything that creates privilege
-  (create, start, exec, snapshot, restore) with `HOST_NOT_SERVING` and keeps serving stop,
-  destroy, cancel and reads. Every other mode is entered by the host itself.
-* **`host acknowledge store-regression`** — after its store was found older than the system it
-  describes, the host creates no privilege and takes no destructive action until an operator
-  states that the store it has is the one to trust.
-* **`profile reload`** — the host validates the file before anything changes: an invalid profile
-  is refused and the previous one stays in force. Operations already admitted keep the profile
-  they were admitted under.
-* **`quarantine release`** — a generation the host could not prove to be its own accepts no other
-  operation. `force-destroy` asserts that its recorded resources belong to this host: the host
-  tears them down and verifies absence. `declare-absent` asserts that nothing remains: the host
-  only verifies. If observation contradicts the assertion, the release ends `FAILED` and the
-  generation stays quarantined. It takes a sandbox id, never a name.
-
-Destructive commands (`sandbox destroy`, `snapshot delete`, `host acknowledge`,
-`quarantine release`) ask for confirmation on a terminal and **refuse** without `--yes` when there
-is no terminal to ask on.
+`--no-wait` issues the operation, asks the platform to answer at once, prints the operation as that
+answer shows it, and exits without following it. With `--no-wait` the output is always the operation,
+never the resource, and the exit status is 0 unless the operation had already ended without success.
+On `acf sandbox create` it requires `--no-start`, because creating a started sandbox is two
+operations.
 
 ## Output
 
-Human-readable output is the default: the result (a sandbox, a snapshot, a table) followed by the
-operation that produced it — its id, state, `effect`, `cleanup`, failure and the committed state
-the answer reflects (`as of LINEAGE:SEQUENCE`). Refusals, errors, hints and listing footers go to
-stderr.
+Without `--json` a command prints a table or a key-value view on standard output, and its own remarks
+on standard error. There is no colour and no table border when standard output is not a terminal or
+`NO_COLOR` is set.
 
-`sandbox exec` and `run once` are different, so that they compose in pipelines: stdout carries the
-guest's stdout, byte for byte, and nothing else; the guest's stderr, the execution report and the
-operation go to stderr. `run output` likewise writes only the stored bytes to stdout.
+With `--json` standard output is **exactly one JSON document: the answer as the platform sent it**. A
+listing is one array of the items. Members this version does not know are printed like any other, and
+a state it has never seen is printed as the word it is. The document is written in printable ASCII.
 
-With **`--json`**, stdout carries exactly one JSON document and nothing else:
+When a command fails with `--json`, and the platform gave an answer, the **first line of standard
+error is that answer as one line of JSON**: the members of the problem document for a refusal (`code`,
+`kind`, `retry`, `message`, `request_id`, and `idempotency_key`, `reason`, `status` when present), or
+the operation that did not succeed. The lines after it are the same words as without `--json`.
 
-* the host's answer in wire form (`{"protocol", "answer", "refusal" | "operation" | "result",
-  "as_of"}`), exactly as the host's published API description
-  (`execution/contracts/host-api.json`) defines it, without the per-request correlation id. Fields
-  this client does not know are passed through unchanged. For a command that followed an
-  operation, the document is the `OPERATION` answer with the operation as last stated; `run output`
-  joins the slices it read into one `output` result; `--all` joins pages into one page;
-* for `run once`: `{"operations", "steps", "run", "sandbox", "cleanup", "interrupted", "error",
-  "exit_code"}`, where `steps` maps each step to its answer;
-* when there is no host answer to print (a transport failure, an outcome that is not established,
-  a usage error found by the client): `{"error": {"kind", "message", "hint", "operation_id",
-  "exit_code"}}`.
+`--verbose` writes the request id of every result and of every error to standard error, the
+idempotency key before anything is sent, where each configuration value came from, and each retry. It
+never writes a key or a header.
 
-The exit code is the same with and without `--json`.
+### Text that is not this tool's
 
-## Exit codes
+A name is chosen by whoever created the record, a message by the host, output by the command that ran.
+None of it reaches a terminal as it is: every control and format character is shown as a visible
+escape, and a table cell is bounded. Output of a command is written to a pipe or a file byte for byte,
+and to a terminal as safe text. `acf exec output --raw` insists on the exact bytes and is refused when
+standard output is a terminal, unless `--force` is given. A character that the encoding of the output
+does not have is written as an escape too, so a name can never make a command fail after it did its
+work.
 
-| Code | Meaning |
+Nothing this tool writes contains the key in use. Should the platform or a sandbox ever repeat it, the
+place where it stood reads `[redacted]`.
+
+## Exit statuses
+
+Scripts can branch on the exit status. It is part of the contract of this tool, with the `--json`
+output, and both follow the version of the public API.
+
+| Status | Meaning |
 |---|---|
-| `0` | Success: the operation `SUCCEEDED` (and, for `exec` / `run once`, the command exited with status 0), or the read was answered. |
-| `1` | `sandbox exec` / `run once` only: the operation succeeded and the command did **not** exit with status 0 (`--propagate-exit-code` returns its own status instead). |
-| `2` | Usage error. Nothing was sent. Includes a destructive command without `--yes` and no terminal. |
-| `3` | The host **refused** the request (class and retry advice are printed). Nothing was applied. Also: a name that did not resolve. |
-| `4` | The operation ended `FAILED` or `CANCELLED`. Also returned by `run once` when the command ran but the sandbox could not be destroyed. |
-| `5` | The operation ended **`UNKNOWN`**: it may have been applied. Neither success nor failure. |
-| `6` | Transport error: the host could not be reached, or a read was not answered. Nothing was changed by this command. |
-| `7` | Protocol error: the peer did not answer in `acf.host/2`. |
-| `8` | Not established **yet**: the operation is still in progress (`--no-wait`, `--timeout`), or contact was lost after the request may have been sent. Ask with `acf-local operation get ID --wait`. |
-| `130` | Interrupted (Ctrl-C). |
-| `141` | The reader of stdout went away (`acf-local … \| head`). |
+| 0 | Done. |
+| 1 | `acf exec run` only: the command ran and did not exit with status 0. |
+| 2 | Usage or configuration error. Nothing that changes anything was sent. |
+| 3 | The platform refused the request. Nothing exists because of it. |
+| 4 | The operation failed and nothing was applied. A new request is allowed. |
+| 5 | The outcome is unknown, or the operation may have been applied. Neither success nor failure: inspect the target before acting again. |
+| 6 | The platform could not be reached, or a read got no answer. |
+| 7 | What answered does not speak this API. |
+| 8 | Unresolved: a request that changes something got no usable answer. Ask again with the same idempotency key, which the message names. |
+| 9 | The outcome is lost for good. Inspect the target; the key is finished. |
+| 10 | The operation was still running when the tool stopped following it. The message names the operation and the command that follows it. |
+| 130 | Interrupted. Nothing was cancelled. |
+| 141 | The reader of standard output went away. |
 
-`--propagate-exit-code` exists for scripts that want the workload's own status. Those values live
-in the same number space as this table: a command that exits `3` is then indistinguishable from
-"the host refused" unless you also read `--json`.
+An unknown outcome and a lost outcome never exit 0. When `acf sandbox create` created the sandbox and
+could not start it, the status is that of the start, and the message says what became of the sandbox.
 
-## Mutual TLS setup
+A defect of the tool itself is shown with its traceback and also exits 5: the tool then does not know
+what became of the request, and says so. It never exits 1 for that, because 1 says that a command ran.
 
-The host's network endpoint is off unless its configuration has an `edge.tls` section (see
-`config/host.example.yaml`):
+Two commands state the condition of what they show:
 
-```yaml
-edge:
-  tls:
-    listen: "0.0.0.0:7443"
-    certificate: /etc/acf/tls/host.crt       # the host's certificate chain
-    private_key: /etc/acf/tls/host.key
-    trust_anchors: /etc/acf/tls/clients-ca.crt   # authorities trusted to sign CLIENT certificates
-```
+- `acf operation get` prints the operation and exits 0 if it succeeded, 4 if it ended and nothing was
+  applied, 5 if its outcome is unknown or it may have been applied, and 10 if it has not ended. It is
+  the command that follows an operation: `acf operation get OPERATION --wait 30`.
+- `acf exec status` is a read and exits 0 when the platform answered, except that an execution whose
+  state is `UNKNOWN` exits 5.
 
-A client certificate that chains to one of those trust anchors is only *authenticated*. It has
-authority once the host's enrolment table (`config/enrolment.example.yaml`) names it — by the
-fingerprint of the certificate, or of its public key, which survives re-issuing the certificate:
+Every failure ends with a line that says what you can do next.
+
+## Agent keys
+
+An agent is an untrusted caller even when you trust it, so it gets a key of its own, narrower and
+shorter-lived than yours:
 
 ```console
-# SHA-256 of the DER certificate
-openssl x509 -in client.crt -outform DER | sha256sum
-# SHA-256 of the public key
-openssl x509 -in client.crt -pubkey -noout | openssl pkey -pubin -outform DER | sha256sum
+acf auth agent-key create --label builder --lifetime 2h
 ```
 
-```yaml
-peers:
-  - peer_id: control-plane-1
-    role: caller
-    match: { spki_sha256: "<the public-key fingerprint>" }
+prints the secret of the new key on standard output, **once**. The platform never shows it again.
+`--narrowing FILE` gives a grant as a JSON file: a subset of what your own key may do.
+
+`acf auth agent-key revoke CREDENTIAL` ends what the key may ask for. It does not end what the key
+already started. `--contain` also cancels every execution the key started that has not ended, and
+exits with a status other than 0 if one of those cancels did not succeed.
+
+## acf mcp: the agent interface over standard input and output
+
+An agent host that starts its tools as programs can reach the platform through `acf mcp`. It relays
+messages of the Model Context Protocol between standard input and output and the platform's MCP
+endpoint, adding the key. It implements no tool: every tool and every decision is the platform's.
+
+It **only starts with an agent key**. A developer key is refused before any message is read, by the
+marker every key carries; when the address of the public API is known, the platform is also asked who
+the key is. An agent host is never handed a developer's authority.
+
+Configure the host with the path of the installed program. The path below is an example: use the one
+`acf` has on your machine, for instance the `bin` directory of the environment you installed it into.
+
+```json
+{
+  "mcpServers": {
+    "acf": {
+      "command": "/home/you/acf-env/bin/acf",
+      "args": ["mcp", "--endpoint", "https://acf.example/mcp"],
+      "env": {
+        "ACF_API_KEY": "the agent key",
+        "ACF_BASE_URL": "https://acf.example"
+      }
+    }
+  }
+}
 ```
 
-Then, on the client:
+For a platform with a certificate authority of its own, add `"ACF_CA_FILE": "/path/to/authority.pem"`
+to `env`.
 
-```console
-export ACF_TLS=host-1.example:7443
-export ACF_TLS_CERT=~/.config/acf/client.crt
-export ACF_TLS_KEY=~/.config/acf/client.key      # mode 0600; no passphrase
-export ACF_TLS_CA=~/.config/acf/host-ca.crt      # the authority that signed the HOST's certificate
-acf-local --scope team-a host info
-```
+What the relay does and does not do:
 
-What you see when something is wrong:
+- It carries each message with its content unchanged. It does not validate, rewrite, cache or retry
+  one, and standard output carries messages of the protocol and nothing else. Its own remarks go to
+  standard error.
+- A request the endpoint does not answer gets a JSON-RPC error that says so, marked as made by the
+  relay. It never makes up the result of a tool. An error the endpoint gave before it had read which
+  request it was answering is given the identifier of that request: on standard output nothing else
+  says which call an answer belongs to.
+- When the host cancels a call that started a command in a sandbox, the relay asks the platform to
+  cancel that command. That is the one thing it does of its own accord.
+- Closing its input is a disconnect: what was read is carried to its end, and nothing is cancelled.
+  Neither does Ctrl-C or a termination signal cancel anything.
 
-| Situation | What happens |
-|---|---|
-| Your certificate is valid but not enrolled | The host refuses with `AUTHENTICATION_FAILED` (exit `3`). |
-| Your certificate does not chain to the host's client trust anchors | The connection is not accepted: "did not accept this client's certificate" (exit `6`). The request was not read. |
-| The host's certificate is not signed by `--ca`, or is not valid for the server name | "the certificate presented by … was not accepted" (exit `6`). Nothing was sent. Use `--server-name` when you connect by an address the certificate does not list. |
-| The peer does not speak TLS 1.3 | "TLS handshake … failed" (exit `6`). |
-| The private key is encrypted | Usage error: the client never prompts for a passphrase. |
+## What this tool never does
 
-The client never prints or logs certificates' private keys, and never reads key material itself:
-the key file is handed to the TLS library by path.
+- It sends nothing anywhere but to the platform you configured: no update check and no telemetry.
+- It never lets a variable another program set move its connection or change whom it believes: no
+  proxy variable and no general certificate variable is read. `ACF_CA_FILE` is this tool's own.
+- It never talks to a host directly. Its only doors are the public API and the MCP endpoint.
+- It never prints, logs or raises a key, and never shows one again after `acf auth login`.
+- It never cancels anything because it stopped waiting.
+- It never makes a new idempotency key to get past a problem.
 
 ## Development
 
 ```console
 cd apps/cli
-uv sync
-uv run ruff check . && uv run ruff format --check .
-uv run mypy
-uv run pytest                      # unit and contract tests; the end-to-end tests skip without a host
+uv sync --locked
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+uv run --locked mypy
+uv run --locked pytest -q
 ```
 
-Three layers of tests:
-
-* **Unit tests** — framing, request envelopes, response models (including unknown vocabulary words
-  and unknown fields), the lost-response and follow logic against a scripted in-process transport,
-  the transports against a real Unix socket and a TLS peer, rendering, every command, exit codes.
-* **Contract tests** (`tests/test_contract.py`) — the client against the host's published API
-  description `execution/contracts/host-api.json`: the method table, every vocabulary, the fields
-  of every request and response type, every request the client can build, and answers recorded
-  from the real host (`tests/data/recorded_answers.json`). They need no host. Re-record the
-  answers when the host's wire types change:
-  `ACF_HOST_FAKE=/path/to/acf-host-fake python tests/record_answers.py`.
-* **End-to-end tests** (`-m e2e`) — the real client against the real host agent over its local
-  socket and over mutual TLS, on an in-memory backend (**no KVM and no root needed**; they prove the
-  seams between client, wire and host, not isolation). Each test starts a host of its own.
-
-```console
-cargo build -p acf-host-agent --features testing --bin acf-host-fake     # test-only; never in a release
-ACF_REQUIRE_E2E=1 ACF_HOST_FAKE=$PWD/../../target/debug/acf-host-fake uv run pytest -m e2e
-```
-
-`ACF_HOST_FAKE` names the binary. Without it the end-to-end tests are skipped; with
-`ACF_REQUIRE_E2E=1` (set it in CI) a missing binary is a failure instead. The host refuses trusted
-files beneath a world-writable directory, so its state is created in a private directory under
-`~/.cache/acf-test` (override with `ACF_E2E_STATE_DIR`; keep it short, because a Unix socket path
-is limited to 107 bytes), never under `/tmp`. The TLS unit tests build a throwaway authority with
-the `openssl` command-line tool and are skipped where it is not installed.
+The tests talk to a scripted transport and run on a clock that does not wait: none of them opens a
+connection. They drive every command from the generated table of the API's operations
+(`protocols/api/surface.yaml`) and run the client conformance suite of the API
+(`protocols/conformance/scenarios.json`) through the commands.

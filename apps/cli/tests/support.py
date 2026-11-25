@@ -1,374 +1,630 @@
-"""Test doubles and helpers.
+"""What the tests share: canned answers, a scripted platform, a clock that does not wait, and a runner.
 
-* :class:`Contract` reads the host's published API description and validates what the client sends
-  and what a host may answer. Every request that leaves the client in *any* test goes through it.
-* :class:`ScriptedConnection` is an in-process transport: each exchange consumes the next step of a
-  script — answer, lose the response, refuse to connect. The client's retry and resolution logic
-  runs against it in zero wall time, and a script that is not fully consumed fails the test.
-* :class:`ScriptedHost` is a scripted server on a real ``AF_UNIX`` socket, for the transport itself.
-* :class:`FakeClock` makes waiting instantaneous and observable.
+The scripted platform follows the matching rules of the client conformance suite (method and path equal,
+query and headers as subsets, body equal, no request unexpected and none left over) and adds two checks
+to every request it sees, in every test: the request goes to the configured endpoint and nowhere else,
+and it carries the credential in ``Authorization`` and nowhere else.
+
+The runner runs the real command line in this process: it parses the arguments as ``acf`` would, with
+standard input, output and error replaced by streams the test can read and whose "is a terminal" it
+controls. The SDK client the commands build is the real one, on a scripted transport.
 """
 
 from __future__ import annotations
 
-import contextlib
+import io
 import json
-import os
-import socket
-import struct
-import threading
+import ssl
+import sys
 import time
 from collections import deque
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Final
 
-from jsonschema import Draft202012Validator
+import httpx2
+import pytest
+import yaml
+from agentcompute import Fabric
 
-import factories as f
+from agentcompute_cli import common, credentials, mcp
+from agentcompute_cli.main import app
 
-HEADER = struct.Struct(">I")
-PROTOCOL = "acf.host/2"
-SUN_PATH_SAFE = 100
+REPOSITORY: Final = Path(__file__).resolve().parents[3]
+PACKAGE: Final = Path(__file__).resolve().parents[1]
+SURFACE: Final = REPOSITORY / "protocols" / "api" / "surface.yaml"
+REGISTRY: Final = REPOSITORY / "protocols" / "api" / "problems" / "registry.yaml"
+SCENARIOS: Final = REPOSITORY / "protocols" / "conformance" / "scenarios.json"
+TOOLS: Final = REPOSITORY / "protocols" / "mcp" / "tools"
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-API_FILE = REPO_ROOT / "execution" / "contracts" / "host-api.json"
+#: The key every test client holds. It must never show up in anything a test can observe but the header.
+CANARY_KEY: Final = "acf1_dev_canary_Zq7XvK2mP9w4"
+#: The same, for the relay: a key whose marker says it is an agent's.
+AGENT_KEY: Final = "acf1_agt_canary_Hn5RtB8sQ3y6"
+BASE_URL: Final = "https://acf.test"
+MCP_URL: Final = "https://mcp.acf.test/mcp"
+PROJECT: Final = "prj_0000000000000001"
+ROOT: Final = f"/v1/projects/{PROJECT}"
+PRINCIPAL: Final = "prn_0000000000000001"
 
+SBX: Final = "sbx-" + "0" * 31 + "1"
+SBX2: Final = "sbx-" + "0" * 31 + "2"
+SNP: Final = "snp-" + "0" * 31 + "1"
+EXE: Final = "exe-" + "0" * 31 + "1"
+EXE2: Final = "exe-" + "0" * 31 + "2"
+CRD: Final = "crd_0000000000000001"
+OP: Final = "op-" + "a" * 32
+OP2: Final = "op-" + "b" * 32
+OP3: Final = "op-" + "c" * 32
+REQ: Final = "req_000000000000000000000001"
 
-# ----------------------------------------------------------------------------- the published contract
-class Contract:
-    """The host API description (``execution/contracts/host-api.json``) as a set of validators."""
-
-    def __init__(self, document: dict[str, Any]) -> None:
-        self.document = document
-        self.defs: dict[str, Any] = document["$defs"]
-        self.methods: dict[str, dict[str, Any]] = {m["name"]: m for m in document["methods"]}
-        self._request = self._validator({"$ref": "#/$defs/RequestEnvelope"})
-        self._response = self._validator({"$ref": "#/$defs/ResponseEnvelope"})
-
-    @classmethod
-    def load(cls) -> Contract:
-        document = json.loads(API_FILE.read_text(encoding="utf-8"))
-        assert isinstance(document, dict)
-        return cls(document)
-
-    def _validator(self, schema: dict[str, Any]) -> Draft202012Validator:
-        return Draft202012Validator({**schema, "$defs": self.defs})
-
-    def validator_for(self, name: str) -> Draft202012Validator:
-        """A validator for one named type of the description."""
-        return self._validator({"$ref": f"#/$defs/{name}"})
-
-    def check_request(self, request: dict[str, Any]) -> None:
-        """A request is valid when its envelope is, its method exists, and its params have that method's shape."""
-        self._request.validate(request)
-        method = self.methods.get(request["method"])
-        assert method is not None, f"{request['method']!r} is not a published method"
-        params = request.get("params")
-        if method["params"] is None:
-            assert params in (None, {}), f"{method['name']} takes no params, got {params!r}"
-        elif params is None:
-            assert not method["params_required"], f"{method['name']} requires params"
-        else:
-            self._validator(method["params"]).validate(params)
-        identified = request.get("operation_id") is not None and request.get("issued_at") is not None
-        assert identified == method["creates_operation"], (
-            f"{method['name']}: operation_id and issued_at accompany exactly the methods that create an operation"
-        )
-        assert "authority" not in request, "the client never sends `authority`"
-
-    def check_response(self, response: dict[str, Any]) -> None:
-        self._response.validate(response)
+type Json = dict[str, Any]
 
 
-# ----------------------------------------------------------------------------- answers, in wire form
-def refused(
-    failure_class: str, message: str = "refused", retry: str = "NEVER", *, as_of: dict[str, Any] | None = f.AS_OF
-) -> dict[str, Any]:
-    return {
-        "answer": "REFUSED",
-        "refusal": {"class": failure_class, "retry": retry, "message": message},
-        "as_of": as_of,
+def surface() -> list[Json]:
+    """The public operations of the API, from the generated table."""
+    document = yaml.safe_load(SURFACE.read_text(encoding="utf-8"))
+    operations: list[Json] = document["operations"]
+    return operations
+
+
+def registry() -> dict[str, Json]:
+    """The problem registry of the API: code -> its row."""
+    document = yaml.safe_load(REGISTRY.read_text(encoding="utf-8"))
+    return {row["code"]: row for row in document["codes"]}
+
+
+REGISTRY_ROWS: Final = registry()
+
+
+# ------------------------------------------------------------------------------------------ canned views
+def sandbox(state: str = "RUNNING", *, sandbox_id: str = SBX, generation: int = 1, **extra: Any) -> Json:
+    view: Json = {
+        "sandbox_id": sandbox_id,
+        "project": PROJECT,
+        "state": state,
+        "generation": generation,
+        "revision": f"r{generation + 10}.0123456789ab",
+        "image": {"alias": "python", "digest": "sha256:" + "1" * 64},
+        "resources": {"vcpus": 1, "memory_mib": 512, "disk_mib": 1024},
+        "network": {"mode": "none", "entries": []},
+        "expires_at": "2026-11-19T12:00:00.000Z",
+        "notes": [],
+        "updated_at": "2026-11-19T10:00:02.000Z",
     }
+    view.update(extra)
+    return view
 
 
-def accepted(view: dict[str, Any], *, as_of: dict[str, Any] | None = f.AS_OF) -> dict[str, Any]:
-    return {"answer": "OPERATION", "operation": view, "as_of": as_of}
+def execution(
+    status: str | None = "EXITED",
+    *,
+    exit_code: int | None = 0,
+    state: str = "SUCCEEDED",
+    execution_id: str = EXE,
+    stdout_bytes: int = 0,
+    stderr_bytes: int = 0,
+    **extra: Any,
+) -> Json:
+    view: Json = {
+        "execution_id": execution_id,
+        "operation_id": OP3,
+        "project": PROJECT,
+        "sandbox_id": SBX,
+        "generation": 1,
+        "state": state,
+        "terminal": state in {"SUCCEEDED", "FAILED", "CANCELLED", "UNKNOWN"},
+        "stdout": {"stored_bytes": stdout_bytes, "produced_bytes": stdout_bytes, "completeness": "COMPLETE"},
+        "stderr": {"stored_bytes": stderr_bytes, "produced_bytes": stderr_bytes, "completeness": "COMPLETE"},
+        "provenance": {"status": "GUEST_REPORTED", "exit_code": "GUEST_REPORTED"},
+    }
+    if status is not None:
+        view["status"] = status
+    if exit_code is not None:
+        view["exit_code"] = exit_code
+    view.update(extra)
+    return view
 
 
-def answered(kind: str, data: Any, *, as_of: dict[str, Any] | None = f.AS_OF) -> dict[str, Any]:
-    return {"answer": "RESULT", "result": {"type": kind, "data": data}, "as_of": as_of}
+def snapshot(state: str = "READY", *, snapshot_id: str = SNP, generation: int = 1, **extra: Any) -> Json:
+    view: Json = {
+        "snapshot_id": snapshot_id,
+        "snapshot_generation": generation,
+        "project": PROJECT,
+        "state": state,
+        "revision": "r21.0123456789ab",
+        "source_sandbox": {"sandbox_id": SBX, "generation": 1},
+        "size_bytes": 4096,
+        "restore_count": 0,
+        "incompatible": [],
+        "created_at": "2026-11-19T10:00:00.000Z",
+    }
+    view.update(extra)
+    return view
 
 
-Step = Callable[[dict[str, Any]], "dict[str, Any] | bytes | BaseException"] | dict[str, Any] | bytes | BaseException
+def operation(
+    kind: str = "sandbox.create",
+    state: str = "SUCCEEDED",
+    *,
+    operation_id: str = OP,
+    result: Json | None = None,
+    effect: str | None = None,
+    failure: Json | None = None,
+    target: Json | None = None,
+    **extra: Any,
+) -> Json:
+    view: Json = {
+        "operation_id": operation_id,
+        "project": PROJECT,
+        "type": kind,
+        "state": state,
+        "terminal": state in {"SUCCEEDED", "FAILED", "CANCELLED", "UNKNOWN"},
+        "target": target if target is not None else {"sandbox_id": SBX, "generation": 1},
+        "initiated_by": "CALLER",
+        "actor": {"principal_id": PRINCIPAL},
+        "created_at": "2026-11-19T10:00:00.000Z",
+        "updated_at": "2026-11-19T10:00:02.000Z",
+        "replayed": False,
+        "recorded": False,
+    }
+    if effect is None and state == "SUCCEEDED":
+        effect = "APPLIED"
+    if effect is not None:
+        view["effect"] = effect
+    if failure is not None:
+        view["failure"] = failure
+    if result is not None:
+        view["result"] = result
+    view.update(extra)
+    return view
 
 
-def op(state: str = "SUCCEEDED", result: dict[str, Any] | None = None, **over: Any) -> Step:
-    """Answer about *the request's own* operation.
-
-    For a request that creates an operation: an ``OPERATION`` answer whose view carries the
-    request's ``operation_id``, ``issued_at`` and method. For ``operation.get``: a ``RESULT`` with
-    the view of the operation that was asked about.
-    """
-
-    def build(request: dict[str, Any]) -> dict[str, Any]:
-        if request["method"] == "operation.get":
-            view = f.operation_view(state=state, result=result, operation_id=request["params"]["operation_id"], **over)
-            return answered("operation", view)
-        fields = {"operation_id": request["operation_id"], "issued_at": request["issued_at"], **over}
-        fields.setdefault("operation_type", request["method"])
-        return accepted(f.operation_view(state=state, result=result, **fields))
-
-    return build
+def failure(code: str, *, retry: str = "AFTER_CHANGE", message: str = "it failed") -> Json:
+    return {"code": code, "retry": retry, "message": message, "side_effect": "NONE"}
 
 
-# ----------------------------------------------------------------------------- the in-process transport
-class ScriptedConnection:
-    """An :class:`acf_cli.transport.Exchange` whose every turn is scripted.
+def done(kind: str, member: str, view: Json, **extra: Any) -> Json:
+    """An operation that succeeded and carries what it produced."""
+    return operation(kind, "SUCCEEDED", result={member: view}, **extra)
 
-    A step is a response (a dict, completed with ``protocol`` and the request's ``request_id``
-    unless it sets them), raw bytes, an exception to raise *after the request was taken* (the
-    transport's way of saying "not sent" or "sent, no answer"), or a callable from the request to
-    any of those.
-    """
 
-    def __init__(
-        self,
-        script: Iterable[Step] = (),
-        *,
-        check: Callable[[dict[str, Any]], None] | None = None,
-        default: Step | None = None,
-    ) -> None:
-        self.requests: list[dict[str, Any]] = []
-        self.read_timeouts: list[float] = []
-        self.closed = 0
-        self._script: deque[Step] = deque(script)
-        self._default = default
-        self._check = check
+def problem(code: str, *, kind: str | None = None, retry: str | None = None, **extra: Any) -> Json:
+    """A problem document. A code of the registry gets its kind and its retry advice from there."""
+    row = REGISTRY_ROWS.get(code, {})
+    title = str(row.get("title", "A code this client has never seen"))
+    body: Json = {
+        "code": code,
+        "kind": kind or row.get("kind") or "REFUSED",
+        "retry": retry or row.get("retry") or "NEVER",
+        "message": title,
+        "request_id": REQ,
+        "type": "urn:acf:problem:" + code.lower().replace("_", "-"),
+        "title": title,
+        "status": row.get("http_status") or 400,
+        "detail": title,
+        "instance": f"urn:acf:request:{REQ}",
+    }
+    body.update(extra)
+    return body
+
+
+def page(items: list[Json], *, more: bool = False, cursor: str = "end") -> Json:
+    return {"next_cursor": cursor, "more": more, "items": items}
+
+
+def whoami(kind: str = "developer", **extra: Any) -> Json:
+    view: Json = {
+        "principal_id": PRINCIPAL,
+        "project_id": PROJECT,
+        "credential": {"credential_id": CRD, "kind": kind, "expires_at": "2027-01-01T00:00:00.000Z"},
+        "grants": {
+            "methods": ["sandbox.create", "sandbox.get"],
+            "images": ["python"],
+            "network": {"modes": ["none"]},
+            "ceilings": {"vcpus": 2, "memory_mib": 4096},
+            "mint_agent_credentials": True,
+        },
+        "policy_version": "1",
+    }
+    view.update(extra)
+    return view
+
+
+def credential(status: str = "ACTIVE", **extra: Any) -> Json:
+    view: Json = {
+        "credential_id": CRD,
+        "kind": "agent",
+        "label": "builder",
+        "display_prefix": "acf1_agt_abcd",
+        "status": status,
+        "issued_at": "2026-11-19T10:00:00.000Z",
+        "expires_at": "2026-11-19T12:00:00.000Z",
+    }
+    view.update(extra)
+    return view
+
+
+def info(**extra: Any) -> Json:
+    view: Json = {
+        "api_versions": ["v1"],
+        "serving": True,
+        "ready": True,
+        "platform_features": ["agent_credentials"],
+        "host_features": ["snapshots"],
+        "parameters": {"public_wait_max": 30},
+        "ceilings": {
+            "vcpus": 2,
+            "memory_mib": 4096,
+            "disk_mib": 20480,
+            "execution_timeout_seconds": 600,
+            "sandbox_lifetime_seconds": 86400,
+            "allowlist_entries": 16,
+        },
+    }
+    view.update(extra)
+    return view
+
+
+def chunk(data_base64: str = "", *, offset: int = 0, size: int = 0, eof: bool = True, **extra: Any) -> Json:
+    view: Json = {
+        "execution_id": EXE,
+        "stream": "stdout",
+        "offset": offset,
+        "data_base64": data_base64,
+        "next_offset": offset + size,
+        "eof": eof,
+        "stored_bytes": offset + size,
+        "produced_bytes": offset + size,
+        "completeness": "COMPLETE",
+        "provenance": "GUEST_REPORTED",
+    }
+    view.update(extra)
+    return view
+
+
+# ------------------------------------------------------------------------------------- the scripted platform
+@dataclass(frozen=True)
+class Seen:
+    """One request as the platform saw it."""
+
+    method: str
+    path: str
+    query: dict[str, str]
+    headers: dict[str, str]
+    body: bytes
 
     @property
-    def methods(self) -> list[str]:
-        return [str(r["method"]) for r in self.requests]
+    def json(self) -> Any:
+        return json.loads(self.body)
 
-    def exchange(self, payload: bytes, *, read_timeout_s: float) -> bytes:
-        request = json.loads(payload)
-        assert isinstance(request, dict)
-        if self._check is not None:
-            self._check(request)
-        self.requests.append(request)
-        self.read_timeouts.append(read_timeout_s)
-        if self._script:
-            step = self._script.popleft()
-        elif self._default is not None:
-            step = self._default
-        else:
-            raise AssertionError(f"the client sent {request['method']} but the script was exhausted")
-        out = step(request) if callable(step) else step
-        if isinstance(out, BaseException):
-            raise out
-        if isinstance(out, bytes):
-            return out
-        return json.dumps({"protocol": PROTOCOL, "request_id": request.get("request_id"), **out}).encode()
-
-    def close(self) -> None:
-        self.closed += 1
-
-    def assert_exhausted(self) -> None:
-        assert not self._script, f"{len(self._script)} scripted step(s) were never used"
+    @property
+    def key(self) -> str | None:
+        return self.headers.get("idempotency-key")
 
 
-# ----------------------------------------------------------------------------- framing (independent of acf_cli)
-def send_frame(conn: socket.socket, payload: bytes) -> None:
-    conn.sendall(HEADER.pack(len(payload)) + payload)
+@dataclass(frozen=True)
+class Exchange:
+    """What the platform expects next, and what it answers. The shapes are those of the conformance suite."""
+
+    request: Json
+    response: Json
 
 
-def read_frame(conn: socket.socket) -> bytes | None:
-    """One frame's payload, or ``None`` on a clean EOF before any byte."""
-    header = _read_exactly(conn, HEADER.size)
-    if header is None:
-        return None
-    (length,) = HEADER.unpack(header)
-    if length == 0:
-        return b""
-    return _read_exactly(conn, length)
+def reply(status: int = 200, body: Json | None = None, **headers: str) -> Json:
+    """A scripted answer. Header names are given with underscores: ``retry_after="1"``."""
+    response: Json = {"status": status, "headers": {"x-request-id": REQ}}
+    response["headers"].update({name.replace("_", "-"): value for name, value in headers.items()})
+    if body is not None:
+        response["json"] = body
+    return response
 
 
-def _read_exactly(conn: socket.socket, count: int) -> bytes | None:
-    chunks: list[bytes] = []
-    remaining = count
-    while remaining:
-        chunk = conn.recv(min(remaining, 1 << 16))
-        if not chunk:
-            return None
-        chunks.append(chunk)
-        remaining -= len(chunk)
-    return b"".join(chunks)
+def refusal(code: str, *, status: int | None = None, retry_after: int | None = None, **members: Any) -> Json:
+    """A scripted error answer: a problem document with its media type."""
+    body = problem(code, **members)
+    response = reply(status or body["status"], body, content_type="application/problem+json")
+    body["status"] = response["status"]
+    if retry_after is not None:
+        response["headers"]["retry-after"] = str(retry_after)
+    return response
 
 
-def bind_unix(sock: socket.socket, path: Path) -> None:
-    """Bind, working around the 108-byte ``sun_path`` limit for deep temporary directories."""
-    if len(os.fsencode(path)) < SUN_PATH_SAFE:
-        sock.bind(str(path))
-        return
-    dir_fd = os.open(path.parent, os.O_PATH | os.O_DIRECTORY | os.O_CLOEXEC)
-    try:
-        sock.bind(f"/proc/self/fd/{dir_fd}/{path.name}")
-    finally:
-        os.close(dir_fd)
+#: The ways a script can make an answer not arrive. The first two are those of the conformance suite: the
+#: request was received and no response came. ``connect_error`` proves that nothing was sent.
+FAULTS: Final[dict[str, type[httpx2.RequestError]]] = {
+    "connection_reset": httpx2.ReadError,
+    "timeout": httpx2.ReadTimeout,
+    "connect_error": httpx2.ConnectError,
+}
 
 
-# ----------------------------------------------------------------------------- a scripted server on a real socket
-class Serves(Protocol):
-    """What the scripted server does with one connection. It returns the request frames it read."""
-
-    def serve(self, conn: socket.socket) -> list[bytes]: ...
+def fault(kind: str = "connection_reset", message: str | None = None) -> Json:
+    """No answer at all. ``message`` is what the HTTP library says about it."""
+    return {"fault": kind} if message is None else {"fault": kind, "message": message}
 
 
-class Echo:
-    """Answer each of ``turns`` requests with one frame carrying ``reply(request_payload)``."""
-
-    def __init__(self, reply: Callable[[bytes], bytes], *, turns: int = 1) -> None:
-        self._reply = reply
-        self._turns = turns
-
-    def serve(self, conn: socket.socket) -> list[bytes]:
-        seen: list[bytes] = []
-        for _ in range(self._turns):
-            frame = read_frame(conn)
-            if frame is None:
-                break
-            seen.append(frame)
-            send_frame(conn, self._reply(frame))
-        return seen
+def interrupt() -> Json:
+    """The person presses Ctrl-C while the request is on its way."""
+    return {"interrupt": True}
 
 
-class Lost:
-    """Read the whole request, then close without answering: the response was *lost*."""
-
-    def serve(self, conn: socket.socket) -> list[bytes]:
-        frame = read_frame(conn)
-        return [frame] if frame is not None else []
+def ex(method: str, path: str, response: Json, **request: Any) -> Exchange:
+    """One exchange. ``path`` is relative to the project unless it starts with ``/v1``."""
+    full = path if path.startswith("/v1") else ROOT + path
+    return Exchange({"method": method, "path": full, **request}, response)
 
 
-class ClosedBeforeRead:
-    """Accept, then close without reading anything."""
+@dataclass
+class Script:
+    """A platform that answers a fixed sequence of requests and refuses everything else."""
 
-    def serve(self, conn: socket.socket) -> list[bytes]:
-        _ = conn
-        return []
+    exchanges: Iterable[Exchange] = ()
+    base_url: str = BASE_URL
+    api_key: str = CANARY_KEY
+    #: The idempotency key that ``$KEY`` stands for. Taken from the first request that carries one if not given.
+    key: str | None = None
+    seen: list[Seen] = field(default_factory=list)
+    failures: list[str] = field(default_factory=list)
 
+    def __post_init__(self) -> None:
+        self.pending: deque[Exchange] = deque(self.exchanges)
+        self._origin = httpx2.URL(self.base_url)
 
-class SayThenClose:
-    """Write one frame *without reading the request*, then close (an authentication refusal at accept time)."""
+    def handler(self, request: httpx2.Request) -> httpx2.Response:
+        seen = Seen(
+            request.method,
+            request.url.path,
+            dict(request.url.params),
+            {name.lower(): value for name, value in request.headers.items()},
+            request.content,
+        )
+        self.seen.append(seen)
+        self._check_destination(request, seen)
+        if not self.pending:
+            self._fail(f"unexpected request: {seen.method} {seen.path} {seen.query}")
+        exchange = self.pending.popleft()
+        self._check_expected(exchange.request, seen)
+        response = exchange.response
+        if "interrupt" in response:
+            raise KeyboardInterrupt
+        if "fault" in response:
+            words = response.get("message", f"scripted fault: {response['fault']}")
+            raise FAULTS[response["fault"]](words, request=request)
+        headers = dict(response.get("headers", {}))
+        content = b""
+        if "json" in response:
+            content = json.dumps(response["json"]).encode()
+            headers.setdefault("content-type", "application/json")
+        elif "content" in response:
+            content = response["content"]
+        return httpx2.Response(response["status"], headers=headers, content=content)
 
-    def __init__(self, payload: bytes) -> None:
-        self._payload = payload
+    def _fail(self, message: str) -> None:
+        self.failures.append(message)
+        raise AssertionError(message)
 
-    def serve(self, conn: socket.socket) -> list[bytes]:
-        send_frame(conn, self._payload)
-        return []
+    def _check_destination(self, request: httpx2.Request, seen: Seen) -> None:
+        url = request.url
+        if (url.scheme, url.host, url.port) != (self._origin.scheme, self._origin.host, self._origin.port):
+            self._fail(f"a request left for another origin: {url.scheme}://{url.host}")
+        if seen.headers.get("authorization") != f"Bearer {self.api_key}":
+            self._fail("a request did not carry the credential in Authorization")
+        if self.api_key in str(url) or self.api_key.encode() in seen.body:
+            self._fail("the credential was sent outside the Authorization header")
+        leaked = [name for name, value in seen.headers.items() if name != "authorization" and self.api_key in value]
+        if leaked:
+            self._fail(f"the credential was sent in other headers: {leaked}")
 
+    def _resolve(self, expected: Any) -> Any:
+        """Replace ``$KEY`` by the key of the call, in a header value or anywhere in a body."""
+        if isinstance(expected, str) and expected.startswith("$KEY") and self.key is not None:
+            return self.key + expected.removeprefix("$KEY")
+        if isinstance(expected, dict):
+            return {name: self._resolve(value) for name, value in expected.items()}
+        if isinstance(expected, list):
+            return [self._resolve(value) for value in expected]
+        return expected
 
-class RawAfterRead:
-    """Read the request, then write these exact bytes (no framing added)."""
+    def _check_expected(self, expected: Json, seen: Seen) -> None:
+        """The matching rules of the conformance suite: method and path equal, query and headers subsets, body equal."""
+        if self.key is None and expected.get("headers", {}).get("idempotency-key") == "$KEY":
+            self.key = seen.key
+        if (seen.method, seen.path) != (expected["method"], expected["path"]):
+            self._fail(f"expected {expected['method']} {expected['path']}, got {seen.method} {seen.path}")
+        where = f"{seen.method} {seen.path}"
+        for name, value in expected.get("query", {}).items():
+            if seen.query.get(name) != value:
+                self._fail(f"{where}: query {name}={seen.query.get(name)!r}, expected {value!r}")
+        for name, value in expected.get("headers", {}).items():
+            wanted = self._resolve(value)
+            if seen.headers.get(name.lower()) != wanted:
+                self._fail(f"{where}: header {name}={seen.headers.get(name.lower())!r}, expected {wanted!r}")
+        for name in expected.get("absent_headers", ()):
+            if name.lower() in seen.headers:
+                self._fail(f"{where}: header {name} must not be sent")
+        if "json" in expected:
+            wanted = self._resolve(expected["json"])
+            if wanted is None and seen.body:
+                self._fail(f"{where}: a body was sent and none was expected")
+            if wanted is not None and (not seen.body or seen.json != wanted):
+                self._fail(f"{where}: body {seen.body!r}, expected {wanted!r}")
 
-    def __init__(self, data: bytes) -> None:
-        self._data = data
-
-    def serve(self, conn: socket.socket) -> list[bytes]:
-        frame = read_frame(conn)
-        conn.sendall(self._data)
-        return [frame] if frame is not None else []
-
-
-class Stall:
-    """Read the request, then say nothing for ``seconds``: the client's timeout fires first."""
-
-    def __init__(self, seconds: float) -> None:
-        self._seconds = seconds
-
-    def serve(self, conn: socket.socket) -> list[bytes]:
-        frame = read_frame(conn)
-        time.sleep(self._seconds)
-        return [frame] if frame is not None else []
-
-
-class ScriptedHost:
-    """Connections are assigned behaviours in arrival order and served concurrently."""
-
-    def __init__(self, path: Path, script: Sequence[Serves]) -> None:
-        self.socket_path = path
-        self.frames: list[bytes] = []
-        self.connections = 0
-        self.problems: list[str] = []
-        self._script: deque[Serves] = deque(script)
-        self._stop = threading.Event()
-        self._lock = threading.Lock()
-        self._server: socket.socket | None = None
-        self._acceptor: threading.Thread | None = None
-        self._workers: list[threading.Thread] = []
-
-    def start(self) -> None:
-        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        bind_unix(server, self.socket_path)
-        server.listen(16)
-        server.settimeout(0.05)
-        self._server = server
-        self._acceptor = threading.Thread(target=self._accept_loop, name="scripted-host", daemon=True)
-        self._acceptor.start()
-
-    def stop(self) -> None:
-        self._stop.set()
-        if self._acceptor is not None:
-            self._acceptor.join(timeout=5)
-        for worker in self._workers:
-            worker.join(timeout=5)
-        if self._server is not None:
-            self._server.close()
-
-    def assert_clean(self) -> None:
-        assert not self.problems, f"scripted host saw unexpected behaviour: {self.problems}"
-        assert not self._script, f"{len(self._script)} scripted behaviour(s) were never used"
-
-    def _accept_loop(self) -> None:
-        assert self._server is not None
-        while not self._stop.is_set():
-            try:
-                conn, _ = self._server.accept()
-            except TimeoutError:
-                continue
-            except OSError:
-                return
-            with self._lock:
-                self.connections += 1
-                behavior = self._script.popleft() if self._script else None
-            worker = threading.Thread(target=self._serve_one, args=(conn, behavior), daemon=True)
-            self._workers.append(worker)
-            worker.start()
-
-    def _serve_one(self, conn: socket.socket, behavior: Serves | None) -> None:
-        with conn, contextlib.suppress(OSError):
-            conn.settimeout(5)
-            if behavior is None:
-                with self._lock:
-                    self.problems.append("a connection arrived but the script was exhausted")
-                return
-            seen = behavior.serve(conn)
-            with self._lock:
-                self.frames.extend(seen)
+    def finish(self) -> None:
+        """Nothing unexpected happened, and nothing expected is left over."""
+        assert not self.failures, self.failures
+        left = [f"{e.request['method']} {e.request['path']}" for e in self.pending]
+        assert not left, f"exchanges never asked for: {left}"
 
 
-# ----------------------------------------------------------------------------- time
-class FakeClock:
-    """``sleep`` advances ``monotonic`` instantly, so retry and polling logic runs in zero wall time."""
+# ------------------------------------------------------------------------------------------ virtual time
+class VirtualClock:
+    """A clock that moves only when someone sleeps on it, so that no test waits."""
 
     def __init__(self) -> None:
-        self.now = 1000.0
-        self.sleeps: list[float] = []
+        self.now = 1_000.0
+        self.slept: list[float] = []
+
+    def time(self) -> float:
+        return self.now
 
     def sleep(self, seconds: float) -> None:
-        self.sleeps.append(seconds)
+        assert seconds >= 0
+        self.slept.append(seconds)
         self.now += seconds
 
-    def monotonic(self) -> float:
-        return self.now
+    @property
+    def waited(self) -> float:
+        return sum(self.slept)
+
+
+# -------------------------------------------------------------------------------------------- the runner
+class FakeStream(io.TextIOWrapper):
+    """A text stream over bytes that a test can read, and whose "is a terminal" the test decides."""
+
+    def __init__(self, data: bytes = b"", *, tty: bool = False) -> None:
+        self._raw = io.BytesIO(data)
+        super().__init__(self._raw, encoding="utf-8", errors="backslashreplace", write_through=True)
+        self._tty = tty
+
+    def isatty(self) -> bool:
+        return self._tty
+
+    @property
+    def written(self) -> bytes:
+        self.flush()
+        return self._raw.getvalue()
+
+
+@dataclass
+class Run:
+    """One run of the command line against a scripted platform."""
+
+    exit_code: int
+    stdout_bytes: bytes
+    stderr_bytes: bytes
+    script: Script
+
+    @property
+    def stdout(self) -> str:
+        return self.stdout_bytes.decode("utf-8", "backslashreplace")
+
+    @property
+    def stderr(self) -> str:
+        return self.stderr_bytes.decode("utf-8", "backslashreplace")
+
+    @property
+    def json(self) -> Any:
+        """Standard output, which must be exactly one JSON document."""
+        return json.loads(self.stdout_bytes)
+
+    @property
+    def error_document(self) -> Any:
+        """The answer of the API that a failed ``--json`` command prints: the first line of standard error."""
+        first = self.stderr.splitlines()[0]
+        assert first.startswith("{"), f"standard error does not begin with a JSON document: {first!r}"
+        return json.loads(first)
+
+    @property
+    def requests(self) -> list[Seen]:
+        return self.script.seen
+
+
+class Cli:
+    """Runs ``acf`` in this process, on a scripted platform and a clock that does not wait."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, home: Path) -> None:
+        self._monkeypatch = monkeypatch
+        self.home = home
+        self.clock = VirtualClock()
+        self.scripts: list[Script] = []
+        #: What each client the commands built was configured with: the settings, and the request timeout.
+        self.clients: list[tuple[credentials.Settings, float | None]] = []
+        #: Whom each relay was told to believe about the endpoint's certificate. ``None``: the default.
+        self.relay_trust: list[ssl.SSLContext | None] = []
+        #: The environment every run starts from. A test replaces or removes entries as it needs.
+        self.env: dict[str, str | None] = {
+            "ACF_API_KEY": CANARY_KEY,
+            "ACF_BASE_URL": BASE_URL,
+            "ACF_PROJECT": PROJECT,
+            "ACF_PROFILE": None,
+            "ACF_MCP_URL": None,
+            "ACF_CA_FILE": None,
+            "NO_COLOR": None,
+            "XDG_CONFIG_HOME": str(home / "config"),
+            "APPDATA": str(home / "roaming"),
+            "HOME": str(home),
+            "COLUMNS": "200",
+        }
+
+    @property
+    def credentials_file(self) -> Path:
+        return self.home / "config" / "acf" / "credentials.json"
+
+    def run(
+        self,
+        args: Sequence[str],
+        *exchanges: Exchange,
+        env: Mapping[str, str | None] | None = None,
+        stdin: bytes = b"",
+        tty: bool = False,
+        stdin_tty: bool = False,
+        key: str | None = None,
+        api_key: str = CANARY_KEY,
+        base_url: str = BASE_URL,
+        stdout: FakeStream | None = None,
+        endpoint: Callable[[httpx2.Request], Any] | None = None,
+    ) -> Run:
+        """Run one command. ``exchanges`` is everything the platform is asked, in order, and what it answers.
+
+        ``endpoint`` answers what ``acf mcp`` posts to the MCP endpoint. A run that has one keeps the real
+        clock: the relay is an event loop, and an event loop needs time to pass.
+        """
+        script = Script(exchanges, base_url=base_url, api_key=api_key, key=key)
+        self.scripts.append(script)
+        transport = httpx2.MockTransport(script.handler)
+
+        def new_fabric(settings: credentials.Settings, *, timeout: float | None) -> Fabric:
+            self.clients.append((settings, timeout))
+            http = httpx2.Client(transport=transport)
+            options: dict[str, Any] = {} if timeout is None else {"timeout": timeout}
+            return Fabric(
+                settings.api_key, base_url=settings.base_url, project=settings.project, http_client=http, **options
+            )
+
+        def new_http_client(trust: ssl.SSLContext | None = None) -> httpx2.AsyncClient:
+            assert endpoint is not None, "this run was not expected to relay anything"
+            self.relay_trust.append(trust)
+            return httpx2.AsyncClient(transport=httpx2.MockTransport(endpoint))
+
+        out = stdout if stdout is not None else FakeStream(tty=tty)
+        err = FakeStream(tty=tty)
+        with self._monkeypatch.context() as patch:
+            patch.setattr(common, "new_fabric", new_fabric)
+            patch.setattr(mcp, "new_http_client", new_http_client)
+            if endpoint is None:
+                # The SDK takes its clock and its sleep from here when a client is built.
+                patch.setattr(time, "monotonic", self.clock.time)
+                patch.setattr(time, "sleep", self.clock.sleep)
+            for name, value in {**self.env, **(env or {})}.items():
+                if value is None:
+                    patch.delenv(name, raising=False)
+                else:
+                    patch.setenv(name, value)
+            patch.setattr(sys, "stdin", FakeStream(stdin, tty=stdin_tty))
+            patch.setattr(sys, "stdout", out)
+            patch.setattr(sys, "stderr", err)
+            try:
+                app(list(args), prog_name="acf")
+            except SystemExit as stop:
+                code = stop.code
+            else:
+                code = 0
+            exit_code = 0 if code is None else code
+            assert isinstance(exit_code, int), f"the process would exit with {exit_code!r}"
+        return Run(exit_code, out.written, err.written, script)
+
+    def finish(self) -> None:
+        for script in self.scripts:
+            script.finish()

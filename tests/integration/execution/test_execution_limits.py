@@ -379,6 +379,9 @@ def test_t_exec_02_a_guest_that_ignores_its_deadline_and_cancel_is_ended_by_the_
     client = acf.spawn("sandbox", "exec", box.sandbox_id, "--time-limit", f"{limit_s}s", "--json", "--", "sleep", "600")
     try:
         await_sandbox(acf, box, lambda seen: seen.state == "RUNNING", within=30, what="the command starting")
+        # RUNNING is committed when the operation begins, before the command reaches the guest; a guest frozen
+        # then never received it (and the host says so: NOT_APPLIED). Freeze it with the command running in it.
+        time.sleep(3)
         os.kill(identity[0], signal.SIGSTOP)
         done = client.wait(timeout=limit_s + margin_s + grace_s + teardown_s + 60)
     finally:

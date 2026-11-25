@@ -1,4 +1,6 @@
-# Known-vulnerability audit of everything this repository locks: Cargo.lock and both uv.lock files.
+# Known-vulnerability audit of everything this repository locks: Cargo.lock, the uv.lock of the tooling
+# and of the host client, and the five locks of the developer platform (four uv.lock files and one
+# package-lock.json).
 #
 # Weekly, and whenever a lock file changes. It is separate from ci.yml on purpose: an advisory published
 # today must not turn yesterday's unrelated pull request red, but it must reach a human quickly.
@@ -13,7 +15,12 @@ on:
     paths:
       - Cargo.lock
       - uv.lock
+      - apps/host-cli/uv.lock
+      - apps/api/uv.lock
+      - apps/mcp-gateway/uv.lock
       - apps/cli/uv.lock
+      - sdks/python/uv.lock
+      - sdks/typescript/package-lock.json
       - .github/workflows/audit.yml
   workflow_dispatch:
 
@@ -52,10 +59,30 @@ jobs:
       - name: Audit the CLI's locked dependencies (runtime supply-chain surface)
         run: |
           set -euo pipefail
-          uv --directory apps/cli export --locked --no-dev --no-emit-project --format requirements-txt -o "$RUNNER_TEMP/cli-requirements.txt"
+          uv --directory apps/host-cli export --locked --no-dev --no-emit-project --format requirements-txt -o "$RUNNER_TEMP/cli-requirements.txt"
           uvx --from pip-audit==2.10.1 pip-audit --requirement "$RUNNER_TEMP/cli-requirements.txt" --no-deps --disable-pip --strict
       - name: Audit the repository tooling's locked dependencies
         run: |
           set -euo pipefail
           uv export --locked --no-emit-project --format requirements-txt -o "$RUNNER_TEMP/tools-requirements.txt"
           uvx --from pip-audit==2.10.1 pip-audit --requirement "$RUNNER_TEMP/tools-requirements.txt" --no-deps --disable-pip --strict
+
+  platform:
+    name: pip-audit and npm audit (the developer platform's five locks)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.9"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26.13.1"
+      # The same target the release workflow runs before it publishes anything: the API, the
+      # agent-protocol adapter, the Python SDK and the CLI through pip-audit, the TypeScript SDK through
+      # `npm audit` and `npm audit signatures`. Development tools are audited too: they run in the
+      # pipeline that builds what is published.
+      - run: make platform-audit

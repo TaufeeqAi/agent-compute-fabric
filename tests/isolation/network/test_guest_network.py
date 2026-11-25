@@ -749,26 +749,23 @@ def test_t_net_07_losing_the_enforcement_yields_no_connectivity(acf: AcfLocal, h
 def test_t_net_08_a_generation_whose_network_setup_fails_never_runs(acf: AcfLocal, host_env: HostEnv) -> None:
     """T-NET-08: "network setup fails -> the generation never runs".
 
-    On the real host, as root: the place where the host would create the network namespace of the generation is
-    occupied before the start is asked for (the path is derived from the generation, and the host never reuses
-    something that already exists). Pass: the start ends ``FAILED``; the sandbox never becomes ``READY``; no VMM
-    process of the generation exists; a start that follows, with the obstacle removed, is the host's to decide,
-    but it never yields a runtime without a verified network.
+    On the real host, as root. The generation's network namespace exists from its creation (the host makes it
+    when it provisions the generation); what the start adds inside it, for network mode ``allowlist``, is the
+    guest's device. That name is taken in the namespace before the start is asked for, so the host's setup of
+    the device fails (it never reuses something that already exists). Pass: the start ends ``FAILED``; the
+    sandbox never becomes ``READY``; no VMM process of the generation exists.
     """
-    require_root(host_env, "writing into the host's runtime directory and seeing the VMM of another user")
+    require_root(host_env, "entering the generation's network namespace and seeing the VMM of another user")
     box = acf.wire.create(
         acf.name("no-setup"), network=_allowlist(_entry({"network": f"{LISTED_ADDRESS}/32"}, (PORT, PORT)))
     )
     handle = host_env.netns_handle(box)
-    assert not handle.exists(), "control: the namespace of an unstarted generation already exists"
-    handle.parent.mkdir(parents=True, exist_ok=True)
-    handle.write_text("occupied by the integration suites\n", encoding="utf-8")
-    try:
-        done = acf.json("sandbox", "start", box.sandbox_id)
-        after = acf.wire.refresh(box)
-        running = pids_with_argument(box.jail_id)
-    finally:
-        handle.unlink(missing_ok=True)
+    assert handle.exists(), "control: the generation's network namespace is made when it is created"
+    taken = in_namespace(host_env, box, "ip", "link", "add", "tap0", "type", "dummy")
+    assert taken.returncode == 0, f"control: the device name could not be taken: {taken.stderr}"
+    done = acf.json("sandbox", "start", box.sandbox_id)
+    after = acf.wire.refresh(box)
+    running = pids_with_argument(box.jail_id)
     assert done.returncode == EXIT_FAILED, f"a generation without its network was started:\n{done.describe()}"
     assert done.operation().state == "FAILED"
     assert after.state != "READY", "a generation whose network could not be set up must never be ready"

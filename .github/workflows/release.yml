@@ -1,0 +1,226 @@
+# Publishing the developer platform's packages: the two SDKs, the CLI and the two server packages.
+#
+# One tag releases one package, `<name>-v<version>`:
+#
+#   agent-compute-v0.3.0            sdks/python          PyPI   agent-compute
+#   agent-compute-cli-v0.3.0        apps/cli             PyPI   agent-compute-cli
+#   acf-api-v0.3.0                  apps/api             PyPI   acf-api
+#   acf-mcp-gateway-v0.3.0          apps/mcp-gateway     PyPI   acf-mcp-gateway
+#   sdk-typescript-v0.3.0           sdks/typescript      npm    @agent-compute/sdk
+#
+# What makes a published file trustworthy is decided here and nowhere else:
+#
+# * No registry token exists. A publishing job proves to the registry which repository, workflow and
+#   environment it is, with a short-lived OIDC token (trusted publishing on PyPI and on npm). That token
+#   is the only permission beyond `contents: read` in any workflow of this repository, and it is given
+#   to the two publishing jobs only. Neither of them checks out the repository or runs its code: they
+#   upload the files an earlier job built.
+# * Every file carries provenance: PEP 740 attestations on PyPI, Sigstore provenance on npm. If the
+#   provenance cannot be made, the step fails before anything is uploaded.
+# * Nothing is published from a tree whose locked dependencies have a known advisory, or whose built
+#   files are not the tagged version.
+# * A version is published once. Publishing the same tag again fails at the registry, by design.
+#
+# Before the first release an owner of the repository must, once: register the five names, add this
+# workflow as the trusted publisher of each (environments `pypi` and `npm`), and protect those two
+# environments with required reviewers. docs/platform/RELEASING.md has the steps.
+#
+# `workflow_dispatch` is the dry run: it plans, audits and builds exactly as a tag does, keeps the files
+# as a workflow artifact, and publishes nothing.
+#
+# Actions are pinned to full commit SHAs, each followed by the release tag it was resolved from with
+# `git ls-remote` on 2026-11-19 (annotated tags are peeled to the commit they point at).
+name: release
+
+on:
+  push:
+    tags:
+      - "agent-compute-v*"
+      - "agent-compute-cli-v*"
+      - "acf-api-v*"
+      - "acf-mcp-gateway-v*"
+      - "sdk-typescript-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Dry run: the tag to plan and build as, for example agent-compute-v0.3.0. Nothing is published."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# Two releases of one ref never overlap, and a release that has started is never cancelled half-way.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Plan - which package, which version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      registry: ${{ steps.plan.outputs.registry }}
+      directory: ${{ steps.plan.outputs.directory }}
+      files: ${{ steps.plan.outputs.files }}
+      version: ${{ steps.plan.outputs.version }}
+    steps:
+      # The tag reaches the shell as data in the environment, never as text pasted into the script.
+      - name: Read the tag
+        id: plan
+        env:
+          PUSHED_TAG: ${{ github.ref_name }}
+          DRY_RUN_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          tag="${DRY_RUN_TAG:-$PUSHED_TAG}"
+          # The longer name first: `agent-compute-cli-v…` must not be read as a release of `agent-compute`.
+          case "$tag" in
+            agent-compute-cli-v*) prefix=agent-compute-cli-v; registry=pypi; directory=apps/cli;          files=agent_compute_cli ;;
+            agent-compute-v*)     prefix=agent-compute-v;     registry=pypi; directory=sdks/python;       files=agent_compute ;;
+            acf-mcp-gateway-v*)   prefix=acf-mcp-gateway-v;   registry=pypi; directory=apps/mcp-gateway;  files=acf_mcp_gateway ;;
+            acf-api-v*)           prefix=acf-api-v;           registry=pypi; directory=apps/api;          files=acf_api ;;
+            sdk-typescript-v*)    prefix=sdk-typescript-v;    registry=npm;  directory=sdks/typescript;   files=agent-compute-sdk ;;
+            *) echo "::error::'$tag' does not name a package of the platform"; exit 1 ;;
+          esac
+          version="${tag#"$prefix"}"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[0-9]+|-(alpha|beta|rc)\.[0-9]+)?$ ]]; then
+            echo "::error::'$version' is not a version this workflow releases"; exit 1
+          fi
+          {
+            echo "registry=$registry"
+            echo "directory=$directory"
+            echo "files=$files"
+            echo "version=$version"
+          } >> "$GITHUB_OUTPUT"
+          echo "### $tag → $registry, from \`$directory\`, version \`$version\`" >> "$GITHUB_STEP_SUMMARY"
+
+  audit:
+    name: Audit - locked dependencies of every package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.9"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26.13.1"
+      # An advisory against anything a package locks stops the release until the dependency is replaced
+      # or the advisory is recorded as not applicable.
+      - run: make platform-audit
+
+  build:
+    name: Build - the files of this release, and proof that they install
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.9"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26.13.1"
+      # The same target a contributor runs: every package of the platform is built, each from its own
+      # lock, and each built file is installed into an empty environment and imported.
+      - run: make platform-dist
+      - name: Keep the files of the tagged package, and only if they are the tagged version
+        env:
+          REGISTRY: ${{ needs.plan.outputs.registry }}
+          FILES: ${{ needs.plan.outputs.files }}
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir release
+          if [ "$REGISTRY" = pypi ]; then
+            wanted=("dist/platform/$FILES-$VERSION.tar.gz" "dist/platform/$FILES-$VERSION-py3-none-any.whl")
+          else
+            wanted=("dist/platform/$FILES-$VERSION.tgz")
+          fi
+          for file in "${wanted[@]}"; do
+            if [ ! -f "$file" ]; then
+              echo "::error::$file was not built: the tag and the version the package declares disagree"
+              ls -1 dist/platform >&2
+              exit 1
+            fi
+            cp "$file" release/
+          done
+          (cd release && sha256sum -- * | tee "$RUNNER_TEMP/SHA256SUMS")
+          {
+            echo '```'
+            cat "$RUNNER_TEMP/SHA256SUMS"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-files
+          path: release/
+          if-no-files-found: error
+          retention-days: 30
+
+  publish-pypi:
+    name: Publish to PyPI - trusted publishing, with attestations
+    needs: [plan, audit, build]
+    if: github.event_name == 'push' && needs.plan.outputs.registry == 'pypi'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-files
+          path: dist
+      # No user name, no password, no token: the registry accepts the upload because of who is asking.
+      # `attestations` makes and uploads a PEP 740 attestation for every file, and fails the step if it
+      # cannot. A file name that already exists on PyPI is refused: a version is published once.
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          packages-dir: dist
+          attestations: true
+          skip-existing: false
+          print-hash: true
+
+  publish-npm:
+    name: Publish to npm - trusted publishing, with provenance
+    needs: [plan, audit, build]
+    if: github.event_name == 'push' && needs.plan.outputs.registry == 'npm'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: npm
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26.13.1"
+          registry-url: "https://registry.npmjs.org"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-files
+          path: dist
+      # Trusted publishing exists from npm 11.5.1. An older npm would ask for a token that does not exist.
+      - name: Check that this npm can publish without a token
+        run: |
+          set -euo pipefail
+          have="$(npm --version)"
+          if [ "$(printf '%s\n' 11.5.1 "$have" | sort -V | head -n 1)" != 11.5.1 ]; then
+            echo "::error::npm $have is older than 11.5.1"; exit 1
+          fi
+      # `--provenance` makes a missing provenance statement a failure instead of a silent omission.
+      - name: Publish
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(dist/*.tgz)
+          [ "${#files[@]}" -eq 1 ] || { echo "::error::expected one package file, found ${#files[@]}"; exit 1; }
+          npm publish "${files[0]}" --provenance --access public

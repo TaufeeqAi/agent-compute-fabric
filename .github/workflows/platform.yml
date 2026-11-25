@@ -1,0 +1,191 @@
+# The developer platform's gate: the API (core and REST edge), the agent-protocol adapter, the two SDKs,
+# the CLI, the generated contract files and the deployment units.
+#
+# Every job runs a `make` target, so CI and a contributor's laptop run the same commands; together the
+# jobs run everything `make platform-ci` names, and one target more that no laptop should run: the
+# deployment test, which installs the platform on the runner. Nothing here needs KVM: the end-to-end
+# and deployment jobs drive the platform against the in-memory host, over the real host protocol and
+# real mutual TLS.
+#
+# It is a workflow of its own, beside ci.yml, so that a change to the platform does not wait for the
+# execution plane's Rust jobs and a red job names the plane it belongs to.
+#
+# Actions are pinned to full commit SHAs, each followed by the release tag it was resolved from with
+# `git ls-remote` (annotated tags are peeled to the commit they point at). Dependabot proposes updates.
+name: platform
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: platform-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  contract:
+    name: Contract files - generated from the code, never edited, never taking anything from a caller
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The whole history with its tags: `platform-compat` finds the last release by its tag, and
+          # in a shallow clone it would find none and compare with nothing.
+          fetch-depth: 0
+          fetch-tags: true
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.9"
+          enable-cache: true
+      # protocols/ holds the OpenAPI document, the tool definitions, the problem registry, the host
+      # mapping and the conformance scenarios. Each is written by the code that serves it: a difference
+      # means somebody edited a generated file, or changed the interface without regenerating it.
+      - run: make platform-drift
+      # Within a major version nothing is removed, retyped or made newly required, and no request becomes
+      # stricter. The files are compared with the ones of the newest `acf-api-v*` tag this commit
+      # descends from; a reviewed exception is a line in apps/api/compat-accepted.txt.
+      - run: make platform-compat
+
+  lint:
+    name: Python - ruff and strict mypy, four projects
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.9"
+          enable-cache: true
+      - run: make platform-lint
+
+  test:
+    name: Python ${{ matrix.python }} - tests of the API, the adapter, the SDK and the CLI
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13", "3.14"]
+    env:
+      # `uv run --locked` then uses this interpreter with the same lock: one set of versions, three runtimes.
+      UV_PYTHON: ${{ matrix.python }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.9"
+          enable-cache: true
+      # The tests marked `host` skip here: the next job runs them, and there a skip is a failure.
+      - run: make platform-test
+
+  host:
+    name: End to end - the platform against the in-memory host over mutual TLS
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.9"
+          enable-cache: true
+      # Builds the test-only host and runs the tests that speak the host protocol to it. A missing
+      # binary FAILS here (ACF_REQUIRE_HOST=1 in the Makefile): the job cannot go green without them.
+      - run: make platform-e2e
+
+  typescript:
+    name: TypeScript SDK - Node ${{ matrix.node }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22", "24", "26"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+      # `npm ci` installs exactly what package-lock.json names and fails on any difference.
+      - run: make platform-sdk-ts
+
+  deployed:
+    name: Deployment - installed on this runner, started under systemd, used and inspected
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.9"
+      # The operator's path, run for real: scripts/platform-setup.sh builds both environments from their
+      # locks and installs the accounts, the directories and the three units; the units are started; a
+      # developer's journey goes through the TLS endpoint; and then the running processes are inspected:
+      # no capability, a system-call filter, and no way for an edge to open the host key, the store or
+      # the journal. The target changes the machine it runs on, which is why it asks for this variable
+      # and is in no aggregate. This runner is thrown away after the job.
+      - name: Install, start, use and inspect the platform
+        env:
+          ACF_DEPLOY_TEST: "1"
+        run: make platform-deploy-test
+
+  units:
+    name: Deployment - systemd units
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # All three units: core, REST edge, agent-protocol edge. A setting systemd ignores is a failure.
+      - run: make platform-units
+
+  packages:
+    name: Packages - build, install into an empty environment, import
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.9"
+          enable-cache: true
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26.13.1"
+      # The release workflow builds with this same target; here it is the dry run of every release.
+      - run: make platform-dist
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: acf-platform-packages
+          path: dist/platform/
+          if-no-files-found: error
+          retention-days: 7

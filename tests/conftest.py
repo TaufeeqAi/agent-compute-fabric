@@ -93,6 +93,23 @@ def tree(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
+def unpinned_tree(tree: Path) -> Path:
+    """``tree``, with every image input in ``images/images.lock`` set back to ``UNSET``.
+
+    The fail-closed paths are described from a lock that nobody has measured anything into yet. The repository's own
+    lock is pinned as far as it can be, so a test of those paths must not depend on what it happens to hold.
+    """
+    lock = tree / "images/images.lock"
+    lines = []
+    for raw in lock.read_text().splitlines():
+        key, sep, _ = raw.partition("=")
+        unset = sep and key.startswith(("BASE_DIGEST_", "KERNEL_SHA256_"))
+        lines.append(f"{key}=UNSET" if unset else raw)
+    lock.write_text("\n".join(lines) + "\n")
+    return tree
+
+
+@pytest.fixture
 def clean_env(tmp_path: Path) -> dict[str, str]:
     """A minimal environment: no SOURCE_DATE_EPOCH, ACF_* or TMPDIR from the machine running the tests."""
     scratch = tmp_path / "tmp"

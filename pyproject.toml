@@ -2,7 +2,7 @@
 #
 # This is NOT a published package and has no runtime code of its own (`package = false`): it exists so
 # that `uv sync` gives every contributor and CI the same pinned toolchain for the parts of the
-# repository that are not Rust (execution/) and not the CLI (apps/cli has its own project and lock).
+# repository that are not Rust (execution/) and not the CLI (apps/host-cli has its own project and lock).
 #
 #   uv sync                         # creates .venv from uv.lock
 #   uv run pytest                   # the script/tool tests (no root, no KVM needed; some skip without root)
@@ -39,7 +39,7 @@ package = false
 [tool.ruff]
 line-length = 120
 target-version = "py312"
-extend-exclude = ["apps", "target", "dist", ".venv"]
+extend-exclude = ["apps", "sdks", "target", "dist", ".venv"]
 
 [tool.ruff.lint]
 select = [

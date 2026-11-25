@@ -1,0 +1,105 @@
+[build-system]
+requires = ["hatchling>=1.33.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agent-compute"
+dynamic = ["version"]
+description = "Python SDK of Agent Compute Fabric: sandboxes, executions, snapshots and operations, with synchronous and asynchronous clients."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+authors = [{ name = "Agent Compute Fabric contributors" }]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+# One runtime dependency, on purpose: this package holds an API key in the process of whoever installs
+# it, so every dependency is supply-chain surface. The HTTP stack is httpx2; views are plain typed
+# objects over the JSON the server sent, so no validation library is needed. OpenTelemetry is used only
+# when the application installed it itself, and is never a dependency of this package. The floor is the
+# release found on PyPI on 2026-11-19 and the one the tests ran against; the cap is the next major line.
+# The lock file fixes every version and every file by its hash.
+dependencies = [
+    "httpx2>=2.16.2,<3",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+    "pytest-timeout>=2.4.0",
+    "pytest-cov>=7.1.0",
+    "opentelemetry-api>=1.45.2",  # only to test that spans appear when an application installed it
+    # To hold every request the tests make against the generated OpenAPI document of the API.
+    "PyYAML>=6.0.3",
+    "types-PyYAML>=6.0.12.20261113",
+    "jsonschema>=4.26.0",
+    "types-jsonschema>=4.26.0.20261006",
+    "mypy>=2.4.1",
+    "ruff>=0.17.6",
+]
+
+# What a cached build of this package depends on. uv watches only pyproject.toml by default, and this
+# package's version and all of its code live under src/: without this, an install that is not editable
+# (a deployment, or the command-line tool's environment, which installs this package from its directory) could be given a build of an older source tree.
+[tool.uv]
+cache-keys = [{ file = "pyproject.toml" }, { file = "src/**" }]
+
+[tool.hatch.version]
+path = "src/agentcompute/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agentcompute"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/agentcompute", "tests", "README.md", "pyproject.toml", "uv.lock"]
+
+# --------------------------------------------------------------------------------------------
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W", "F", "I", "N", "UP", "B", "A", "C4", "SIM", "RUF", "PT", "PERF", "PL", "TID",
+    "T20", "ARG", "S", "ANN", "ERA", "PIE", "RET", "TRY", "FBT", "DTZ", "ISC", "ICN", "G", "LOG",
+]
+ignore = [
+    "TRY003",  # an error message that says what to do next is long, and belongs where the error is raised
+    "TRY004",  # a refused argument is a ValueError whatever is wrong with it: one exception to catch
+    "PLR0913",  # the public calls take the parameters the API has; all but the first are keyword-only
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106", "S311", "PLR2004", "PLR0917", "ANN", "ARG", "FBT", "T20", "PLR0915", "SLF001"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["agentcompute"]
+
+# --------------------------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src", "tests"]
+warn_unreachable = true
+
+# --------------------------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"
+timeout = 60
+
+[tool.coverage.run]
+source = ["agentcompute"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true

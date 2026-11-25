@@ -1,0 +1,12 @@
+# Reviewed exceptions to the comparison that `make platform-compat` makes between the contract files
+# under protocols/ and the ones of the last released version (`acf-api compat`).
+#
+# The comparison reports every change that it cannot prove compatible. Some of those are compatible all
+# the same: a pattern that was rewritten and still accepts every value the old one accepted, for
+# example. Such a finding is copied here exactly as the comparison printed it, one finding a line, under
+# a comment that says why the change takes nothing from a caller. The file is reviewed like code.
+#
+# A line that matches no finding fails the comparison, so an exception cannot outlive its reason: once
+# the release that contains the change is the one compared with, its line is removed.
+#
+# There are none.

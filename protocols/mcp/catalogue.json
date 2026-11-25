@@ -1,0 +1,183 @@
+{
+  "schema_version": 1,
+  "generator": "acf-api 0.3.0",
+  "protocol_revision": "2026-07-28",
+  "tools": [
+    {
+      "name": "sandbox_create",
+      "method": "sandbox.create",
+      "class": "granting",
+      "creates_operation": true,
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "sha256": "42654acbdc8b195391992f0f6aab714d08e80e8a8c634472417d6e79095f4fc3"
+    },
+    {
+      "name": "sandbox_start",
+      "method": "sandbox.start",
+      "class": "granting",
+      "creates_operation": true,
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "sha256": "5a033c0dcdff4210b13d37f179f7c58cdf70d0166518caeaa1c9434ae86020a8"
+    },
+    {
+      "name": "sandbox_exec",
+      "method": "execution.create",
+      "class": "granting",
+      "creates_operation": true,
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "sha256": "2c8d0de7ae592df3297244214eb0fc945d67160ac304209c8e4d12136a2c2d61"
+    },
+    {
+      "name": "exec_status",
+      "method": "execution.get",
+      "class": "read",
+      "creates_operation": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "sha256": "f1bc6d46fad5f5d7344f7490a9ed58ebf3bf0dc564d7a4dd77da07ed49274e38"
+    },
+    {
+      "name": "exec_output",
+      "method": "execution.output",
+      "class": "read",
+      "creates_operation": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "sha256": "b58e73551eb2a4f871e7836544bb10efdd82c597ac37103c4dbcbcaf362f6107"
+    },
+    {
+      "name": "exec_cancel",
+      "method": "execution.cancel",
+      "class": "containment",
+      "creates_operation": true,
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "sha256": "312c3277a5ed4a63f93d6893be447c7be0f0e3d6d076061f0b30b9179fcde532"
+    },
+    {
+      "name": "sandbox_snapshot",
+      "method": "snapshot.create",
+      "class": "granting",
+      "creates_operation": true,
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "sha256": "23175c9fe695f474784339d3bbfd4c3d8444830a1c04cccd8a8f2dd6e6ad1197"
+    },
+    {
+      "name": "sandbox_restore",
+      "method": "snapshot.restore",
+      "class": "granting",
+      "creates_operation": true,
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "sha256": "2f6601525c630f40e19cd809f156a20cdac5ab4b32034d7c0ecf68e312d53b26"
+    },
+    {
+      "name": "sandbox_list",
+      "method": "sandbox.list",
+      "class": "read",
+      "creates_operation": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "sha256": "193d5235692a9ad39436bde613e1af7da8aead2e31d5c066b89bba737c34e18f"
+    },
+    {
+      "name": "sandbox_inspect",
+      "method": "sandbox.get",
+      "class": "read",
+      "creates_operation": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "sha256": "467d126a11168b507b8871caeb9e34d5e1fda96ff7eada14da639ba443fef09b"
+    },
+    {
+      "name": "snapshot_list",
+      "method": "snapshot.list",
+      "class": "read",
+      "creates_operation": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "sha256": "52589022698745e71052f9969a4ae76eeccf566af3b34592f2680e9ed1925936"
+    },
+    {
+      "name": "operation_get",
+      "method": "operation.get",
+      "class": "read",
+      "creates_operation": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "sha256": "147a08526cde33c46dda7a42b10d1d85117abadcc40b2a200bec15080e85f235"
+    },
+    {
+      "name": "health_check",
+      "method": "platform.info",
+      "class": "read",
+      "creates_operation": false,
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "sha256": "dcbd82b91ccaa0183a5842ee611c79c013a141cb7662bffb87ddb4170d48ad2b"
+    },
+    {
+      "name": "sandbox_stop",
+      "method": "sandbox.stop",
+      "class": "containment",
+      "creates_operation": true,
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "sha256": "1fdc0fbbfdc4ba8109062ccb2d4798f144af867b2b1a6ffe74e09b85cc216825"
+    },
+    {
+      "name": "sandbox_destroy",
+      "method": "sandbox.destroy",
+      "class": "containment",
+      "creates_operation": true,
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "sha256": "33cc713b803077821db48b1b262a98d04b04dc66c46ef69a98c450b8c8a670b9"
+    },
+    {
+      "name": "snapshot_delete",
+      "method": "snapshot.delete",
+      "class": "containment",
+      "creates_operation": true,
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "sha256": "c3dc884e0d6bac8296a92580d0b0de78a15a22c4ba2687c4aaf2c1e58eee24a1"
+    }
+  ]
+}

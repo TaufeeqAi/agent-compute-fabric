@@ -1,0 +1,3348 @@
+# Generated from the implementation. Do not edit: run `make platform-artifacts`.
+# The contract governs this file; a difference between the two is a defect in the encoding.
+openapi: 3.2.0
+info:
+  title: Agent Compute Fabric public API
+  version: 1.0.0
+  summary: Sandboxes, executions, snapshots and operations for developers and agents.
+  description: 'Every mutation is an operation that may outlive the request that started it. A mutation carries an `Idempotency-Key`;
+    repeating the request with the same key and the same body never creates a second operation. An unsuccessful answer is
+    one of two kinds: `REFUSED` (nothing exists) or `UNRESOLVED` (the platform could not establish whether the request was
+    accepted). Clients decide from `kind`, `code` and `retry`, never from the HTTP status alone, and treat an operation in
+    state `UNKNOWN` as neither success nor failure. Request bodies are strict: a member the schema does not define, or a repeated
+    member name, is refused.'
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+servers:
+- url: /
+  description: The address the operator of the deployment chose.
+tags:
+- name: sandbox
+- name: execution
+- name: snapshot
+- name: operation
+- name: agent_credential
+- name: auth
+- name: platform
+paths:
+  /v1/auth/whoami:
+    get:
+      operationId: auth.whoami
+      summary: The calling credential's principal, project and effective grants.
+      tags:
+      - auth
+      x-acf-class: read
+      parameters:
+      - $ref: '#/components/parameters/Traceparent'
+      responses:
+        '200':
+          description: Success.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WhoAmI'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '410':
+          $ref: '#/components/responses/Problem410'
+        '412':
+          $ref: '#/components/responses/Problem412'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '422':
+          $ref: '#/components/responses/Problem422'
+        '429':
+          $ref: '#/components/responses/Problem429'
+        '500':
+          $ref: '#/components/responses/Problem500'
+        '503':
+          $ref: '#/components/responses/Problem503'
+      security:
+      - bearer: []
+  /v1/info:
+    get:
+      operationId: platform.info
+      summary: 'Platform info: API versions and, for an authenticated caller, features, parameters and ceilings.'
+      tags:
+      - platform
+      x-acf-class: read
+      parameters:
+      - $ref: '#/components/parameters/Traceparent'
+      responses:
+        '200':
+          description: Success.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Info'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '410':
+          $ref: '#/components/responses/Problem410'
+        '412':
+          $ref: '#/components/responses/Problem412'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '422':
+          $ref: '#/components/responses/Problem422'
+        '429':
+          $ref: '#/components/responses/Problem429'
+        '500':
+          $ref: '#/components/responses/Problem500'
+        '503':
+          $ref: '#/components/responses/Problem503'
+      security:
+      - {}
+      - bearer: []
+  /v1/projects/{project}/agent-credentials:
+    post:
+      operationId: agent_credential.mint
+      summary: Mint an agent credential, narrower and shorter-lived than the credential that mints it.
+      tags:
+      - agent_credential
+      x-acf-class: platform
+      parameters:
+      - name: project
+        in: path
+        required: true
+        description: The project the request acts in. It must be the project the credential is bound to.
+        schema:
+          type: string
+          pattern: ^prj_[0-9A-Za-z]{16,32}$
+      - $ref: '#/components/parameters/Traceparent'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MintAgentCredentialSpec'
+      responses:
+        '201':
+          description: Success.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentCredential'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '410':
+          $ref: '#/components/responses/Problem410'
+        '412':
+          $ref: '#/components/responses/Problem412'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '422':
+          $ref: '#/components/responses/Problem422'
+        '429':
+          $ref: '#/components/responses/Problem429'
+        '500':
+          $ref: '#/components/responses/Problem500'
+        '503':
+          $ref: '#/components/responses/Problem503'
+      security:
+      - bearer: []
+    get:
+      operationId: agent_credential.list
+      summary: List the agent credentials this credential minted.
+      tags:
+      - agent_credential
+      x-acf-class: read
+      parameters:
+      - name: project
+        in: path
+        required: true
+        description: The project the request acts in. It must be the project the credential is bound to.
+        schema:
+          type: string
+          pattern: ^prj_[0-9A-Za-z]{16,32}$
+      - $ref: '#/components/parameters/Traceparent'
+      responses:
+        '200':
+          description: Success.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentCredentialList'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '410':
+          $ref: '#/components/responses/Problem410'
+        '412':
+          $ref: '#/components/responses/Problem412'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '422':
+          $ref: '#/components/responses/Problem422'
+        '429':
+          $ref: '#/components/responses/Problem429'
+        '500':
+          $ref: '#/components/responses/Problem500'
+        '503':
+          $ref: '#/components/responses/Problem503'
+      security:
+      - bearer: []
+  /v1/projects/{project}/agent-credentials/{credential}:
+    delete:
+      operationId: agent_credential.revoke
+      summary: Revoke an agent credential this credential minted. Revoking twice is the same as revoking once.
+      tags:
+      - agent_credential
+      x-acf-class: platform
+      parameters:
+      - name: project
+        in: path
+        required: true
+        description: The project the request acts in. It must be the project the credential is bound to.
+        schema:
+          type: string
+          pattern: ^prj_[0-9A-Za-z]{16,32}$
+      - name: credential
+        in: path
+        required: true
+        description: A credential identifier.
+        schema:
+          type: string
+          pattern: ^crd_[0-9A-Za-z]{16,32}$
+      - $ref: '#/components/parameters/Traceparent'
+      responses:
+        '200':
+          description: Success.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentCredential'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '410':
+          $ref: '#/components/responses/Problem410'
+        '412':
+          $ref: '#/components/responses/Problem412'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '422':
+          $ref: '#/components/responses/Problem422'
+        '429':
+          $ref: '#/components/responses/Problem429'
+        '500':
+          $ref: '#/components/responses/Problem500'
+        '503':
+          $ref: '#/components/responses/Problem503'
+      security:
+      - bearer: []
+  /v1/projects/{project}/executions/{execution}:
+    get:
+      operationId: execution.get
+      summary: Read the status and result of an execution.
+      tags:
+      - execution
+      x-acf-class: read
+      parameters:
+      - name: project
+        in: path
+        required: true
+        description: The project the request acts in. It must be the project the credential is bound to.
+        schema:
+          type: string
+          pattern: ^prj_[0-9A-Za-z]{16,32}$
+      - name: execution
+        in: path
+        required: true
+        description: An execution identifier.
+        schema:
+          type: string
+          pattern: ^exe-[0-9a-f]{32}$
+      - $ref: '#/components/parameters/Traceparent'
+      responses:
+        '200':
+          description: Success.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Execution'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '410':
+          $ref: '#/components/responses/Problem410'
+        '412':
+          $ref: '#/components/responses/Problem412'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '422':
+          $ref: '#/components/responses/Problem422'
+        '429':
+          $ref: '#/components/responses/Problem429'
+        '500':
+          $ref: '#/components/responses/Problem500'
+        '503':
+          $ref: '#/components/responses/Problem503'
+      security:
+      - bearer: []
+  /v1/projects/{project}/executions/{execution}/cancel:
+    post:
+      operationId: execution.cancel
+      summary: Cancel a running execution on the host.
+      tags:
+      - execution
+      x-acf-class: containment
+      parameters:
+      - name: project
+        in: path
+        required: true
+        description: The project the request acts in. It must be the project the credential is bound to.
+        schema:
+          type: string
+          pattern: ^prj_[0-9A-Za-z]{16,32}$
+      - name: execution
+        in: path
+        required: true
+        description: An execution identifier.
+        schema:
+          type: string
+          pattern: ^exe-[0-9a-f]{32}$
+      - name: wait
+        in: query
+        required: false
+        description: Seconds to wait for the operation to end. 0 answers at once. The platform caps it at its `public_wait_max`.
+        schema:
+          type: integer
+          minimum: 0
+          maximum: 3600
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/Traceparent'
+      x-acf-reversibility: IRREVERSIBLE
+      responses:
+        '200':
+          description: The operation, in a state in which it has ended.
+          headers:
+            X-Request-Id: &id001
+              $ref: '#/components/headers/RequestId'
+            Idempotent-Replayed: &id002
+              $ref: '#/components/headers/IdempotentReplayed'
+          content: &id003
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Operation'
+        '202':
+          description: The operation, accepted and not ended within the wait. Follow it at `Location`, not sooner than `Retry-After`.
+          headers:
+            X-Request-Id: *id001
+            Idempotent-Replayed: *id002
+            Location:
+              $ref: '#/components/headers/Location'
+            Retry-After:
+              $ref: '#/components/headers/RetryAfter'
+          content: *id003
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '410':
+          $ref: '#/components/responses/Problem410'
+        '412':
+          $ref: '#/components/responses/Problem412'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '422':
+          $ref: '#/components/responses/Problem422'
+        '429':
+          $ref: '#/components/responses/Problem429'
+        '500':
+          $ref: '#/components/responses/Problem500'
+        '503':
+          $ref: '#/components/responses/Problem503'
+      security:
+      - bearer: []
+  /v1/projects/{project}/executions/{execution}/output:
+    get:
+      operationId: execution.output
+      summary: Read a slice of one output stream of an execution that has ended.
+      tags:
+      - execution
+      x-acf-class: read
+      parameters:
+      - name: project
+        in: path
+        required: true
+        description: The project the request acts in. It must be the project the credential is bound to.
+        schema:
+          type: string
+          pattern: ^prj_[0-9A-Za-z]{16,32}$
+      - name: execution
+        in: path
+        required: true
+        description: An execution identifier.
+        schema:
+          type: string
+          pattern: ^exe-[0-9a-f]{32}$
+      - name: stream
+        in: query
+        required: false
+        description: 'Which stream: `stdout` (the default) or `stderr`.'
+        schema:
+          type: string
+          enum:
+          - stdout
+          - stderr
+          default: stdout
+      - name: offset
+        in: query
+        required: false
+        description: Byte offset into the stored output of the stream.
+        schema:
+          type: integer
+          minimum: 0
+      - name: max_bytes
+        in: query
+        required: false
+        description: At most this many bytes. The platform caps it at its `output_chunk_max`.
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 16777216
+      - $ref: '#/components/parameters/Traceparent'
+      responses:
+        '200':
+          description: Success.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OutputChunk'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '410':
+          $ref: '#/components/responses/Problem410'
+        '412':
+          $ref: '#/components/responses/Problem412'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '422':
+          $ref: '#/components/responses/Problem422'
+        '429':
+          $ref: '#/components/responses/Problem429'
+        '500':
+          $ref: '#/components/responses/Problem500'
+        '503':
+          $ref: '#/components/responses/Problem503'
+      security:
+      - bearer: []
+  /v1/projects/{project}/operations:
+    get:
+      operationId: operation.list
+      summary: List the operations of the project.
+      tags:
+      - operation
+      x-acf-class: read
+      parameters:
+      - name: project
+        in: path
+        required: true
+        description: The project the request acts in. It must be the project the credential is bound to.
+        schema:
+          type: string
+          pattern: ^prj_[0-9A-Za-z]{16,32}$
+      - name: limit
+        in: query
+        required: false
+        description: Page size.
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 1000
+      - name: cursor
+        in: query
+        required: false
+        description: Opaque position returned as `next_cursor` by an earlier page.
+        schema:
+          type: string
+          maxLength: 512
+      - $ref: '#/components/parameters/Traceparent'
+      responses:
+        '200':
+          description: Success.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationList'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '410':
+          $ref: '#/components/responses/Problem410'
+        '412':
+          $ref: '#/components/responses/Problem412'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '422':
+          $ref: '#/components/responses/Problem422'
+        '429':
+          $ref: '#/components/responses/Problem429'
+        '500':
+          $ref: '#/components/responses/Problem500'
+        '503':
+          $ref: '#/components/responses/Problem503'
+      security:
+      - bearer: []
+  /v1/projects/{project}/operations/{operation}:
+    get:
+      operationId: operation.get
+      summary: Read an operation, or wait for it to end.
+      tags:
+      - operation
+      x-acf-class: read
+      parameters:
+      - name: project
+        in: path
+        required: true
+        description: The project the request acts in. It must be the project the credential is bound to.
+        schema:
+          type: string
+          pattern: ^prj_[0-9A-Za-z]{16,32}$
+      - name: operation
+        in: path
+        required: true
+        description: An operation identifier.
+        schema:
+          type: string
+          pattern: ^[A-Za-z0-9-]{8,64}$
+      - name: wait
+        in: query
+        required: false
+        description: Seconds to wait for the operation to end. 0 answers at once. The platform caps it at its `public_wait_max`.
+        schema:
+          type: integer
+          minimum: 0
+          maximum: 3600
+      - $ref: '#/components/parameters/Traceparent'
+      responses:
+        '200':
+          description: Success.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Operation'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '410':
+          $ref: '#/components/responses/Problem410'
+        '412':
+          $ref: '#/components/responses/Problem412'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '422':
+          $ref: '#/components/responses/Problem422'
+        '429':
+          $ref: '#/components/responses/Problem429'
+        '500':
+          $ref: '#/components/responses/Problem500'
+        '503':
+          $ref: '#/components/responses/Problem503'
+      security:
+      - bearer: []
+  /v1/projects/{project}/sandboxes:
+    post:
+      operationId: sandbox.create
+      summary: Create a sandbox. It is created and not started.
+      tags:
+      - sandbox
+      x-acf-class: granting
+      parameters:
+      - name: project
+        in: path
+        required: true
+        description: The project the request acts in. It must be the project the credential is bound to.
+        schema:
+          type: string
+          pattern: ^prj_[0-9A-Za-z]{16,32}$
+      - name: wait
+        in: query
+        required: false
+        description: Seconds to wait for the operation to end. 0 answers at once. The platform caps it at its `public_wait_max`.
+        schema:
+          type: integer
+          minimum: 0
+          maximum: 3600
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/Traceparent'
+      x-acf-reversibility: COMPENSATABLE
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SandboxSpec'
+      responses:
+        '200':
+          description: The operation, in a state in which it has ended.
+          headers:
+            X-Request-Id: &id004
+              $ref: '#/components/headers/RequestId'
+            Idempotent-Replayed: &id005
+              $ref: '#/components/headers/IdempotentReplayed'
+          content: &id006
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Operation'
+        '202':
+          description: The operation, accepted and not ended within the wait. Follow it at `Location`, not sooner than `Retry-After`.
+          headers:
+            X-Request-Id: *id004
+            Idempotent-Replayed: *id005
+            Location:
+              $ref: '#/components/headers/Location'
+            Retry-After:
+              $ref: '#/components/headers/RetryAfter'
+          content: *id006
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '410':
+          $ref: '#/components/responses/Problem410'
+        '412':
+          $ref: '#/components/responses/Problem412'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '422':
+          $ref: '#/components/responses/Problem422'
+        '429':
+          $ref: '#/components/responses/Problem429'
+        '500':
+          $ref: '#/components/responses/Problem500'
+        '503':
+          $ref: '#/components/responses/Problem503'
+      security:
+      - bearer: []
+    get:
+      operationId: sandbox.list
+      summary: List the sandboxes of the project.
+      tags:
+      - sandbox
+      x-acf-class: read
+      parameters:
+      - name: project
+        in: path
+        required: true
+        description: The project the request acts in. It must be the project the credential is bound to.
+        schema:
+          type: string
+          pattern: ^prj_[0-9A-Za-z]{16,32}$
+      - name: limit
+        in: query
+        required: false
+        description: Page size.
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 1000
+      - name: cursor
+        in: query
+        required: false
+        description: Opaque position returned as `next_cursor` by an earlier page.
+        schema:
+          type: string
+          maxLength: 512
+      - $ref: '#/components/parameters/Traceparent'
+      responses:
+        '200':
+          description: Success.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SandboxList'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '410':
+          $ref: '#/components/responses/Problem410'
+        '412':
+          $ref: '#/components/responses/Problem412'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '422':
+          $ref: '#/components/responses/Problem422'
+        '429':
+          $ref: '#/components/responses/Problem429'
+        '500':
+          $ref: '#/components/responses/Problem500'
+        '503':
+          $ref: '#/components/responses/Problem503'
+      security:
+      - bearer: []
+  /v1/projects/{project}/sandboxes/{sandbox}:
+    get:
+      operationId: sandbox.get
+      summary: Read one sandbox, by identifier or by name.
+      tags:
+      - sandbox
+      x-acf-class: read
+      parameters:
+      - name: project
+        in: path
+        required: true
+        description: The project the request acts in. It must be the project the credential is bound to.
+        schema:
+          type: string
+          pattern: ^prj_[0-9A-Za-z]{16,32}$
+      - name: sandbox
+        in: path
+        required: true
+        description: A sandbox identifier. A read also accepts a sandbox name.
+        schema:
+          type: string
+          pattern: ^[A-Za-z0-9_-][A-Za-z0-9._-]{0,62}$
+      - $ref: '#/components/parameters/Traceparent'
+      responses:
+        '200':
+          description: Success.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Sandbox'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '410':
+          $ref: '#/components/responses/Problem410'
+        '412':
+          $ref: '#/components/responses/Problem412'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '422':
+          $ref: '#/components/responses/Problem422'
+        '429':
+          $ref: '#/components/responses/Problem429'
+        '500':
+          $ref: '#/components/responses/Problem500'
+        '503':
+          $ref: '#/components/responses/Problem503'
+      security:
+      - bearer: []
+    delete:
+      operationId: sandbox.destroy
+      summary: Destroy a sandbox. It is never resurrected.
+      tags:
+      - sandbox
+      x-acf-class: containment
+      parameters:
+      - name: project
+        in: path
+        required: true
+        description: The project the request acts in. It must be the project the credential is bound to.
+        schema:
+          type: string
+          pattern: ^prj_[0-9A-Za-z]{16,32}$
+      - name: sandbox
+        in: path
+        required: true
+        description: A sandbox identifier. A read also accepts a sandbox name.
+        schema:
+          type: string
+          pattern: ^[A-Za-z0-9_-][A-Za-z0-9._-]{0,62}$
+      - name: expected_generation
+        in: query
+        required: true
+        description: 'The generation the request acts on: an integer, or the literal `current`.'
+        schema:
+          oneOf:
+          - type: integer
+            minimum: 1
+          - type: string
+            const: current
+      - name: wait
+        in: query
+        required: false
+        description: Seconds to wait for the operation to end. 0 answers at once. The platform caps it at its `public_wait_max`.
+        schema:
+          type: integer
+          minimum: 0
+          maximum: 3600
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/IfMatch'
+      - $ref: '#/components/parameters/Traceparent'
+      x-acf-reversibility: IRREVERSIBLE
+      responses:
+        '200':
+          description: The operation, in a state in which it has ended.
+          headers:
+            X-Request-Id: &id007
+              $ref: '#/components/headers/RequestId'
+            Idempotent-Replayed: &id008
+              $ref: '#/components/headers/IdempotentReplayed'
+          content: &id009
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Operation'
+        '202':
+          description: The operation, accepted and not ended within the wait. Follow it at `Location`, not sooner than `Retry-After`.
+          headers:
+            X-Request-Id: *id007
+            Idempotent-Replayed: *id008
+            Location:
+              $ref: '#/components/headers/Location'
+            Retry-After:
+              $ref: '#/components/headers/RetryAfter'
+          content: *id009
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '410':
+          $ref: '#/components/responses/Problem410'
+        '412':
+          $ref: '#/components/responses/Problem412'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '422':
+          $ref: '#/components/responses/Problem422'
+        '429':
+          $ref: '#/components/responses/Problem429'
+        '500':
+          $ref: '#/components/responses/Problem500'
+        '503':
+          $ref: '#/components/responses/Problem503'
+      security:
+      - bearer: []
+  /v1/projects/{project}/sandboxes/{sandbox}/executions:
+    post:
+      operationId: execution.create
+      summary: Run one command in a started sandbox.
+      tags:
+      - execution
+      x-acf-class: granting
+      parameters:
+      - name: project
+        in: path
+        required: true
+        description: The project the request acts in. It must be the project the credential is bound to.
+        schema:
+          type: string
+          pattern: ^prj_[0-9A-Za-z]{16,32}$
+      - name: sandbox
+        in: path
+        required: true
+        description: A sandbox identifier. A read also accepts a sandbox name.
+        schema:
+          type: string
+          pattern: ^[A-Za-z0-9_-][A-Za-z0-9._-]{0,62}$
+      - name: wait
+        in: query
+        required: false
+        description: Seconds to wait for the operation to end. 0 answers at once. The platform caps it at its `public_wait_max`.
+        schema:
+          type: integer
+          minimum: 0
+          maximum: 3600
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/IfMatch'
+      - $ref: '#/components/parameters/Traceparent'
+      x-acf-reversibility: IRREVERSIBLE
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecSpec'
+      responses:
+        '200':
+          description: The operation, in a state in which it has ended.
+          headers:
+            X-Request-Id: &id010
+              $ref: '#/components/headers/RequestId'
+            Idempotent-Replayed: &id011
+              $ref: '#/components/headers/IdempotentReplayed'
+          content: &id012
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Operation'
+        '202':
+          description: The operation, accepted and not ended within the wait. Follow it at `Location`, not sooner than `Retry-After`.
+          headers:
+            X-Request-Id: *id010
+            Idempotent-Replayed: *id011
+            Location:
+              $ref: '#/components/headers/Location'
+            Retry-After:
+              $ref: '#/components/headers/RetryAfter'
+          content: *id012
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '410':
+          $ref: '#/components/responses/Problem410'
+        '412':
+          $ref: '#/components/responses/Problem412'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '422':
+          $ref: '#/components/responses/Problem422'
+        '429':
+          $ref: '#/components/responses/Problem429'
+        '500':
+          $ref: '#/components/responses/Problem500'
+        '503':
+          $ref: '#/components/responses/Problem503'
+      security:
+      - bearer: []
+  /v1/projects/{project}/sandboxes/{sandbox}/snapshots:
+    post:
+      operationId: snapshot.create
+      summary: Take a snapshot of a sandbox.
+      tags:
+      - snapshot
+      x-acf-class: granting
+      parameters:
+      - name: project
+        in: path
+        required: true
+        description: The project the request acts in. It must be the project the credential is bound to.
+        schema:
+          type: string
+          pattern: ^prj_[0-9A-Za-z]{16,32}$
+      - name: sandbox
+        in: path
+        required: true
+        description: A sandbox identifier. A read also accepts a sandbox name.
+        schema:
+          type: string
+          pattern: ^[A-Za-z0-9_-][A-Za-z0-9._-]{0,62}$
+      - name: wait
+        in: query
+        required: false
+        description: Seconds to wait for the operation to end. 0 answers at once. The platform caps it at its `public_wait_max`.
+        schema:
+          type: integer
+          minimum: 0
+          maximum: 3600
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/IfMatch'
+      - $ref: '#/components/parameters/Traceparent'
+      x-acf-reversibility: COMPENSATABLE
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SnapshotSpec'
+      responses:
+        '200':
+          description: The operation, in a state in which it has ended.
+          headers:
+            X-Request-Id: &id013
+              $ref: '#/components/headers/RequestId'
+            Idempotent-Replayed: &id014
+              $ref: '#/components/headers/IdempotentReplayed'
+          content: &id015
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Operation'
+        '202':
+          description: The operation, accepted and not ended within the wait. Follow it at `Location`, not sooner than `Retry-After`.
+          headers:
+            X-Request-Id: *id013
+            Idempotent-Replayed: *id014
+            Location:
+              $ref: '#/components/headers/Location'
+            Retry-After:
+              $ref: '#/components/headers/RetryAfter'
+          content: *id015
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '410':
+          $ref: '#/components/responses/Problem410'
+        '412':
+          $ref: '#/components/responses/Problem412'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '422':
+          $ref: '#/components/responses/Problem422'
+        '429':
+          $ref: '#/components/responses/Problem429'
+        '500':
+          $ref: '#/components/responses/Problem500'
+        '503':
+          $ref: '#/components/responses/Problem503'
+      security:
+      - bearer: []
+  /v1/projects/{project}/sandboxes/{sandbox}/start:
+    post:
+      operationId: sandbox.start
+      summary: Start a sandbox that was created and has not been started.
+      tags:
+      - sandbox
+      x-acf-class: granting
+      parameters:
+      - name: project
+        in: path
+        required: true
+        description: The project the request acts in. It must be the project the credential is bound to.
+        schema:
+          type: string
+          pattern: ^prj_[0-9A-Za-z]{16,32}$
+      - name: sandbox
+        in: path
+        required: true
+        description: A sandbox identifier. A read also accepts a sandbox name.
+        schema:
+          type: string
+          pattern: ^[A-Za-z0-9_-][A-Za-z0-9._-]{0,62}$
+      - name: wait
+        in: query
+        required: false
+        description: Seconds to wait for the operation to end. 0 answers at once. The platform caps it at its `public_wait_max`.
+        schema:
+          type: integer
+          minimum: 0
+          maximum: 3600
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/IfMatch'
+      - $ref: '#/components/parameters/Traceparent'
+      x-acf-reversibility: COMPENSATABLE
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TargetBody'
+      responses:
+        '200':
+          description: The operation, in a state in which it has ended.
+          headers:
+            X-Request-Id: &id016
+              $ref: '#/components/headers/RequestId'
+            Idempotent-Replayed: &id017
+              $ref: '#/components/headers/IdempotentReplayed'
+          content: &id018
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Operation'
+        '202':
+          description: The operation, accepted and not ended within the wait. Follow it at `Location`, not sooner than `Retry-After`.
+          headers:
+            X-Request-Id: *id016
+            Idempotent-Replayed: *id017
+            Location:
+              $ref: '#/components/headers/Location'
+            Retry-After:
+              $ref: '#/components/headers/RetryAfter'
+          content: *id018
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '410':
+          $ref: '#/components/responses/Problem410'
+        '412':
+          $ref: '#/components/responses/Problem412'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '422':
+          $ref: '#/components/responses/Problem422'
+        '429':
+          $ref: '#/components/responses/Problem429'
+        '500':
+          $ref: '#/components/responses/Problem500'
+        '503':
+          $ref: '#/components/responses/Problem503'
+      security:
+      - bearer: []
+  /v1/projects/{project}/sandboxes/{sandbox}/stop:
+    post:
+      operationId: sandbox.stop
+      summary: Stop a sandbox. A running execution is cancelled.
+      tags:
+      - sandbox
+      x-acf-class: containment
+      parameters:
+      - name: project
+        in: path
+        required: true
+        description: The project the request acts in. It must be the project the credential is bound to.
+        schema:
+          type: string
+          pattern: ^prj_[0-9A-Za-z]{16,32}$
+      - name: sandbox
+        in: path
+        required: true
+        description: A sandbox identifier. A read also accepts a sandbox name.
+        schema:
+          type: string
+          pattern: ^[A-Za-z0-9_-][A-Za-z0-9._-]{0,62}$
+      - name: wait
+        in: query
+        required: false
+        description: Seconds to wait for the operation to end. 0 answers at once. The platform caps it at its `public_wait_max`.
+        schema:
+          type: integer
+          minimum: 0
+          maximum: 3600
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/IfMatch'
+      - $ref: '#/components/parameters/Traceparent'
+      x-acf-reversibility: IRREVERSIBLE
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TargetBody'
+      responses:
+        '200':
+          description: The operation, in a state in which it has ended.
+          headers:
+            X-Request-Id: &id019
+              $ref: '#/components/headers/RequestId'
+            Idempotent-Replayed: &id020
+              $ref: '#/components/headers/IdempotentReplayed'
+          content: &id021
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Operation'
+        '202':
+          description: The operation, accepted and not ended within the wait. Follow it at `Location`, not sooner than `Retry-After`.
+          headers:
+            X-Request-Id: *id019
+            Idempotent-Replayed: *id020
+            Location:
+              $ref: '#/components/headers/Location'
+            Retry-After:
+              $ref: '#/components/headers/RetryAfter'
+          content: *id021
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '410':
+          $ref: '#/components/responses/Problem410'
+        '412':
+          $ref: '#/components/responses/Problem412'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '422':
+          $ref: '#/components/responses/Problem422'
+        '429':
+          $ref: '#/components/responses/Problem429'
+        '500':
+          $ref: '#/components/responses/Problem500'
+        '503':
+          $ref: '#/components/responses/Problem503'
+      security:
+      - bearer: []
+  /v1/projects/{project}/snapshots:
+    get:
+      operationId: snapshot.list
+      summary: List the snapshots of the project.
+      tags:
+      - snapshot
+      x-acf-class: read
+      parameters:
+      - name: project
+        in: path
+        required: true
+        description: The project the request acts in. It must be the project the credential is bound to.
+        schema:
+          type: string
+          pattern: ^prj_[0-9A-Za-z]{16,32}$
+      - name: limit
+        in: query
+        required: false
+        description: Page size.
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 1000
+      - name: cursor
+        in: query
+        required: false
+        description: Opaque position returned as `next_cursor` by an earlier page.
+        schema:
+          type: string
+          maxLength: 512
+      - $ref: '#/components/parameters/Traceparent'
+      responses:
+        '200':
+          description: Success.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SnapshotList'
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '410':
+          $ref: '#/components/responses/Problem410'
+        '412':
+          $ref: '#/components/responses/Problem412'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '422':
+          $ref: '#/components/responses/Problem422'
+        '429':
+          $ref: '#/components/responses/Problem429'
+        '500':
+          $ref: '#/components/responses/Problem500'
+        '503':
+          $ref: '#/components/responses/Problem503'
+      security:
+      - bearer: []
+  /v1/projects/{project}/snapshots/{snapshot}:
+    delete:
+      operationId: snapshot.delete
+      summary: Delete a snapshot. It is never resurrected.
+      tags:
+      - snapshot
+      x-acf-class: containment
+      parameters:
+      - name: project
+        in: path
+        required: true
+        description: The project the request acts in. It must be the project the credential is bound to.
+        schema:
+          type: string
+          pattern: ^prj_[0-9A-Za-z]{16,32}$
+      - name: snapshot
+        in: path
+        required: true
+        description: A snapshot identifier.
+        schema:
+          type: string
+          pattern: ^snp-[0-9a-f]{32}$
+      - name: snapshot_generation
+        in: query
+        required: true
+        description: Generation of the snapshot, as its view shows it.
+        schema:
+          type: integer
+          minimum: 1
+      - name: wait
+        in: query
+        required: false
+        description: Seconds to wait for the operation to end. 0 answers at once. The platform caps it at its `public_wait_max`.
+        schema:
+          type: integer
+          minimum: 0
+          maximum: 3600
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/Traceparent'
+      x-acf-reversibility: IRREVERSIBLE
+      responses:
+        '200':
+          description: The operation, in a state in which it has ended.
+          headers:
+            X-Request-Id: &id022
+              $ref: '#/components/headers/RequestId'
+            Idempotent-Replayed: &id023
+              $ref: '#/components/headers/IdempotentReplayed'
+          content: &id024
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Operation'
+        '202':
+          description: The operation, accepted and not ended within the wait. Follow it at `Location`, not sooner than `Retry-After`.
+          headers:
+            X-Request-Id: *id022
+            Idempotent-Replayed: *id023
+            Location:
+              $ref: '#/components/headers/Location'
+            Retry-After:
+              $ref: '#/components/headers/RetryAfter'
+          content: *id024
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '410':
+          $ref: '#/components/responses/Problem410'
+        '412':
+          $ref: '#/components/responses/Problem412'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '422':
+          $ref: '#/components/responses/Problem422'
+        '429':
+          $ref: '#/components/responses/Problem429'
+        '500':
+          $ref: '#/components/responses/Problem500'
+        '503':
+          $ref: '#/components/responses/Problem503'
+      security:
+      - bearer: []
+  /v1/projects/{project}/snapshots/{snapshot}/restore:
+    post:
+      operationId: snapshot.restore
+      summary: Restore a snapshot, into an existing sandbox or as a new one.
+      tags:
+      - snapshot
+      x-acf-class: granting
+      parameters:
+      - name: project
+        in: path
+        required: true
+        description: The project the request acts in. It must be the project the credential is bound to.
+        schema:
+          type: string
+          pattern: ^prj_[0-9A-Za-z]{16,32}$
+      - name: snapshot
+        in: path
+        required: true
+        description: A snapshot identifier.
+        schema:
+          type: string
+          pattern: ^snp-[0-9a-f]{32}$
+      - name: wait
+        in: query
+        required: false
+        description: Seconds to wait for the operation to end. 0 answers at once. The platform caps it at its `public_wait_max`.
+        schema:
+          type: integer
+          minimum: 0
+          maximum: 3600
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/IfMatch'
+      - $ref: '#/components/parameters/Traceparent'
+      x-acf-reversibility: IRREVERSIBLE
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RestoreSpec'
+      responses:
+        '200':
+          description: The operation, in a state in which it has ended.
+          headers:
+            X-Request-Id: &id025
+              $ref: '#/components/headers/RequestId'
+            Idempotent-Replayed: &id026
+              $ref: '#/components/headers/IdempotentReplayed'
+          content: &id027
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Operation'
+        '202':
+          description: The operation, accepted and not ended within the wait. Follow it at `Location`, not sooner than `Retry-After`.
+          headers:
+            X-Request-Id: *id025
+            Idempotent-Replayed: *id026
+            Location:
+              $ref: '#/components/headers/Location'
+            Retry-After:
+              $ref: '#/components/headers/RetryAfter'
+          content: *id027
+        '400':
+          $ref: '#/components/responses/Problem400'
+        '401':
+          $ref: '#/components/responses/Problem401'
+        '403':
+          $ref: '#/components/responses/Problem403'
+        '404':
+          $ref: '#/components/responses/Problem404'
+        '409':
+          $ref: '#/components/responses/Problem409'
+        '410':
+          $ref: '#/components/responses/Problem410'
+        '412':
+          $ref: '#/components/responses/Problem412'
+        '413':
+          $ref: '#/components/responses/Problem413'
+        '422':
+          $ref: '#/components/responses/Problem422'
+        '429':
+          $ref: '#/components/responses/Problem429'
+        '500':
+          $ref: '#/components/responses/Problem500'
+        '503':
+          $ref: '#/components/responses/Problem503'
+      security:
+      - bearer: []
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      description: A platform API key. Never accepted in a URL.
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: One key per intent, created before the first attempt and reused by every retry. Characters 0x21 to 0x7E,
+        compared byte for byte.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 255
+    IfMatch:
+      name: If-Match
+      in: header
+      required: false
+      description: The `ETag` of the sandbox as last read. A stronger precondition than the generation.
+      schema:
+        type: string
+    Traceparent:
+      name: traceparent
+      in: header
+      required: false
+      description: W3C trace context. An invalid value is ignored, never an error.
+      schema:
+        type: string
+  headers:
+    RequestId:
+      description: The request id. Quote it when asking for help.
+      schema:
+        type: string
+    Location:
+      description: Where to follow the operation.
+      schema:
+        type: string
+    RetryAfter:
+      description: Seconds to wait before asking again.
+      schema:
+        type: integer
+    IdempotentReplayed:
+      description: '`true` when the answer reports work that existed before this request.'
+      schema:
+        type: string
+        enum:
+        - 'true'
+    ETag:
+      description: Opaque validator of the resource. Compare for equality only.
+      schema:
+        type: string
+        pattern: ^"r[0-9]{1,20}\.[0-9a-f]{12}"$
+  responses:
+    Problem400:
+      description: 'An error answer. `code` is authoritative; this status is a hint. Codes: INVALID_REQUEST.'
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Problem401:
+      description: 'An error answer. `code` is authoritative; this status is a hint. Codes: UNAUTHENTICATED.'
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+        WWW-Authenticate:
+          schema:
+            type: string
+          description: The challenge.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Problem403:
+      description: 'An error answer. `code` is authoritative; this status is a hint. Codes: PERMISSION_DENIED, SAFETY_CONTROL_DENIED.'
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Problem404:
+      description: 'An error answer. `code` is authoritative; this status is a hint. Codes: NOT_FOUND.'
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Problem409:
+      description: 'An error answer. `code` is authoritative; this status is a hint. Codes: STATE_CONFLICT, QUARANTINED, REQUEST_IN_PROGRESS,
+        INTEGRITY_FAILURE, INCOMPATIBLE_RUNTIME.'
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Problem410:
+      description: 'An error answer. `code` is authoritative; this status is a hint. Codes: CURSOR_EXPIRED, OUTCOME_LOST.'
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Problem412:
+      description: 'An error answer. `code` is authoritative; this status is a hint. Codes: REVISION_CONFLICT.'
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Problem413:
+      description: 'An error answer. `code` is authoritative; this status is a hint. Codes: REQUEST_TOO_LARGE.'
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Problem422:
+      description: 'An error answer. `code` is authoritative; this status is a hint. Codes: IDEMPOTENCY_CONFLICT, UNSUPPORTED.'
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Problem429:
+      description: 'An error answer. `code` is authoritative; this status is a hint. Codes: RATE_LIMITED.'
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Problem500:
+      description: 'An error answer. `code` is authoritative; this status is a hint. Codes: INTERNAL_ERROR.'
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Problem503:
+      description: 'An error answer. `code` is authoritative; this status is a hint. Codes: RESOURCE_EXHAUSTED, HOST_NOT_SERVING,
+        CLOCK_SKEW, UPSTREAM_UNAVAILABLE, OUTCOME_UNRESOLVED.'
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+  schemas:
+    Actor:
+      additionalProperties: false
+      description: Who asked for an operation, as the host recorded it.
+      properties:
+        principal_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Principal Id
+        agent_label:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Agent Label
+          x-provenance: THIRD_PARTY
+      title: Actor
+      type: object
+    AgentCredential:
+      additionalProperties: false
+      properties:
+        credential_id:
+          title: Credential Id
+          type: string
+        kind:
+          title: Kind
+          type: string
+        label:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Label
+          x-provenance: THIRD_PARTY
+        display_prefix:
+          title: Display Prefix
+          type: string
+        status:
+          title: Status
+          type: string
+        issued_at:
+          title: Issued At
+          type: string
+        expires_at:
+          title: Expires At
+          type: string
+        narrowing:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          default: null
+          title: Narrowing
+        secret:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          description: The credential itself. Present once, in the answer to minting, and never again.
+          title: Secret
+      required:
+      - credential_id
+      - kind
+      - display_prefix
+      - status
+      - issued_at
+      - expires_at
+      title: AgentCredential
+      type: object
+    AgentCredentialList:
+      additionalProperties: false
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/AgentCredential'
+          title: Items
+          type: array
+      required:
+      - items
+      title: AgentCredentialList
+      type: object
+    AllowEntryView:
+      additionalProperties: false
+      properties:
+        name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Name
+        network:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Network
+        ports:
+          items:
+            $ref: '#/components/schemas/PortRangeView'
+          title: Ports
+          type: array
+      required:
+      - ports
+      title: AllowEntryView
+      type: object
+    AllowName:
+      additionalProperties: false
+      description: Outbound TLS to an exact DNS name, on the listed ports.
+      properties:
+        name:
+          maxLength: 253
+          minLength: 1
+          title: Name
+          type: string
+        ports:
+          items:
+            $ref: '#/components/schemas/PortRange'
+          maxItems: 64
+          minItems: 1
+          title: Ports
+          type: array
+      required:
+      - name
+      - ports
+      title: AllowName
+      type: object
+    AllowNetwork:
+      additionalProperties: false
+      description: Outbound TCP to an IPv4 network in CIDR form, on the listed ports.
+      properties:
+        network:
+          maxLength: 18
+          minLength: 9
+          title: Network
+          type: string
+        ports:
+          items:
+            $ref: '#/components/schemas/PortRange'
+          maxItems: 64
+          minItems: 1
+          title: Ports
+          type: array
+      required:
+      - network
+      - ports
+      title: AllowNetwork
+      type: object
+    Ceilings:
+      additionalProperties: false
+      properties:
+        vcpus:
+          title: Vcpus
+          type: integer
+        memory_mib:
+          title: Memory Mib
+          type: integer
+        disk_mib:
+          title: Disk Mib
+          type: integer
+        execution_timeout_seconds:
+          title: Execution Timeout Seconds
+          type: integer
+        sandbox_lifetime_seconds:
+          title: Sandbox Lifetime Seconds
+          type: integer
+        allowlist_entries:
+          title: Allowlist Entries
+          type: integer
+      required:
+      - vcpus
+      - memory_mib
+      - disk_mib
+      - execution_timeout_seconds
+      - sandbox_lifetime_seconds
+      - allowlist_entries
+      title: Ceilings
+      type: object
+    CredentialView:
+      additionalProperties: false
+      properties:
+        credential_id:
+          title: Credential Id
+          type: string
+        kind:
+          title: Kind
+          type: string
+        agent_label:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Agent Label
+        expires_at:
+          title: Expires At
+          type: string
+      required:
+      - credential_id
+      - kind
+      - expires_at
+      title: CredentialView
+      type: object
+    Durations:
+      additionalProperties: false
+      properties:
+        guest_ms:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          default: null
+          title: Guest Ms
+          x-provenance: GUEST_REPORTED
+        wall_ms:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          default: null
+          title: Wall Ms
+          x-provenance: HOST_OBSERVED
+      title: Durations
+      type: object
+    ExecSpec:
+      additionalProperties: false
+      description: 'Body of ``POST …/sandboxes/{sandbox}/executions``: one command, as an argument vector.'
+      properties:
+        expected_generation:
+          anyOf:
+          - minimum: 1
+            type: integer
+          - const: current
+            type: string
+          description: 'The generation the request acts on. An integer: the request acts on that generation or is refused
+            with REVISION_CONFLICT. The literal `current`: the caller chooses, explicitly, to act on whatever generation is
+            current when the platform reads it; the value read is recorded with the request.'
+          title: Expected Generation
+        argv:
+          description: Executed directly, never through a shell. Use ["/bin/sh", "-c", "…"] to ask for one.
+          items:
+            type: string
+          maxItems: 4096
+          minItems: 1
+          title: Argv
+          type: array
+        cwd:
+          anyOf:
+          - maxLength: 4096
+            minLength: 1
+            type: string
+          - type: 'null'
+          default: null
+          title: Cwd
+        env:
+          maxProperties: 1024
+          patternProperties:
+            ^[A-Za-z_][A-Za-z0-9_]{0,254}$:
+              type: string
+          title: Env
+          type: object
+        secret_env:
+          description: Environment variables delivered by reference. Needs the feature `secret_injection`.
+          maxProperties: 1024
+          patternProperties:
+            ^[A-Za-z_][A-Za-z0-9_]{0,254}$:
+              $ref: '#/components/schemas/SecretReference'
+          title: Secret Env
+          type: object
+        timeout_seconds:
+          anyOf:
+          - maximum: 604800
+            minimum: 1
+            type: integer
+          - type: 'null'
+          default: null
+          title: Timeout Seconds
+        max_pids:
+          anyOf:
+          - maximum: 4194304
+            minimum: 1
+            type: integer
+          - type: 'null'
+          default: null
+          title: Max Pids
+        max_stdout_bytes:
+          anyOf:
+          - maximum: 1073741824
+            minimum: 0
+            type: integer
+          - type: 'null'
+          default: null
+          title: Max Stdout Bytes
+        max_stderr_bytes:
+          anyOf:
+          - maximum: 1073741824
+            minimum: 0
+            type: integer
+          - type: 'null'
+          default: null
+          title: Max Stderr Bytes
+      required:
+      - expected_generation
+      - argv
+      title: ExecSpec
+      type: object
+    Execution:
+      additionalProperties: false
+      description: One command run in one generation of one sandbox.
+      properties:
+        execution_id:
+          title: Execution Id
+          type: string
+        operation_id:
+          title: Operation Id
+          type: string
+        project:
+          title: Project
+          type: string
+        sandbox_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Sandbox Id
+        generation:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          default: null
+          title: Generation
+        state:
+          description: State of the operation that runs the command.
+          title: State
+          type: string
+        state_raw:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: State Raw
+        terminal:
+          title: Terminal
+          type: boolean
+        status:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Status
+          x-provenance: GUEST_REPORTED
+        status_raw:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Status Raw
+        exit_code:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          default: null
+          title: Exit Code
+          x-provenance: GUEST_REPORTED
+        signal:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          default: null
+          title: Signal
+          x-provenance: GUEST_REPORTED
+        durations:
+          anyOf:
+          - $ref: '#/components/schemas/Durations'
+          - type: 'null'
+          default: null
+        stdout:
+          anyOf:
+          - $ref: '#/components/schemas/OutputSummary'
+          - type: 'null'
+          default: null
+          x-provenance: GUEST_REPORTED
+        stderr:
+          anyOf:
+          - $ref: '#/components/schemas/OutputSummary'
+          - type: 'null'
+          default: null
+          x-provenance: GUEST_REPORTED
+        host_backstop_fired:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          default: null
+          title: Host Backstop Fired
+          x-provenance: HOST_OBSERVED
+        runtime_ended:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          default: null
+          title: Runtime Ended
+          x-provenance: HOST_OBSERVED
+        evidence_status:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Evidence Status
+          x-provenance: HOST_OBSERVED
+        evidence_status_raw:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Evidence Status Raw
+        note:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Note
+          x-provenance: HOST_OBSERVED
+        provenance:
+          additionalProperties:
+            type: string
+          description: 'The provenance label of each field of this result: HOST_OBSERVED or GUEST_REPORTED.'
+          title: Provenance
+          type: object
+      required:
+      - execution_id
+      - operation_id
+      - project
+      - state
+      - terminal
+      title: Execution
+      type: object
+    Failure:
+      additionalProperties: false
+      description: Why an operation, a sandbox or a snapshot failed, as the host reported it.
+      properties:
+        code:
+          description: A failure class of the public vocabulary, or UNRECOGNIZED.
+          title: Code
+          type: string
+        code_raw:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          description: The host's value, when `code` is UNRECOGNIZED.
+          title: Code Raw
+        retry:
+          title: Retry
+          type: string
+        message:
+          title: Message
+          type: string
+        side_effect:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Side Effect
+        side_effect_raw:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          description: The host's value, when `side_effect` is UNRECOGNIZED.
+          title: Side Effect Raw
+      required:
+      - code
+      - retry
+      - message
+      title: Failure
+      type: object
+    Grant:
+      additionalProperties: false
+      description: What a role allows, or what a credential narrows it to. Whatever is not mentioned is denied.
+      properties:
+        schema_version:
+          const: 1
+          default: 1
+          title: Schema Version
+          type: integer
+        methods:
+          items:
+            type: string
+          maxItems: 64
+          title: Methods
+          type: array
+        images:
+          description: Image aliases; `*` allows every image.
+          items:
+            type: string
+          maxItems: 256
+          title: Images
+          type: array
+        network:
+          $ref: '#/components/schemas/GrantNetwork'
+        ceilings:
+          $ref: '#/components/schemas/GrantCeilings'
+        mint_agent_credentials:
+          default: false
+          title: Mint Agent Credentials
+          type: boolean
+      required:
+      - ceilings
+      title: Grant
+      type: object
+    GrantCeilings:
+      additionalProperties: false
+      description: Ceilings below the host's. A ceiling above the host's is legal and simply never reached.
+      properties:
+        vcpus:
+          maximum: 255
+          minimum: 1
+          title: Vcpus
+          type: integer
+        memory_mib:
+          maximum: 4194304
+          minimum: 1
+          title: Memory Mib
+          type: integer
+        disk_mib:
+          maximum: 268435456
+          minimum: 1
+          title: Disk Mib
+          type: integer
+        execution_timeout_seconds:
+          maximum: 604800
+          minimum: 1
+          title: Execution Timeout Seconds
+          type: integer
+        sandbox_lifetime_seconds:
+          maximum: 31536000
+          minimum: 1
+          title: Sandbox Lifetime Seconds
+          type: integer
+      required:
+      - vcpus
+      - memory_mib
+      - disk_mib
+      - execution_timeout_seconds
+      - sandbox_lifetime_seconds
+      title: GrantCeilings
+      type: object
+    GrantDestination:
+      additionalProperties: false
+      description: 'One destination a grant allows: an exact name, a suffix rule ``*.<suffix>``, or an IPv4 network.'
+      properties:
+        name:
+          anyOf:
+          - maxLength: 253
+            minLength: 1
+            type: string
+          - type: 'null'
+          default: null
+          title: Name
+        suffix:
+          anyOf:
+          - maxLength: 255
+            minLength: 3
+            pattern: ^\*\.[A-Za-z0-9.-]+$
+            type: string
+          - type: 'null'
+          default: null
+          title: Suffix
+        network:
+          anyOf:
+          - maxLength: 18
+            minLength: 9
+            type: string
+          - type: 'null'
+          default: null
+          title: Network
+        ports:
+          items:
+            $ref: '#/components/schemas/PortRange'
+          maxItems: 64
+          minItems: 1
+          title: Ports
+          type: array
+      required:
+      - ports
+      title: GrantDestination
+      type: object
+    GrantNetwork:
+      additionalProperties: false
+      properties:
+        modes:
+          items:
+            $ref: '#/components/schemas/NetworkMode'
+          maxItems: 2
+          title: Modes
+          type: array
+        destinations:
+          items:
+            $ref: '#/components/schemas/GrantDestination'
+          maxItems: 256
+          title: Destinations
+          type: array
+      title: GrantNetwork
+      type: object
+    Image:
+      additionalProperties: false
+      properties:
+        alias:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Alias
+        digest:
+          description: Identity of the image the sandbox runs.
+          title: Digest
+          type: string
+      required:
+      - digest
+      title: Image
+      type: object
+    Info:
+      additionalProperties: false
+      description: 'Platform info. Without a credential: the API versions and whether the platform itself serves.'
+      properties:
+        api_versions:
+          items:
+            type: string
+          title: Api Versions
+          type: array
+        serving:
+          title: Serving
+          type: boolean
+        ready:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          default: null
+          description: Whether the platform accepts granting work now.
+          title: Ready
+        not_ready_reasons:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          default: null
+          title: Not Ready Reasons
+        platform_features:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          default: null
+          title: Platform Features
+        host_features:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          default: null
+          title: Host Features
+        parameters:
+          anyOf:
+          - additionalProperties:
+              anyOf:
+              - type: integer
+              - type: number
+              - type: boolean
+            type: object
+          - type: 'null'
+          default: null
+          title: Parameters
+        ceilings:
+          anyOf:
+          - $ref: '#/components/schemas/Ceilings'
+          - type: 'null'
+          default: null
+      required:
+      - api_versions
+      - serving
+      title: Info
+      type: object
+    MintAgentCredentialSpec:
+      additionalProperties: false
+      description: Body of ``POST …/agent-credentials``.
+      properties:
+        label:
+          description: Fixed for the life of the credential.
+          pattern: ^[A-Za-z0-9_.-]{1,64}$
+          title: Label
+          type: string
+        lifetime_seconds:
+          maximum: 31536000
+          minimum: 60
+          title: Lifetime Seconds
+          type: integer
+        narrowing:
+          anyOf:
+          - $ref: '#/components/schemas/Grant'
+          - type: 'null'
+          default: null
+          description: 'A subset of the minting credential''s effective grants. Absent: the `agent` template.'
+      required:
+      - label
+      - lifetime_seconds
+      title: MintAgentCredentialSpec
+      type: object
+    NetworkAllowlist:
+      additionalProperties: false
+      description: Outbound connections to the listed destinations only.
+      properties:
+        mode:
+          const: allowlist
+          title: Mode
+          type: string
+        entries:
+          items:
+            anyOf:
+            - $ref: '#/components/schemas/AllowName'
+            - $ref: '#/components/schemas/AllowNetwork'
+          maxItems: 256
+          title: Entries
+          type: array
+      required:
+      - mode
+      - entries
+      title: NetworkAllowlist
+      type: object
+    NetworkMode:
+      enum:
+      - none
+      - allowlist
+      title: NetworkMode
+      type: string
+    NetworkNone:
+      additionalProperties: false
+      description: No network device exists in the sandbox.
+      properties:
+        mode:
+          const: none
+          default: none
+          title: Mode
+          type: string
+      title: NetworkNone
+      type: object
+    NetworkView:
+      additionalProperties: false
+      properties:
+        mode:
+          title: Mode
+          type: string
+        mode_raw:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Mode Raw
+        entries:
+          items:
+            $ref: '#/components/schemas/AllowEntryView'
+          title: Entries
+          type: array
+      required:
+      - mode
+      title: NetworkView
+      type: object
+    Operation:
+      additionalProperties: false
+      description: One accepted mutation. Exactly one host operation stands behind it.
+      properties:
+        operation_id:
+          title: Operation Id
+          type: string
+        project:
+          title: Project
+          type: string
+        type:
+          title: Type
+          type: string
+        type_raw:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Type Raw
+        state:
+          title: State
+          type: string
+        state_raw:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: State Raw
+        terminal:
+          description: False for every state this version does not know.
+          title: Terminal
+          type: boolean
+        effect:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Effect
+        effect_raw:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Effect Raw
+        failure:
+          anyOf:
+          - $ref: '#/components/schemas/Failure'
+          - type: 'null'
+          default: null
+        cleanup:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Cleanup
+        cleanup_raw:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Cleanup Raw
+        cancelled_by:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Cancelled By
+        cancelled_by_raw:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Cancelled By Raw
+        target:
+          $ref: '#/components/schemas/OperationTarget'
+        result:
+          anyOf:
+          - $ref: '#/components/schemas/OperationResult'
+          - type: 'null'
+          default: null
+        initiated_by:
+          title: Initiated By
+          type: string
+        initiated_by_raw:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Initiated By Raw
+        actor:
+          anyOf:
+          - $ref: '#/components/schemas/Actor'
+          - type: 'null'
+          default: null
+        created_at:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Created At
+        updated_at:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Updated At
+        replayed:
+          default: false
+          description: True when this answer reports work that existed before the request that received it.
+          title: Replayed
+          type: boolean
+        recorded:
+          default: false
+          description: True when the host no longer holds the operation and this is the terminal outcome the platform recorded
+            while it did.
+          title: Recorded
+          type: boolean
+        idempotency_key_digest:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Idempotency Key Digest
+      required:
+      - operation_id
+      - project
+      - type
+      - state
+      - terminal
+      - target
+      - initiated_by
+      title: Operation
+      type: object
+    OperationList:
+      additionalProperties: false
+      properties:
+        next_cursor:
+          description: Opaque. Pass it back as `cursor` to continue.
+          title: Next Cursor
+          type: string
+        more:
+          title: More
+          type: boolean
+        items:
+          items:
+            $ref: '#/components/schemas/Operation'
+          title: Items
+          type: array
+      required:
+      - next_cursor
+      - more
+      - items
+      title: OperationList
+      type: object
+    OperationResult:
+      additionalProperties: false
+      description: The resource an operation produced, as of this answer. Absent in a recorded view.
+      properties:
+        sandbox:
+          anyOf:
+          - $ref: '#/components/schemas/Sandbox'
+          - type: 'null'
+          default: null
+        snapshot:
+          anyOf:
+          - $ref: '#/components/schemas/Snapshot'
+          - type: 'null'
+          default: null
+        execution:
+          anyOf:
+          - $ref: '#/components/schemas/Execution'
+          - type: 'null'
+          default: null
+      title: OperationResult
+      type: object
+    OperationTarget:
+      additionalProperties: false
+      description: Identifiers of what an operation acts on and of what it produced.
+      properties:
+        sandbox_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Sandbox Id
+        generation:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          default: null
+          title: Generation
+        snapshot_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Snapshot Id
+        snapshot_generation:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          default: null
+          title: Snapshot Generation
+        execution_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Execution Id
+      title: OperationTarget
+      type: object
+    OutputChunk:
+      additionalProperties: false
+      description: A slice of one stream of an execution's stored output. The bytes are guest data.
+      properties:
+        execution_id:
+          title: Execution Id
+          type: string
+        stream:
+          title: Stream
+          type: string
+        offset:
+          title: Offset
+          type: integer
+        data_base64:
+          title: Data Base64
+          type: string
+          x-provenance: GUEST_REPORTED
+        next_offset:
+          title: Next Offset
+          type: integer
+        eof:
+          title: Eof
+          type: boolean
+        stored_bytes:
+          title: Stored Bytes
+          type: integer
+        produced_bytes:
+          title: Produced Bytes
+          type: integer
+        completeness:
+          title: Completeness
+          type: string
+        completeness_raw:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Completeness Raw
+        provenance:
+          const: GUEST_REPORTED
+          default: GUEST_REPORTED
+          title: Provenance
+          type: string
+      required:
+      - execution_id
+      - stream
+      - offset
+      - data_base64
+      - next_offset
+      - eof
+      - stored_bytes
+      - produced_bytes
+      - completeness
+      title: OutputChunk
+      type: object
+    OutputSummary:
+      additionalProperties: false
+      properties:
+        stored_bytes:
+          title: Stored Bytes
+          type: integer
+        produced_bytes:
+          title: Produced Bytes
+          type: integer
+        completeness:
+          title: Completeness
+          type: string
+        completeness_raw:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Completeness Raw
+      required:
+      - stored_bytes
+      - produced_bytes
+      - completeness
+      title: OutputSummary
+      type: object
+    PortRange:
+      additionalProperties: false
+      description: One inclusive range of TCP ports.
+      properties:
+        from:
+          maximum: 65535
+          minimum: 1
+          title: From
+          type: integer
+        to:
+          maximum: 65535
+          minimum: 1
+          title: To
+          type: integer
+      required:
+      - from
+      - to
+      title: PortRange
+      type: object
+    PortRangeView:
+      additionalProperties: false
+      properties:
+        from:
+          title: From
+          type: integer
+        to:
+          title: To
+          type: integer
+      required:
+      - from
+      - to
+      title: PortRangeView
+      type: object
+    Problem:
+      additionalProperties: false
+      description: 'An RFC 9457 problem document: the REST encoding of an error answer.'
+      properties:
+        code:
+          title: Code
+          type: string
+        kind:
+          title: Kind
+          type: string
+        retry:
+          title: Retry
+          type: string
+        message:
+          description: Human-readable. Never repeats request content. Never parsed.
+          title: Message
+          type: string
+        request_id:
+          title: Request Id
+          type: string
+        idempotency_key:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          description: 'Present on UNRESOLVED: the key to ask again with, unchanged.'
+          title: Idempotency Key
+        reason:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          description: A bounded reason code that refines `code`.
+          title: Reason
+        code_raw:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Code Raw
+        type:
+          title: Type
+          type: string
+        title:
+          title: Title
+          type: string
+        status:
+          title: Status
+          type: integer
+        detail:
+          title: Detail
+          type: string
+        instance:
+          title: Instance
+          type: string
+      required:
+      - code
+      - kind
+      - retry
+      - message
+      - request_id
+      - type
+      - title
+      - status
+      - detail
+      - instance
+      title: Problem
+      type: object
+    Resources:
+      additionalProperties: false
+      description: 'What a sandbox is given. Integers: vCPUs and MiB.'
+      properties:
+        vcpus:
+          maximum: 255
+          minimum: 1
+          title: Vcpus
+          type: integer
+        memory_mib:
+          maximum: 4194304
+          minimum: 1
+          title: Memory Mib
+          type: integer
+        disk_mib:
+          maximum: 268435456
+          minimum: 1
+          title: Disk Mib
+          type: integer
+      required:
+      - vcpus
+      - memory_mib
+      - disk_mib
+      title: Resources
+      type: object
+    ResourcesView:
+      additionalProperties: false
+      properties:
+        vcpus:
+          title: Vcpus
+          type: integer
+        memory_mib:
+          title: Memory Mib
+          type: integer
+        disk_mib:
+          title: Disk Mib
+          type: integer
+      required:
+      - vcpus
+      - memory_mib
+      - disk_mib
+      title: ResourcesView
+      type: object
+    RestoreAsNew:
+      additionalProperties: false
+      description: Restore as a new sandbox, generation 1.
+      properties:
+        kind:
+          const: new
+          title: Kind
+          type: string
+        name:
+          anyOf:
+          - pattern: ^[A-Za-z0-9_-][A-Za-z0-9._-]{0,62}$
+            type: string
+          - type: 'null'
+          default: null
+          title: Name
+        lifetime_seconds:
+          anyOf:
+          - maximum: 31536000
+            minimum: 1
+            type: integer
+          - type: 'null'
+          default: null
+          title: Lifetime Seconds
+      required:
+      - kind
+      title: RestoreAsNew
+      type: object
+    RestoreInPlace:
+      additionalProperties: false
+      description: 'Restore into an existing sandbox: a new generation of the same sandbox.'
+      properties:
+        kind:
+          const: existing
+          title: Kind
+          type: string
+        sandbox_id:
+          pattern: ^sbx-[0-9a-f]{32}$
+          title: Sandbox Id
+          type: string
+        expected_generation:
+          anyOf:
+          - minimum: 1
+            type: integer
+          - const: current
+            type: string
+          description: 'The generation the request acts on. An integer: the request acts on that generation or is refused
+            with REVISION_CONFLICT. The literal `current`: the caller chooses, explicitly, to act on whatever generation is
+            current when the platform reads it; the value read is recorded with the request.'
+          title: Expected Generation
+      required:
+      - kind
+      - sandbox_id
+      - expected_generation
+      title: RestoreInPlace
+      type: object
+    RestoreSpec:
+      additionalProperties: false
+      description: Body of ``POST …/snapshots/{snapshot}/restore``.
+      properties:
+        snapshot_generation:
+          minimum: 1
+          title: Snapshot Generation
+          type: integer
+        target:
+          discriminator:
+            mapping:
+              existing: '#/components/schemas/RestoreInPlace'
+              new: '#/components/schemas/RestoreAsNew'
+            propertyName: kind
+          oneOf:
+          - $ref: '#/components/schemas/RestoreInPlace'
+          - $ref: '#/components/schemas/RestoreAsNew'
+          title: Target
+      required:
+      - snapshot_generation
+      - target
+      title: RestoreSpec
+      type: object
+    Sandbox:
+      additionalProperties: false
+      properties:
+        sandbox_id:
+          title: Sandbox Id
+          type: string
+        project:
+          title: Project
+          type: string
+        name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Name
+          x-provenance: THIRD_PARTY
+        state:
+          title: State
+          type: string
+        state_raw:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: State Raw
+        generation:
+          title: Generation
+          type: integer
+        revision:
+          description: Opaque validator, also sent as ETag. Compare for equality only.
+          title: Revision
+          type: string
+        image:
+          $ref: '#/components/schemas/Image'
+        resources:
+          $ref: '#/components/schemas/ResourcesView'
+        network:
+          $ref: '#/components/schemas/NetworkView'
+        expires_at:
+          title: Expires At
+          type: string
+        last_execution:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Last Execution
+        quarantined:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Quarantined
+        failure:
+          anyOf:
+          - $ref: '#/components/schemas/Failure'
+          - type: 'null'
+          default: null
+        source_snapshot:
+          anyOf:
+          - $ref: '#/components/schemas/SnapshotRef'
+          - type: 'null'
+          default: null
+        notes:
+          items:
+            type: string
+          title: Notes
+          type: array
+          x-provenance: HOST_OBSERVED
+        updated_at:
+          title: Updated At
+          type: string
+      required:
+      - sandbox_id
+      - project
+      - state
+      - generation
+      - revision
+      - image
+      - resources
+      - network
+      - expires_at
+      - updated_at
+      title: Sandbox
+      type: object
+    SandboxList:
+      additionalProperties: false
+      properties:
+        next_cursor:
+          description: Opaque. Pass it back as `cursor` to continue.
+          title: Next Cursor
+          type: string
+        more:
+          title: More
+          type: boolean
+        items:
+          items:
+            $ref: '#/components/schemas/Sandbox'
+          title: Items
+          type: array
+      required:
+      - next_cursor
+      - more
+      - items
+      title: SandboxList
+      type: object
+    SandboxRef:
+      additionalProperties: false
+      properties:
+        sandbox_id:
+          title: Sandbox Id
+          type: string
+        generation:
+          title: Generation
+          type: integer
+      required:
+      - sandbox_id
+      - generation
+      title: SandboxRef
+      type: object
+    SandboxSpec:
+      additionalProperties: false
+      description: Body of ``POST /v1/projects/{project}/sandboxes``. Creates a sandbox and does not start it.
+      properties:
+        image:
+          description: Image alias. The host lists which are allowed.
+          maxLength: 128
+          minLength: 1
+          title: Image
+          type: string
+        resources:
+          $ref: '#/components/schemas/Resources'
+        network:
+          discriminator:
+            mapping:
+              allowlist: '#/components/schemas/NetworkAllowlist'
+              none: '#/components/schemas/NetworkNone'
+            propertyName: mode
+          oneOf:
+          - $ref: '#/components/schemas/NetworkNone'
+          - $ref: '#/components/schemas/NetworkAllowlist'
+          title: Network
+        name:
+          anyOf:
+          - pattern: ^[A-Za-z0-9_-][A-Za-z0-9._-]{0,62}$
+            type: string
+          - type: 'null'
+          default: null
+          description: An alias, unique in the project.
+          title: Name
+        lifetime_seconds:
+          anyOf:
+          - maximum: 31536000
+            minimum: 1
+            type: integer
+          - type: 'null'
+          default: null
+          description: 'Lifetime from creation. Absent: the host''s default.'
+          title: Lifetime Seconds
+        start:
+          default: false
+          description: Create and start as one operation. Accepted only when the platform advertises the feature `create_with_start`;
+            otherwise refused with UNSUPPORTED.
+          title: Start
+          type: boolean
+      required:
+      - image
+      - resources
+      title: SandboxSpec
+      type: object
+    SecretReference:
+      additionalProperties: false
+      description: A secret named by reference. No field of the public model carries secret material.
+      properties:
+        ref:
+          pattern: ^[A-Za-z0-9._-]{1,64}$
+          title: Ref
+          type: string
+      required:
+      - ref
+      title: SecretReference
+      type: object
+    Snapshot:
+      additionalProperties: false
+      properties:
+        snapshot_id:
+          title: Snapshot Id
+          type: string
+        snapshot_generation:
+          title: Snapshot Generation
+          type: integer
+        project:
+          title: Project
+          type: string
+        name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Name
+          x-provenance: THIRD_PARTY
+        state:
+          title: State
+          type: string
+        state_raw:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: State Raw
+        revision:
+          title: Revision
+          type: string
+        source_sandbox:
+          anyOf:
+          - $ref: '#/components/schemas/SandboxRef'
+          - type: 'null'
+          default: null
+        size_bytes:
+          title: Size Bytes
+          type: integer
+        restore_count:
+          title: Restore Count
+          type: integer
+        incompatible:
+          items:
+            type: string
+          title: Incompatible
+          type: array
+          x-provenance: HOST_OBSERVED
+        failure:
+          anyOf:
+          - $ref: '#/components/schemas/Failure'
+          - type: 'null'
+          default: null
+        created_at:
+          title: Created At
+          type: string
+      required:
+      - snapshot_id
+      - snapshot_generation
+      - project
+      - state
+      - revision
+      - size_bytes
+      - restore_count
+      - created_at
+      title: Snapshot
+      type: object
+    SnapshotList:
+      additionalProperties: false
+      properties:
+        next_cursor:
+          description: Opaque. Pass it back as `cursor` to continue.
+          title: Next Cursor
+          type: string
+        more:
+          title: More
+          type: boolean
+        items:
+          items:
+            $ref: '#/components/schemas/Snapshot'
+          title: Items
+          type: array
+      required:
+      - next_cursor
+      - more
+      - items
+      title: SnapshotList
+      type: object
+    SnapshotRef:
+      additionalProperties: false
+      properties:
+        snapshot_id:
+          title: Snapshot Id
+          type: string
+        snapshot_generation:
+          title: Snapshot Generation
+          type: integer
+      required:
+      - snapshot_id
+      - snapshot_generation
+      title: SnapshotRef
+      type: object
+    SnapshotSpec:
+      additionalProperties: false
+      description: Body of ``POST …/sandboxes/{sandbox}/snapshots``.
+      properties:
+        expected_generation:
+          anyOf:
+          - minimum: 1
+            type: integer
+          - const: current
+            type: string
+          description: 'The generation the request acts on. An integer: the request acts on that generation or is refused
+            with REVISION_CONFLICT. The literal `current`: the caller chooses, explicitly, to act on whatever generation is
+            current when the platform reads it; the value read is recorded with the request.'
+          title: Expected Generation
+        name:
+          anyOf:
+          - pattern: ^[A-Za-z0-9_-][A-Za-z0-9._-]{0,62}$
+            type: string
+          - type: 'null'
+          default: null
+          description: An alias, unique in the project.
+          title: Name
+      required:
+      - expected_generation
+      title: SnapshotSpec
+      type: object
+    TargetBody:
+      additionalProperties: false
+      description: 'Body of start and stop: the generation the request acts on.'
+      properties:
+        expected_generation:
+          anyOf:
+          - minimum: 1
+            type: integer
+          - const: current
+            type: string
+          description: 'The generation the request acts on. An integer: the request acts on that generation or is refused
+            with REVISION_CONFLICT. The literal `current`: the caller chooses, explicitly, to act on whatever generation is
+            current when the platform reads it; the value read is recorded with the request.'
+          title: Expected Generation
+      required:
+      - expected_generation
+      title: TargetBody
+      type: object
+    WhoAmI:
+      additionalProperties: false
+      properties:
+        principal_id:
+          title: Principal Id
+          type: string
+        project_id:
+          title: Project Id
+          type: string
+        credential:
+          $ref: '#/components/schemas/CredentialView'
+        grants:
+          additionalProperties: true
+          description: The effective grants of this credential, and of no other.
+          title: Grants
+          type: object
+        policy_version:
+          title: Policy Version
+          type: string
+      required:
+      - principal_id
+      - project_id
+      - credential
+      - grants
+      - policy_version
+      title: WhoAmI
+      type: object

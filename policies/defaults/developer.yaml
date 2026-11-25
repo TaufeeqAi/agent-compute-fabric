@@ -1,0 +1,41 @@
+# Grant template `developer`: what a developer's role allows in its project, unless an operator narrows it.
+#
+# A grant only narrows. Whatever it allows, the host's safety profile still decides: a ceiling above the
+# host's is legal and is simply never reached. Whatever a grant does not mention is denied.
+#
+# Destinations are empty on purpose. Network egress is the channel for effects that cannot be undone, so
+# an operator lists the destinations a project may reach; nothing is allowed by default.
+schema_version: 1
+methods:
+  - sandbox.create
+  - sandbox.start
+  - sandbox.stop
+  - sandbox.destroy
+  - sandbox.get
+  - sandbox.list
+  - execution.create
+  - execution.get
+  - execution.output
+  - execution.cancel
+  - snapshot.create
+  - snapshot.restore
+  - snapshot.delete
+  - snapshot.list
+  - operation.get
+  - operation.list
+  - agent_credential.mint
+  - agent_credential.list
+  - agent_credential.revoke
+  - platform.info
+  - auth.whoami
+images: ["*"]
+network:
+  modes: [none, allowlist]
+  destinations: []
+ceilings:
+  vcpus: 64
+  memory_mib: 262144
+  disk_mib: 1048576
+  execution_timeout_seconds: 86400
+  sandbox_lifetime_seconds: 604800
+mint_agent_credentials: true

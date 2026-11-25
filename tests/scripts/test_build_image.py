@@ -19,6 +19,7 @@ import re
 import stat
 import subprocess
 import sys
+import tomllib
 from collections.abc import Callable
 from pathlib import Path
 
@@ -86,8 +87,8 @@ class Rig:
 
 
 @pytest.fixture
-def rig(run: Runner, tree: Path, tmp_path: Path) -> Rig:
-    return Rig(run, tree, tmp_path)
+def rig(run: Runner, unpinned_tree: Path, tmp_path: Path) -> Rig:
+    return Rig(run, unpinned_tree, tmp_path)
 
 
 def manifest_of(image_dir: Path) -> dict[str, object]:
@@ -319,7 +320,9 @@ def test_a_build_from_a_rootfs_tarball_produces_a_verified_image_directory(rig: 
     manifest = manifest_of(image_dir)
     assert manifest["name"] == "python"
     assert manifest["architecture"] == ARCH
-    assert manifest["guest_agent_version"] == "0.1.0"
+    # The guest agent shares the workspace version (its Cargo.toml says `version.workspace = true`).
+    workspace = tomllib.loads((rig.tree / "Cargo.toml").read_text(encoding="utf-8"))
+    assert manifest["guest_agent_version"] == workspace["workspace"]["package"]["version"]
     assert manifest["kernel"] == {"file": "vmlinux", "sha256": sha256(rig.kernel), "size": rig.kernel.stat().st_size}
     assert manifest["rootfs"] == {
         "file": "rootfs.ext4",

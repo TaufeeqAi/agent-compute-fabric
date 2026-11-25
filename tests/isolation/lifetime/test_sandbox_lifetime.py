@@ -54,8 +54,9 @@ def test_at_its_expiry_the_host_itself_destroys_a_sandbox_and_releases_its_lease
     wire = acf.wire
     sweep = host_env.config.integer("recovery.sweep_interval_ms") / 1000
     lifetime = 3
-    box = acf.ok("sandbox", "create", "--image", acf.image, "--lifetime", f"{lifetime}s").succeeded().sandbox_result()
+    # The long-lived one first: a boot on a real VMM takes longer than the short one's whole lifetime.
     kept = wire.ready(acf.name("outlives"))
+    box = acf.ok("sandbox", "create", "--image", acf.image, "--lifetime", f"{lifetime}s").succeeded().sandbox_result()
     assert wire.info().live_sandboxes == 2
 
     gone = await_sandbox(

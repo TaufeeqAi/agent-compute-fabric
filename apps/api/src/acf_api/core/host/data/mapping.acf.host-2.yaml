@@ -1,0 +1,177 @@
+# The mapping between the public vocabularies and the vocabularies of host protocol acf.host/2.
+#
+# The platform owns the public vocabularies. In this version every public value has the same meaning as
+# the host value beside it, and that correspondence is this table, not an identity assumed in code.
+# A host value that is not listed here is shown as UNRECOGNIZED, with the raw value beside it, and is
+# never mapped onto a known value. A host value is added here before the platform shows it as known.
+#
+# The core loads this file at startup. `protocols/api/mapping/` holds the published copy.
+schema_version: 1
+host_protocol: acf.host/2
+
+# host value: public value
+vocabularies:
+  sandbox_state:
+    REQUESTED: REQUESTED
+    PROVISIONING: PROVISIONING
+    READY: READY
+    RUNNING: RUNNING
+    PAUSED: PAUSED
+    COMPLETED: COMPLETED
+    FAILED: FAILED
+    STOPPING: STOPPING
+    STOPPED: STOPPED
+    DESTROYED: DESTROYED
+  operation_state:
+    ACCEPTED: ACCEPTED
+    IN_PROGRESS: IN_PROGRESS
+    RECOVERING: RECOVERING
+    SUCCEEDED: SUCCEEDED
+    FAILED: FAILED
+    CANCELLED: CANCELLED
+    UNKNOWN: UNKNOWN
+  effect:
+    APPLIED: APPLIED
+    NOT_APPLIED: NOT_APPLIED
+    MAY_BE_APPLIED: MAY_BE_APPLIED
+  cleanup:
+    COMPLETE: COMPLETE
+    PENDING: PENDING
+    QUARANTINED: QUARANTINED
+  cancelled_by:
+    CALLER: CALLER
+    SUPERSEDED: SUPERSEDED
+  execution_status:
+    EXITED: EXITED
+    SIGNALED: SIGNALED
+    TIMED_OUT: TIMED_OUT
+    SPAWN_FAILED: SPAWN_FAILED
+    CANCELLED: CANCELLED
+    UNKNOWN: UNKNOWN
+  snapshot_state:
+    REQUESTED: REQUESTED
+    SNAPSHOTTING: SNAPSHOTTING
+    VERIFYING: VERIFYING
+    READY: READY
+    INVALID: INVALID
+    DELETED: DELETED
+  output_completeness:
+    COMPLETE: COMPLETE
+    TRUNCATED: TRUNCATED
+    INCOMPLETE: INCOMPLETE
+  evidence_status:
+    COMPLETE: COMPLETE
+    INCOMPLETE: INCOMPLETE
+    TRUNCATED: TRUNCATED
+    UNKNOWN: UNKNOWN
+  side_effect:
+    NONE: NONE
+    POSSIBLE: POSSIBLE
+  network_mode:
+    none: none
+    allowlist: allowlist
+  issuer:
+    PEER: CALLER
+    HOST: HOST
+  # A host operation type is shown under the public method that asks for it.
+  operation_type:
+    sandbox.create: sandbox.create
+    sandbox.start: sandbox.start
+    exec.run: execution.create
+    snapshot.create: snapshot.create
+    snapshot.restore: snapshot.restore
+    sandbox.stop: sandbox.stop
+    sandbox.destroy: sandbox.destroy
+    sandbox.fail: sandbox.fail
+    snapshot.delete: snapshot.delete
+    operation.cancel: execution.cancel
+  # Failure classes the host may give as a refusal or as the failure of an operation, and that keep
+  # their name and meaning on the public surface.
+  failure_class:
+    INVALID_REQUEST: INVALID_REQUEST
+    SAFETY_CONTROL_DENIED: SAFETY_CONTROL_DENIED
+    NOT_FOUND: NOT_FOUND
+    STATE_CONFLICT: STATE_CONFLICT
+    REVISION_CONFLICT: REVISION_CONFLICT
+    RESOURCE_EXHAUSTED: RESOURCE_EXHAUSTED
+    HOST_NOT_SERVING: HOST_NOT_SERVING
+    UNSUPPORTED: UNSUPPORTED
+    QUARANTINED: QUARANTINED
+    CURSOR_EXPIRED: CURSOR_EXPIRED
+    INTEGRITY_FAILURE: INTEGRITY_FAILURE
+    INCOMPATIBLE_RUNTIME: INCOMPATIBLE_RUNTIME
+    TIMEOUT: TIMEOUT
+    DEPENDENCY_UNAVAILABLE: DEPENDENCY_UNAVAILABLE
+    SECURITY_CONTROL_FAILURE: SECURITY_CONTROL_FAILURE
+    PARTIAL_COMPLETION: PARTIAL_COMPLETION
+    UNKNOWN_OUTCOME: UNKNOWN_OUTCOME
+    INTERNAL_ERROR: INTERNAL_ERROR
+
+# Host refusals that concern the platform's own identity or request. They are faults of the platform,
+# never of the caller: nothing exists, the caller is answered UPSTREAM_UNAVAILABLE, and the platform
+# reports itself not ready for granting work.
+platform_faults:
+  - AUTHENTICATION_FAILED
+  - AUTHORIZATION_DENIED
+  - PROTOCOL_ERROR
+
+# Host refusals that never reach a caller under their own name, and the rule that handles each.
+handled_by_rule:
+  EXPIRED_REQUEST: clock-offset
+  IDEMPOTENCY_CONFLICT: conflict-proves-existence
+
+# The host's retry advice for each failure class, used when a class ends an operation.
+retry_advice:
+  INVALID_REQUEST: NEVER
+  SAFETY_CONTROL_DENIED: AFTER_CHANGE
+  NOT_FOUND: NEVER
+  STATE_CONFLICT: AFTER_CHANGE
+  REVISION_CONFLICT: AFTER_CHANGE
+  RESOURCE_EXHAUSTED: SAME_REQUEST_LATER
+  HOST_NOT_SERVING: SAME_REQUEST_LATER
+  UNSUPPORTED: AFTER_CHANGE
+  QUARANTINED: AFTER_CHANGE
+  CURSOR_EXPIRED: AFTER_CHANGE
+  INTEGRITY_FAILURE: AFTER_CHANGE
+  INCOMPATIBLE_RUNTIME: AFTER_CHANGE
+  TIMEOUT: SAME_REQUEST_LATER
+  DEPENDENCY_UNAVAILABLE: SAME_REQUEST_LATER
+  SECURITY_CONTROL_FAILURE: AFTER_CHANGE
+  PARTIAL_COMPLETION: AFTER_CHANGE
+  UNKNOWN_OUTCOME: AFTER_CHANGE
+  INTERNAL_ERROR: AFTER_CHANGE
+
+# public method: host method. The host method is also the `step` of the operation-id derivation.
+methods:
+  sandbox.create: sandbox.create
+  sandbox.start: sandbox.start
+  sandbox.stop: sandbox.stop
+  sandbox.destroy: sandbox.destroy
+  sandbox.get: sandbox.inspect
+  sandbox.list: sandbox.list
+  execution.create: exec.run
+  execution.get: run.inspect
+  execution.output: run.output
+  execution.cancel: operation.cancel
+  snapshot.create: snapshot.create
+  snapshot.restore: snapshot.restore
+  snapshot.delete: snapshot.delete
+  snapshot.list: snapshot.list
+  operation.get: operation.get
+  operation.list: operation.list
+  platform.info: host.info
+
+# Public identifiers are opaque tokens derived one-to-one from the host's. None carries a host or a project.
+identifiers:
+  sandbox: {public_prefix: "sbx-", host_prefix: "sbx-"}
+  snapshot: {public_prefix: "snp-", host_prefix: "snp-"}
+  execution: {public_prefix: "exe-", host_prefix: "run-"}
+  operation: {public_prefix: "", host_prefix: ""}
+
+# Host methods the platform never calls. No public operation maps to one.
+never_called:
+  - profile.reload
+  - quarantine.release
+  - host.set_mode
+  - host.acknowledge
+  - host.metrics

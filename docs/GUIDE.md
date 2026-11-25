@@ -105,9 +105,9 @@ becomes `FAILED/NOT_APPLIED`: the runtime is ended and the operation is `UNKNOWN
 | An inherited granting operation is never continued | `recovery/decision.rs`, `coordinator/recover.rs` | `t_rec_03_…`, the decision rows |
 | Nothing is touched without ownership proof | `storage/generation.rs`, `backend/process/` | `t_rec_04_…`, `t_rec_05_…` |
 | A failed generation keeps its lease | `resources/admission.rs` | `t_res_03_…` |
-| A sandbox ends at its expiry with or without the core | `resources/lifetime.rs` | `resources::lifetime` tests; L4 not run |
+| A sandbox ends at its expiry with or without the core | `resources/lifetime.rs` | `resources::lifetime` tests; at L4 not demonstrated (the test host's clock runs slow) |
 | A lost control ends the runtime, idle or held | `coordinator/sweep.rs`, `Host::while_intact` | `t_sec_05_…` |
-| Loss of network enforcement yields no connectivity | `backend/firecracker/netplumb.rs`, `execution/traffic/` | `netplumb` and `acf-traffic` tests; L4 not run |
+| Loss of network enforcement yields no connectivity | `backend/firecracker/netplumb.rs`, `execution/traffic/` | `netplumb` and `acf-traffic` tests; at L4, `network/test_guest_network.py` (T-NET-07, T-NET-08) |
 | A restore is accepted only by the oracle | `coordinator/snapshots.rs` | `t_snap_01_…` to `t_snap_03_…` |
 | Secret material cannot be written anywhere | the type `SecretMaterial` | `t_secr_*`, `secrets` tests |
 | Telemetry changes no outcome | `telemetry/` | `t_obs_01_t_obs_02_…` |
@@ -167,7 +167,7 @@ operation watches the runtime itself through `while_intact`.
 
 | Place | Why it is sensitive |
 |---|---|
-| `Journal::commit_with` | The one critical section. Idempotent BEGIN, atomic admission and fencing all rest on check, append, fsync and apply happening under one lock, in that order. |
+| `Journal::commit_with` | The one critical section. Idempotent BEGIN, atomic admission and fencing all rest on check, append, fsync and apply happening under the writer lock, in that order. Readers take only the committed-state lock, which a writer holds just long enough to apply what is durable. Holding that lock across a flush would make every answer wait for the disk again (ADR-034). |
 | `coordinator/ops.rs::{begin, commit_for, finish}` | Every operation passes through them. A write that bypasses `commit_for` is a write a superseded task can make. |
 | `recovery/decision.rs` | The whole of what happens after a crash. A changed row changes the meaning of every interrupted operation. |
 | `authority/trusted_file.rs` | Everything the root process believes or executes passes through it. |
@@ -180,8 +180,8 @@ operation watches the runtime itself through `while_intact`.
 
 | Risk | Why it matters | Mitigation in place | What is still open |
 |---|---|---|---|
-| Nothing has run on a real VMM | Every isolation claim is, so far, a claim about code | Fail-closed verification at launch; the adapter's orchestration tested against a fake API with the real guest agent | The L4 suites must be run on a KVM host before any use with untrusted code |
-| The Firecracker adapter's tests need root | They were not run where this was written | They are ignored visibly, not passed | `make root-test` on a host with root |
+| L4 ran on one nested-virtualisation machine | A laptop with KVM inside WSL 2 cannot show bare-metal behaviour, and its clock runs slow | Fail-closed verification at launch, read back from the kernel; the real-host suites passed there except where §6 of VERIFICATION_STATUS.md explains | Run `make root-test` and the L4 suites on the production hardware, and on `aarch64` if it is used, before any use with untrusted code |
+| The Firecracker adapter's tests need root | `make root-test` is not part of `make check` | They are ignored visibly, not passed; they ran as root on the test host | Run them on every host class |
 | API models are transcribed from one release | A field rename upstream is a `400` at runtime | Golden-JSON tests per body; the version is pinned and verified at startup | Re-transcribe when the pin moves |
 | The whole store is held in memory | Size grows with operations retained: at most rate limit × retention per peer, which is large with the defaults | Retention; the file is rewritten while serving; rate limits before BEGIN | No ceiling on record count other than that product: size the two parameters for the machine |
 | A TLS server name is the guest's claim | Two sites behind one allowlisted address are both reachable | Stated in the contract and in the traffic crate | Accepted |

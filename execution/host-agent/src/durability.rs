@@ -57,11 +57,67 @@ const fn skipped() -> bool {
 }
 
 /// Make the file's data and metadata durable.
+///
+/// A flush waits for whatever the filesystem must write first, which on a filesystem shared with
+/// sandbox payloads can be hundreds of megabytes: it is disk-bound work ([`blocking`]).
 pub(crate) fn sync_all(f: &impl Syncable) -> io::Result<()> {
-    if skipped() { Ok(()) } else { f.fsync() }
+    if skipped() { Ok(()) } else { blocking(|| f.fsync()) }
 }
 
-/// Make the file's data durable (and the metadata needed to read it back).
+/// Make the file's data durable (and the metadata needed to read it back). Disk-bound, as above.
 pub(crate) fn sync_data(f: &impl Syncable) -> io::Result<()> {
-    if skipped() { Ok(()) } else { f.fdatasync() }
+    if skipped() { Ok(()) } else { blocking(|| f.fdatasync()) }
+}
+
+/// Run disk-bound work that can take long (copying, hashing and flushing a root filesystem or a
+/// guest's memory: hundreds of megabytes, and as long as the disk needs) from async code.
+///
+/// On the multi-threaded runtime the other tasks waiting on this worker are first handed to
+/// another one ([`tokio::task::block_in_place`]), so no answer to anyone else waits for this disk.
+/// The work still runs to its end before the caller goes on: unlike a detached blocking task, an
+/// operation that is cancelled or times out meanwhile never has a copy still being written behind
+/// the cleanup that follows it. Elsewhere (a single-threaded test runtime, or no runtime) it runs
+/// in place.
+pub(crate) fn blocking<T>(work: impl FnOnce() -> T) -> T {
+    use tokio::runtime::{Handle, RuntimeFlavor};
+    match Handle::try_current() {
+        Ok(h) if h.runtime_flavor() == RuntimeFlavor::MultiThread => tokio::task::block_in_place(work),
+        _ => work(),
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "test code")]
+mod tests {
+    use super::blocking;
+
+    #[test]
+    fn disk_work_runs_in_place_outside_a_runtime() {
+        assert_eq!(blocking(|| 7), 7);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn disk_work_runs_in_place_on_a_single_threaded_runtime() {
+        assert_eq!(blocking(|| 7), 7, "block_in_place would panic here");
+    }
+
+    /// While one task is inside the disk work, another task that was queued on the same worker
+    /// still runs: the work does not hold the worker's queue.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn disk_work_does_not_hold_up_the_other_tasks_of_its_worker() {
+        let (release, wait) = std::sync::mpsc::channel::<()>();
+        let (ran_tx, ran_rx) = tokio::sync::oneshot::channel::<()>();
+        let worker = tokio::spawn(async move {
+            // Queued behind this task on the same worker (the slot a just-spawned task takes).
+            let other = tokio::spawn(async move {
+                let _ = ran_tx.send(());
+            });
+            blocking(move || wait.recv().unwrap());
+            other.await.unwrap();
+        });
+        let ran = tokio::time::timeout(std::time::Duration::from_secs(10), ran_rx).await;
+        release.send(()).unwrap();
+        worker.await.unwrap();
+        assert!(ran.is_ok(), "a task queued on the busy worker ran while the disk work was in progress");
+    }
 }

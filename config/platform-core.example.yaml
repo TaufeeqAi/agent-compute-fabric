@@ -1,0 +1,117 @@
+# Agent Compute Fabric — developer platform: configuration of the core (schema_version 1).
+#
+# The core is the one process of a deployment that verifies credentials, decides, and holds the host
+# peer credential and the interface store. This file answers: WHICH DEPLOYMENT THIS IS, WHERE ITS STATE
+# LIVES, WHICH HOST IT BINDS, AND WHO MAY CONNECT TO IT. Every bound has a default that works; set only
+# what differs. A key this schema does not define stops the start.
+#
+#   install -m 0640 -o root -g acf-core config/platform-core.example.yaml /etc/acf-platform/core.yaml
+#   sudo -u acf-core acf-api init  --config /etc/acf-platform/core.yaml   # once: store, journal, fingerprint key
+#   sudo -u acf-core acf-api check --config /etc/acf-platform/core.yaml   # validates the file and its secrets
+#
+# The accounts and directories named below are the ones deploy/platform creates.
+# docs/platform/OPERATIONS.md is the full path, in order.
+
+schema_version: 1
+
+# The identity of this deployment. Created once and never changed: it is recorded in the store and in
+# the journal, and it is an input of the derivation that turns an idempotency key into a host operation
+# id. A core refuses to serve a store or a journal that carries another id.
+# REQUIRED. The placeholder is not a valid id, on purpose: this file does not load until you replace it
+# with the output of `acf-api deployment-id`.
+deployment_id: dep_REPLACE_ME
+
+paths:
+  # The interface store: the security registry, the request ledger and the audit outbox. Mode 0700,
+  # owned by the core's user. Back this directory up; a restore is always followed by a replay of the
+  # journal, which the core does by itself on every start.
+  store_dir: /var/lib/acf-platform/store
+  # The security journal: revocations, scope allocations, project deletions, the pinned host lineage
+  # and peer id. It MUST NOT be part of the store's backup and restore, and `acf-api init` refuses a
+  # path under store_dir. Keep it on a volume a restore of the store never overwrites.
+  journal: /var/lib/acf-platform-journal/security.journal
+  # Optional second copy of every journal record, on a sink you collect (another volume, a log shipper).
+  # journal_mirror: /mnt/audit/acf-platform/security.journal
+  # 32 random bytes in hexadecimal, mode 0600. Keys the digests of commands, keys and arguments. It is
+  # never in the store; without it an audit record cannot be matched to what ran. Back it up apart.
+  fingerprint_key: /etc/acf-platform/secrets/fingerprint.key
+  # The command socket: the one seam between the edge processes and the core. Mode 0660, group
+  # edge.socket_group; the identity the kernel reports for every peer is checked against edge.users as well.
+  command_socket: /run/acf-platform/command.sock
+  # The admin socket: operator commands (`acf-api admin ...`). Mode 0600; the core's user and root only.
+  admin_socket: /run/acf-platform/admin.sock
+  # The grant templates `developer.yaml` and `agent.yaml` (policies/defaults in the source tree).
+  policies_dir: /etc/acf-platform/policies
+
+# Who may connect to the command socket: the operating-system accounts of the edge processes. None of
+# them may be the core's own account or root, and none may be able to read the host private key, the
+# fingerprint key, the store or the journal, by its own id or through any of its groups. The core checks
+# all of that and refuses to start otherwise. Names are looked up once, at start; `uids` and
+# `socket_gid` take numbers instead.
+edge:
+  users: [acf-rest, acf-mcp]
+  socket_group: acf-command
+
+# The one host this deployment binds. The platform is enrolled on it as ONE peer with role `caller`,
+# never `operator`; check the host's enrolment table when you deploy.
+host:
+  # The host's mutual-TLS endpoint (edge.tls.listen in the host's configuration).
+  address: 10.0.0.5:7443
+  # The identity the host's certificate must carry (host_id in the host's configuration).
+  host_id: host-1
+  # The authority that signed the host's certificate. The system trust store is never consulted.
+  trust_anchors: /etc/acf-platform/secrets/host-ca.crt
+  # The platform's own certificate and key, as enrolled on the host. The key is mode 0600, owned by the
+  # core's user. Whoever holds it can act in every project of this deployment.
+  certificate: /etc/acf-platform/secrets/platform.crt
+  private_key: /etc/acf-platform/secrets/platform.key
+
+# Optional: accept OAuth 2.1 access tokens of an external authorization server on the agent interface.
+# A token authenticates only through a subject binding an operator created (`acf-api admin oauth.bind`).
+# oauth:
+#   issuer: https://login.example.org
+#   resource: https://acf.example.org/mcp          # the canonical URI of the agent endpoint: the audience
+#   jwks_uri: https://login.example.org/.well-known/jwks.json
+#   algorithms: [ES256, RS256]
+#   scopes_supported: ["acf:sandbox.list", "acf:execution.create"]
+
+# Optional: where audit records are delivered from the outbox. An append-only file of JSON lines.
+# audit_sink:
+#   file: /var/log/acf-platform/audit.jsonl
+
+telemetry:
+  log_level: INFO
+
+# Every bound, with its default. The relations among them are validated at start; the relations to the
+# host's own values are validated as soon as the host reports them. docs/platform/OPERATIONS.md lists
+# every parameter with its relation.
+parameters:
+  # How long a public request waits for its operation, and the longest a caller may ask for.
+  public_wait_max: 30
+  # The host's allowance for one peer, per minute. MUST equal what the host is configured with
+  # (operations.rate_limit_per_minute and operations.read_rate_limit_per_minute in the host's own
+  # configuration): the host does not report them, so the platform cannot read them.
+  host_ops_allowance: 600
+  host_reads_allowance: 6000
+  # The share of that allowance kept for containment, for resolving lost answers and for the follower.
+  host_allowance_reserve: 0.2
+  # How many sandboxes and snapshots the host admits at once. MUST equal what the host is configured
+  # with (envelope.max_sandboxes and envelope.max_snapshots in the host's own configuration): the host
+  # does not report them either. The quotas below are shares of these two numbers, so a value that is
+  # too high lets one project fill the host.
+  host_max_sandboxes: 16
+  host_max_snapshots: 64
+  # A project's share of the allowance that is left, and of the two numbers above.
+  project_default_share: 0.5
+  # Live sandboxes and snapshots per project. Unset: the default share of what the host admits, which
+  # is 8 and 32 with the values above. Neither may exceed what the host admits.
+  # project_max_live_sandboxes: 8
+  # project_max_snapshots: 32
+  # Lifetime of an agent credential, and how long a sandbox may outlive the agent key that created it.
+  agent_credential_max_lifetime: 86400
+  agent_expiry_grace: 300
+  # Off by default, each for a reason. See docs/platform/DECISIONS.md before you change one.
+  mcp_allow_developer_credentials: false
+  mcp_serve_2025_11_25: false
+  mcp_tasks_extension: false
+  audit_required: false

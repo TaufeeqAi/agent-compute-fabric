@@ -46,7 +46,8 @@ def digest_of_manifest_bytes(ref: str) -> str:
 
 
 @pytest.fixture
-def pin(run: Runner, tree: Path, tmp_path: Path) -> Callable[..., subprocess.CompletedProcess[str]]:
+def pin(run: Runner, unpinned_tree: Path, tmp_path: Path) -> Callable[..., subprocess.CompletedProcess[str]]:
+    tree = unpinned_tree  # the tests below ask for `tree` too: it is the same copy
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     for name, body in STUBS.items():

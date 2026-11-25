@@ -17,10 +17,18 @@ use crate::{
 
 /// Cut `items` (already filtered) into one page in ascending revision order. A page never ends
 /// between two items that share a revision, so continuing from `next` can skip nothing.
-fn paginate<T>(mut items: Vec<(u64, T)>, limit: usize, lineage: &str, current_seq: u64) -> Page<T> {
+///
+/// Nor does it end below `floor`, the oldest cursor this kind of listing still accepts, so `next`
+/// is always a cursor the host accepts and a full listing can be followed to its end (API-11: "the
+/// caller lists again in full" must be possible). Without that rule, a sandbox that has not changed
+/// since before a newer tombstone was forgotten makes every full listing longer than one page end
+/// with a cursor that is already expired. Below the floor lie only records of a kind that has
+/// tombstones and that have not changed for longer than `change_retention`: they are bounded by the
+/// host's capacity (`envelope.max_sandboxes`, `envelope.max_snapshots`), so such a page stays small.
+fn paginate<T>(mut items: Vec<(u64, T)>, limit: usize, floor: u64, lineage: &str, current_seq: u64) -> Page<T> {
     items.sort_by_key(|(rev, _)| *rev);
     let mut cut = items.len().min(limit);
-    while cut > 0 && cut < items.len() && items[cut].0 == items[cut - 1].0 {
+    while cut > 0 && cut < items.len() && (items[cut].0 == items[cut - 1].0 || items[cut - 1].0 < floor) {
         cut += 1;
     }
     let more = cut < items.len();
@@ -31,15 +39,15 @@ fn paginate<T>(mut items: Vec<(u64, T)>, limit: usize, lineage: &str, current_se
 
 impl Host {
     /// API-11: the revision a list must report changes after. `None` means "a full listing".
-    /// A cursor from another lineage, from before the change floor, or from a future this store has
-    /// not seen is refused with `CURSOR_EXPIRED`: the caller lists again in full.
-    fn changed_since(&self, state: &JournalState, p: &ListParams) -> Result<Option<u64>> {
+    /// A cursor from another lineage, from before `floor`, or from a future this store has not
+    /// seen is refused with `CURSOR_EXPIRED`: the caller lists again in full.
+    fn changed_since(&self, state: &JournalState, p: &ListParams, floor: u64) -> Result<Option<u64>> {
         let Some(c) = &p.changed_since else { return Ok(None) };
         let expired = |why: &str| AcfError::new(FailureClass::CursorExpired, format!("{why}; list again without a cursor"));
         if c.lineage != self.journal.lineage() {
             return Err(expired("the cursor belongs to a different store lineage"));
         }
-        if c.sequence < state.change_floor {
+        if c.sequence < floor {
             return Err(expired("the cursor is older than the change retention window"));
         }
         if c.sequence > state.last_seq {
@@ -47,6 +55,17 @@ impl Host {
         }
         Ok(Some(c.sequence))
     }
+
+    /// The oldest cursor a listing of sandboxes or snapshots accepts: a follower from before it may
+    /// have missed a tombstone that retention has since forgotten (PS-10).
+    fn tombstone_floor(state: &JournalState) -> u64 {
+        state.change_floor
+    }
+
+    /// Operations have no tombstones: an operation record ends by being forgotten after
+    /// `operation_retention`, which no listing reports (PS-10). Forgetting a *sandbox's* tombstone
+    /// takes nothing from a follower of operations, so it does not expire an operation cursor.
+    const OPERATION_FLOOR: u64 = 0;
 
     pub fn host_info(&self) -> Result<HostInfo> {
         let (live, snaps, quarantined) = self.journal.read(|s| {
@@ -165,7 +184,8 @@ impl Host {
 
     pub fn sandbox_list(&self, authority: &AuthorityContext, p: &ListParams) -> Result<Page<SandboxView>> {
         self.journal.read(|s| {
-            let since = self.changed_since(s, p)?;
+            let floor = Self::tombstone_floor(s);
+            let since = self.changed_since(s, p, floor)?;
             let items = s
                 .sandboxes
                 .values()
@@ -178,13 +198,14 @@ impl Host {
                 })
                 .map(|v| (v.revision, v))
                 .collect();
-            Ok(paginate(items, p.page_size()?, self.journal.lineage(), s.last_seq))
+            Ok(paginate(items, p.page_size()?, floor, self.journal.lineage(), s.last_seq))
         })?
     }
 
     pub fn snapshot_list(&self, authority: &AuthorityContext, p: &ListParams) -> Result<Page<SnapshotView>> {
         let page = self.journal.read(|s| {
-            let since = self.changed_since(s, p)?;
+            let floor = Self::tombstone_floor(s);
+            let since = self.changed_since(s, p, floor)?;
             let items = s
                 .snapshots
                 .values()
@@ -195,7 +216,7 @@ impl Host {
                 })
                 .map(|x| (x.revision, x.clone()))
                 .collect();
-            Ok::<_, AcfError>(paginate(items, p.page_size()?, self.journal.lineage(), s.last_seq))
+            Ok::<_, AcfError>(paginate(items, p.page_size()?, floor, self.journal.lineage(), s.last_seq))
         })??;
         // Compatibility is checked outside the store lock: it reads manifests from disk (§21.6, VR-7).
         Ok(Page {
@@ -230,14 +251,14 @@ impl Host {
 
     pub fn operation_list(&self, authority: &AuthorityContext, p: &ListParams) -> Result<Page<OperationView>> {
         self.journal.read(|s| {
-            let since = self.changed_since(s, p)?.unwrap_or(0);
+            let since = self.changed_since(s, p, Self::OPERATION_FLOOR)?.unwrap_or(0);
             let items = s
                 .operations
                 .values()
                 .filter(|o| authority.may_access(&o.tags) && o.revision > since)
                 .map(|o| (o.revision, self.operation_view(s, o)))
                 .collect();
-            Ok(paginate(items, p.page_size()?, self.journal.lineage(), s.last_seq))
+            Ok(paginate(items, p.page_size()?, Self::OPERATION_FLOOR, self.journal.lineage(), s.last_seq))
         })?
     }
 
@@ -320,25 +341,38 @@ mod tests {
     #[test]
     fn a_page_never_splits_items_that_share_a_revision() {
         let items: Vec<(u64, u32)> = vec![(5, 1), (7, 2), (7, 3), (7, 4), (9, 5)];
-        let page = paginate(items.clone(), 2, "lin", 40);
+        let page = paginate(items.clone(), 2, 0, "lin", 40);
         assert_eq!(page.items, vec![1, 2, 3, 4], "the three items of revision 7 stay together");
         assert!(page.more);
         assert_eq!(page.next, Cursor { lineage: "lin".into(), sequence: 7 });
         let rest: Vec<(u64, u32)> = items.into_iter().filter(|(rev, _)| *rev > 7).collect();
-        let last = paginate(rest, 2, "lin", 40);
+        let last = paginate(rest, 2, 0, "lin", 40);
         assert_eq!((last.items, last.more, last.next.sequence), (vec![5], false, 40), "the last page ends at the current sequence");
     }
 
     #[test]
     fn an_empty_listing_is_complete_up_to_the_current_sequence() {
-        let page = paginate(Vec::<(u64, u32)>::new(), 10, "lin", 12);
+        let page = paginate(Vec::<(u64, u32)>::new(), 10, 0, "lin", 12);
         assert!(page.items.is_empty() && !page.more);
         assert_eq!(page.next.sequence, 12);
     }
 
     #[test]
     fn pages_are_in_ascending_revision_order_whatever_order_the_store_yields() {
-        let page = paginate(vec![(9, 'c'), (2, 'a'), (4, 'b')], 10, "lin", 9);
+        let page = paginate(vec![(9, 'c'), (2, 'a'), (4, 'b')], 10, 0, "lin", 9);
         assert_eq!(page.items, vec!['a', 'b', 'c']);
+    }
+
+    /// API-11: whatever retention has forgotten, the `next` of a page is a cursor the host accepts.
+    #[test]
+    fn a_page_never_ends_below_the_change_floor() {
+        let items: Vec<(u64, u32)> = vec![(3, 1), (4, 2), (8, 3), (12, 4), (15, 5)];
+        let page = paginate(items.clone(), 1, 10, "lin", 20);
+        assert_eq!(page.items, vec![1, 2, 3, 4], "extended past the floor, to the first item at or above it");
+        assert!(page.more && page.next.sequence >= 10);
+        let all_below = paginate(items[..3].to_vec(), 1, 10, "lin", 20);
+        assert_eq!((all_below.items.len(), all_below.more, all_below.next.sequence), (3, false, 20));
+        let above = paginate(items[3..].to_vec(), 1, 10, "lin", 20);
+        assert_eq!((above.items, above.more, above.next.sequence), (vec![4], true, 12), "above the floor, the limit holds");
     }
 }

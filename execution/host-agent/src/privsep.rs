@@ -5,8 +5,9 @@
 //!   not trust. They run as unprivileged users with no capabilities and `no_new_privs`, and they
 //!   *verify that about themselves* before reading a single byte ([`assert_unprivileged`]): a role
 //!   started with privilege by mistake refuses to run.
-//! * The core spawns a role by re-executing its own binary image (`/proc/self/exe`, so an upgrade of
-//!   the file on disk cannot make two roles of one activation run different code), with an empty
+//! * The core spawns a role by re-executing its own binary image (resolved and checked to be the
+//!   image it runs, so an upgrade of the file on disk cannot make two roles of one activation run
+//!   different code), with an empty
 //!   environment, and hands it what it needs — configuration and already-open sockets — over a
 //!   socket pair. The role opens nothing by name.
 //!
@@ -45,8 +46,9 @@ pub struct RoleIdentity {
 /// `identity` is required when the caller is root; when the caller is itself unprivileged (tests,
 /// the in-memory test host) the role simply inherits that identity.
 pub fn spawn_role(role: &str, args: &[&str], identity: Option<RoleIdentity>) -> Result<(Child, UnixStream)> {
+    let image = own_image()?;
     let (core_end, role_end) = UnixStream::pair()?;
-    let mut cmd = Command::new("/proc/self/exe");
+    let mut cmd = Command::new(&image);
     cmd.arg(role).args(args).env_clear().current_dir("/").stdin(Stdio::from(OwnedFd::from(role_end)));
     // Diagnostics only: the role's stdout and stderr go where the core's go.
     for var in ["ACF_LOG_FORMAT", "RUST_LOG"] {
@@ -61,6 +63,35 @@ pub fn spawn_role(role: &str, args: &[&str], identity: Option<RoleIdentity>) -> 
     }
     let child = cmd.spawn().map_err(|e| AcfError::internal(format!("cannot start role `{role}`: {e}")))?;
     Ok((child, core_end))
+}
+
+/// The path of the binary image this process runs, checked to still be that image.
+///
+/// A role is started from a path resolved here, in the core, and not from `/proc/self/exe` in the
+/// child: the child changes its user id before it executes, the kernel then marks it non-dumpable,
+/// and a non-dumpable process may not follow its own `/proc/self/exe` (`EPERM`). That is what a root
+/// core starting its unprivileged edge does on every start. (Found the first time the core ran as
+/// root under its unit.)
+///
+/// What `/proc/self/exe` gave, every role of one activation running the code the core runs, is kept
+/// by comparing device and inode: a binary replaced on disk since the core started is refused, and
+/// the core must be restarted to run the new one. The directory is the trusted owner's (TI-1), so
+/// nobody else can swap the file between this check and the `execve`.
+fn own_image() -> Result<std::path::PathBuf> {
+    use std::os::unix::fs::MetadataExt;
+    let path = std::fs::read_link("/proc/self/exe")
+        .map_err(|e| AcfError::internal(format!("cannot read the path of this process's own binary: {e}")))?;
+    let running = std::fs::metadata("/proc/self/exe")?;
+    let on_disk = std::fs::metadata(&path).map_err(|e| {
+        AcfError::unavailable(format!("{} is not the binary this core started from ({e}); restart the core", path.display()))
+    })?;
+    if (running.dev(), running.ino()) != (on_disk.dev(), on_disk.ino()) {
+        return Err(AcfError::unavailable(format!(
+            "{} was replaced since this core started; restart the core so that every role runs the same code",
+            path.display()
+        )));
+    }
+    Ok(path)
 }
 
 /// The identity a role must switch to, if any. A root core never starts a role as root: it needs an
@@ -190,6 +221,34 @@ mod tests {
     use std::io::{Read, Write};
 
     const UNPRIVILEGED: &str = "Name:\tacf-host\nUid:\t1000\t1000\t1000\t1000\nCapInh:\t0000000000000000\nCapPrm:\t0000000000000000\nCapEff:\t0000000000000000\nCapBnd:\t000001ffffffffff\nCapAmb:\t0000000000000000\nNoNewPrivs:\t1\nSeccomp:\t0\n";
+
+    #[test]
+    fn a_role_is_started_from_the_image_this_process_runs() {
+        use std::os::unix::fs::MetadataExt;
+        let image = own_image().unwrap();
+        assert!(image.is_absolute(), "{}", image.display());
+        assert!(!image.starts_with("/proc"), "a role must not be started through /proc/self: {}", image.display());
+        let (a, b) = (std::fs::metadata(&image).unwrap(), std::fs::metadata("/proc/self/exe").unwrap());
+        assert_eq!((a.dev(), a.ino()), (b.dev(), b.ino()));
+    }
+
+    /// What a root core does on every start: start a role under another user id. Before the image was
+    /// resolved in the parent this failed with `EPERM`, because the child, non-dumpable after its uid
+    /// change, may not follow its own `/proc/self/exe`. The role started here is this test binary with
+    /// a filter that matches no test, so it exits 0 if, and only if, it was executed.
+    #[test]
+    #[ignore = "needs root: run with `make root-test`"]
+    fn a_root_core_starts_a_role_under_another_user_id() {
+        use std::os::unix::fs::MetadataExt;
+        assert!(rustix::process::geteuid().is_root(), "this test needs root: run it with `make root-test`");
+        // The group that owns the test binary can reach it; uid 65534 (nobody) owns nothing.
+        let gid = std::fs::metadata(own_image().unwrap()).unwrap().gid();
+        assert_ne!(gid, 0, "build the test binary as an ordinary user, as `make root-test` does");
+        let (mut child, _channel) =
+            spawn_role("no-test-is-named-this", &["--exact"], Some(RoleIdentity { uid: 65534, gid })).expect("the role starts");
+        let status = child.wait().unwrap();
+        assert!(status.success(), "the role ran under uid 65534 and exited {status}");
+    }
 
     #[test]
     fn an_unprivileged_process_with_no_new_privs_passes() {

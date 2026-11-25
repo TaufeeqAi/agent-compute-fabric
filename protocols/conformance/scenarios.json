@@ -1,0 +1,3089 @@
+{
+  "schema_version": 1,
+  "defaults": {
+    "project": "prj_0000000000000001",
+    "base_url": "https://acf.test",
+    "api_key": "acf1_dev_conformance"
+  },
+  "following": {
+    "wait_s": 30,
+    "backoff_initial_s": 0.5,
+    "backoff_max_s": 5,
+    "rule": "After an answer in which the operation has not ended, the client waits Retry-After seconds if the answer carried it, else its backoff. If that wait would reach the follow bound, it reports the operation as still running. Otherwise it reads the operation with wait = min(wait_s, whole seconds left before the bound)."
+  },
+  "scenarios": [
+    {
+      "id": "cp-001-create-answers-terminal",
+      "title": "A create that ends inside the wait is answered with the ended operation.",
+      "rules": [
+        "CP-1",
+        "IDM-1",
+        "LRO-1"
+      ],
+      "call": {
+        "name": "sandbox.create",
+        "args": {
+          "image": "python",
+          "vcpus": 1,
+          "memory_mib": 512,
+          "disk_mib": 1024,
+          "start": false,
+          "idempotency_key": "key-0001"
+        }
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes",
+            "headers": {
+              "idempotency-key": "$KEY"
+            },
+            "json": {
+              "image": "python",
+              "resources": {
+                "vcpus": 1,
+                "memory_mib": 512,
+                "disk_mib": 1024
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001"
+            },
+            "json": {
+              "operation_id": "op-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "project": "prj_0000000000000001",
+              "type": "sandbox.create",
+              "state": "SUCCEEDED",
+              "terminal": true,
+              "effect": "APPLIED",
+              "target": {
+                "sandbox_id": "sbx-00000000000000000000000000000001",
+                "generation": 1
+              },
+              "result": {
+                "sandbox": {
+                  "sandbox_id": "sbx-00000000000000000000000000000001",
+                  "project": "prj_0000000000000001",
+                  "state": "PROVISIONING",
+                  "generation": 1,
+                  "revision": "r11.0123456789ab",
+                  "image": {
+                    "alias": "python",
+                    "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                  },
+                  "resources": {
+                    "vcpus": 1,
+                    "memory_mib": 512,
+                    "disk_mib": 1024
+                  },
+                  "network": {
+                    "mode": "none",
+                    "entries": []
+                  },
+                  "expires_at": "2026-11-19T12:00:00.000Z",
+                  "notes": [],
+                  "updated_at": "2026-11-19T10:00:02.000Z"
+                }
+              },
+              "initiated_by": "CALLER",
+              "actor": {
+                "principal_id": "prn_0000000000000001"
+              },
+              "created_at": "2026-11-19T10:00:00.000Z",
+              "updated_at": "2026-11-19T10:00:02.000Z",
+              "replayed": false,
+              "recorded": false,
+              "idempotency_key_digest": "5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "outcome": "success",
+        "result": {
+          "sandbox_id": "sbx-00000000000000000000000000000001",
+          "state": "PROVISIONING"
+        },
+        "replayed": false,
+        "exit_code": "success"
+      }
+    },
+    {
+      "id": "cp-002-create-then-start",
+      "title": "The client drives create and then start, with the key and that key suffixed `:start`.",
+      "rules": [
+        "SDK-9",
+        "LRO-10",
+        "CP-1"
+      ],
+      "call": {
+        "name": "sandbox.create",
+        "args": {
+          "image": "python",
+          "vcpus": 1,
+          "memory_mib": 512,
+          "disk_mib": 1024,
+          "idempotency_key": "key-0002"
+        }
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes",
+            "headers": {
+              "idempotency-key": "$KEY"
+            },
+            "json": {
+              "image": "python",
+              "resources": {
+                "vcpus": 1,
+                "memory_mib": 512,
+                "disk_mib": 1024
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001"
+            },
+            "json": {
+              "operation_id": "op-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "project": "prj_0000000000000001",
+              "type": "sandbox.create",
+              "state": "SUCCEEDED",
+              "terminal": true,
+              "effect": "APPLIED",
+              "target": {
+                "sandbox_id": "sbx-00000000000000000000000000000001",
+                "generation": 1
+              },
+              "result": {
+                "sandbox": {
+                  "sandbox_id": "sbx-00000000000000000000000000000001",
+                  "project": "prj_0000000000000001",
+                  "state": "PROVISIONING",
+                  "generation": 1,
+                  "revision": "r11.0123456789ab",
+                  "image": {
+                    "alias": "python",
+                    "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                  },
+                  "resources": {
+                    "vcpus": 1,
+                    "memory_mib": 512,
+                    "disk_mib": 1024
+                  },
+                  "network": {
+                    "mode": "none",
+                    "entries": []
+                  },
+                  "expires_at": "2026-11-19T12:00:00.000Z",
+                  "notes": [],
+                  "updated_at": "2026-11-19T10:00:02.000Z"
+                }
+              },
+              "initiated_by": "CALLER",
+              "actor": {
+                "principal_id": "prn_0000000000000001"
+              },
+              "created_at": "2026-11-19T10:00:00.000Z",
+              "updated_at": "2026-11-19T10:00:02.000Z",
+              "replayed": false,
+              "recorded": false,
+              "idempotency_key_digest": "5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes/sbx-00000000000000000000000000000001/start",
+            "headers": {
+              "idempotency-key": "$KEY:start"
+            },
+            "json": {
+              "expected_generation": 1
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001"
+            },
+            "json": {
+              "operation_id": "op-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "project": "prj_0000000000000001",
+              "type": "sandbox.start",
+              "state": "SUCCEEDED",
+              "terminal": true,
+              "effect": "APPLIED",
+              "target": {
+                "sandbox_id": "sbx-00000000000000000000000000000001",
+                "generation": 1
+              },
+              "result": {
+                "sandbox": {
+                  "sandbox_id": "sbx-00000000000000000000000000000001",
+                  "project": "prj_0000000000000001",
+                  "state": "READY",
+                  "generation": 1,
+                  "revision": "r11.0123456789ab",
+                  "image": {
+                    "alias": "python",
+                    "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                  },
+                  "resources": {
+                    "vcpus": 1,
+                    "memory_mib": 512,
+                    "disk_mib": 1024
+                  },
+                  "network": {
+                    "mode": "none",
+                    "entries": []
+                  },
+                  "expires_at": "2026-11-19T12:00:00.000Z",
+                  "notes": [],
+                  "updated_at": "2026-11-19T10:00:02.000Z"
+                }
+              },
+              "initiated_by": "CALLER",
+              "actor": {
+                "principal_id": "prn_0000000000000001"
+              },
+              "created_at": "2026-11-19T10:00:00.000Z",
+              "updated_at": "2026-11-19T10:00:02.000Z",
+              "replayed": false,
+              "recorded": false,
+              "idempotency_key_digest": "5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "outcome": "success",
+        "result": {
+          "sandbox_id": "sbx-00000000000000000000000000000001",
+          "state": "READY"
+        },
+        "exit_code": "success"
+      }
+    },
+    {
+      "id": "cp-003-follow-to-the-end",
+      "title": "A 202 is followed at the operation until it has ended.",
+      "rules": [
+        "CP-4",
+        "LRO-2",
+        "LRO-4"
+      ],
+      "call": {
+        "name": "sandbox.create",
+        "args": {
+          "image": "python",
+          "vcpus": 1,
+          "memory_mib": 512,
+          "disk_mib": 1024,
+          "start": false,
+          "idempotency_key": "key-0001"
+        }
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes",
+            "headers": {
+              "idempotency-key": "$KEY"
+            },
+            "json": {
+              "image": "python",
+              "resources": {
+                "vcpus": 1,
+                "memory_mib": 512,
+                "disk_mib": 1024
+              }
+            }
+          },
+          "response": {
+            "status": 202,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001",
+              "location": "/v1/projects/prj_0000000000000001/operations/op-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "retry-after": "1"
+            },
+            "json": {
+              "operation_id": "op-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "project": "prj_0000000000000001",
+              "type": "sandbox.create",
+              "state": "ACCEPTED",
+              "terminal": false,
+              "target": {
+                "sandbox_id": "sbx-00000000000000000000000000000001",
+                "generation": 1
+              },
+              "initiated_by": "CALLER",
+              "actor": {
+                "principal_id": "prn_0000000000000001"
+              },
+              "created_at": "2026-11-19T10:00:00.000Z",
+              "updated_at": "2026-11-19T10:00:02.000Z",
+              "replayed": false,
+              "recorded": false,
+              "idempotency_key_digest": "5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "path": "/v1/projects/prj_0000000000000001/operations/op-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": {
+              "wait": "30"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001",
+              "retry-after": "1"
+            },
+            "json": {
+              "operation_id": "op-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "project": "prj_0000000000000001",
+              "type": "sandbox.create",
+              "state": "IN_PROGRESS",
+              "terminal": false,
+              "target": {
+                "sandbox_id": "sbx-00000000000000000000000000000001",
+                "generation": 1
+              },
+              "initiated_by": "CALLER",
+              "actor": {
+                "principal_id": "prn_0000000000000001"
+              },
+              "created_at": "2026-11-19T10:00:00.000Z",
+              "updated_at": "2026-11-19T10:00:02.000Z",
+              "replayed": false,
+              "recorded": false,
+              "idempotency_key_digest": "5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "path": "/v1/projects/prj_0000000000000001/operations/op-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": {
+              "wait": "30"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001"
+            },
+            "json": {
+              "operation_id": "op-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "project": "prj_0000000000000001",
+              "type": "sandbox.create",
+              "state": "SUCCEEDED",
+              "terminal": true,
+              "effect": "APPLIED",
+              "target": {
+                "sandbox_id": "sbx-00000000000000000000000000000001",
+                "generation": 1
+              },
+              "result": {
+                "sandbox": {
+                  "sandbox_id": "sbx-00000000000000000000000000000001",
+                  "project": "prj_0000000000000001",
+                  "state": "PROVISIONING",
+                  "generation": 1,
+                  "revision": "r11.0123456789ab",
+                  "image": {
+                    "alias": "python",
+                    "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                  },
+                  "resources": {
+                    "vcpus": 1,
+                    "memory_mib": 512,
+                    "disk_mib": 1024
+                  },
+                  "network": {
+                    "mode": "none",
+                    "entries": []
+                  },
+                  "expires_at": "2026-11-19T12:00:00.000Z",
+                  "notes": [],
+                  "updated_at": "2026-11-19T10:00:02.000Z"
+                }
+              },
+              "initiated_by": "CALLER",
+              "actor": {
+                "principal_id": "prn_0000000000000001"
+              },
+              "created_at": "2026-11-19T10:00:00.000Z",
+              "updated_at": "2026-11-19T10:00:02.000Z",
+              "replayed": false,
+              "recorded": false,
+              "idempotency_key_digest": "5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "outcome": "success",
+        "result": {
+          "sandbox_id": "sbx-00000000000000000000000000000001",
+          "state": "PROVISIONING"
+        },
+        "min_wait_s": 2,
+        "exit_code": "success"
+      }
+    },
+    {
+      "id": "cp-004-lost-answer-same-key",
+      "title": "No answer arrives: the client repeats the same request with the same key and the same body.",
+      "rules": [
+        "CP-2",
+        "RT-1",
+        "IDM-17"
+      ],
+      "call": {
+        "name": "sandbox.create",
+        "args": {
+          "image": "python",
+          "vcpus": 1,
+          "memory_mib": 512,
+          "disk_mib": 1024,
+          "start": false,
+          "idempotency_key": "key-0001"
+        }
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes",
+            "headers": {
+              "idempotency-key": "$KEY"
+            },
+            "json": {
+              "image": "python",
+              "resources": {
+                "vcpus": 1,
+                "memory_mib": 512,
+                "disk_mib": 1024
+              }
+            }
+          },
+          "response": {
+            "fault": "connection_reset"
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes",
+            "headers": {
+              "idempotency-key": "$KEY"
+            },
+            "json": {
+              "image": "python",
+              "resources": {
+                "vcpus": 1,
+                "memory_mib": 512,
+                "disk_mib": 1024
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001",
+              "idempotent-replayed": "true"
+            },
+            "json": {
+              "operation_id": "op-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "project": "prj_0000000000000001",
+              "type": "sandbox.create",
+              "state": "SUCCEEDED",
+              "terminal": true,
+              "effect": "APPLIED",
+              "target": {
+                "sandbox_id": "sbx-00000000000000000000000000000001",
+                "generation": 1
+              },
+              "result": {
+                "sandbox": {
+                  "sandbox_id": "sbx-00000000000000000000000000000001",
+                  "project": "prj_0000000000000001",
+                  "state": "PROVISIONING",
+                  "generation": 1,
+                  "revision": "r11.0123456789ab",
+                  "image": {
+                    "alias": "python",
+                    "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                  },
+                  "resources": {
+                    "vcpus": 1,
+                    "memory_mib": 512,
+                    "disk_mib": 1024
+                  },
+                  "network": {
+                    "mode": "none",
+                    "entries": []
+                  },
+                  "expires_at": "2026-11-19T12:00:00.000Z",
+                  "notes": [],
+                  "updated_at": "2026-11-19T10:00:02.000Z"
+                }
+              },
+              "initiated_by": "CALLER",
+              "actor": {
+                "principal_id": "prn_0000000000000001"
+              },
+              "created_at": "2026-11-19T10:00:00.000Z",
+              "updated_at": "2026-11-19T10:00:02.000Z",
+              "replayed": true,
+              "recorded": false,
+              "idempotency_key_digest": "5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "outcome": "success",
+        "result": {
+          "sandbox_id": "sbx-00000000000000000000000000000001"
+        },
+        "replayed": true,
+        "exit_code": "success"
+      }
+    },
+    {
+      "id": "cp-005-unresolved-then-resolved",
+      "title": "OUTCOME_UNRESOLVED is resolved by asking again with the same key.",
+      "rules": [
+        "CP-2",
+        "SDK-5"
+      ],
+      "call": {
+        "name": "sandbox.create",
+        "args": {
+          "image": "python",
+          "vcpus": 1,
+          "memory_mib": 512,
+          "disk_mib": 1024,
+          "start": false,
+          "idempotency_key": "key-0001"
+        }
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes",
+            "headers": {
+              "idempotency-key": "$KEY"
+            },
+            "json": {
+              "image": "python",
+              "resources": {
+                "vcpus": 1,
+                "memory_mib": 512,
+                "disk_mib": 1024
+              }
+            }
+          },
+          "response": {
+            "status": 503,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001",
+              "content-type": "application/problem+json",
+              "retry-after": "1"
+            },
+            "json": {
+              "code": "OUTCOME_UNRESOLVED",
+              "kind": "UNRESOLVED",
+              "retry": "SAME_REQUEST_LATER",
+              "message": "The outcome of the request could not be established",
+              "request_id": "req_000000000000000000000001",
+              "idempotency_key": "key-0001",
+              "type": "urn:acf:problem:outcome-unresolved",
+              "title": "The outcome of the request could not be established",
+              "status": 503,
+              "detail": "The outcome of the request could not be established",
+              "instance": "urn:acf:request:req_000000000000000000000001"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes",
+            "headers": {
+              "idempotency-key": "$KEY"
+            },
+            "json": {
+              "image": "python",
+              "resources": {
+                "vcpus": 1,
+                "memory_mib": 512,
+                "disk_mib": 1024
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001"
+            },
+            "json": {
+              "operation_id": "op-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "project": "prj_0000000000000001",
+              "type": "sandbox.create",
+              "state": "SUCCEEDED",
+              "terminal": true,
+              "effect": "APPLIED",
+              "target": {
+                "sandbox_id": "sbx-00000000000000000000000000000001",
+                "generation": 1
+              },
+              "result": {
+                "sandbox": {
+                  "sandbox_id": "sbx-00000000000000000000000000000001",
+                  "project": "prj_0000000000000001",
+                  "state": "PROVISIONING",
+                  "generation": 1,
+                  "revision": "r11.0123456789ab",
+                  "image": {
+                    "alias": "python",
+                    "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                  },
+                  "resources": {
+                    "vcpus": 1,
+                    "memory_mib": 512,
+                    "disk_mib": 1024
+                  },
+                  "network": {
+                    "mode": "none",
+                    "entries": []
+                  },
+                  "expires_at": "2026-11-19T12:00:00.000Z",
+                  "notes": [],
+                  "updated_at": "2026-11-19T10:00:02.000Z"
+                }
+              },
+              "initiated_by": "CALLER",
+              "actor": {
+                "principal_id": "prn_0000000000000001"
+              },
+              "created_at": "2026-11-19T10:00:00.000Z",
+              "updated_at": "2026-11-19T10:00:02.000Z",
+              "replayed": false,
+              "recorded": false,
+              "idempotency_key_digest": "5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "outcome": "success",
+        "result": {
+          "sandbox_id": "sbx-00000000000000000000000000000001"
+        },
+        "min_wait_s": 1,
+        "exit_code": "success"
+      }
+    },
+    {
+      "id": "cp-006-request-in-progress-is-retried",
+      "title": "A 409 that is REQUEST_IN_PROGRESS is retried with the same key.",
+      "rules": [
+        "CP-3",
+        "SDK-4",
+        "SDK-5"
+      ],
+      "call": {
+        "name": "sandbox.create",
+        "args": {
+          "image": "python",
+          "vcpus": 1,
+          "memory_mib": 512,
+          "disk_mib": 1024,
+          "start": false,
+          "idempotency_key": "key-0001"
+        }
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes",
+            "headers": {
+              "idempotency-key": "$KEY"
+            },
+            "json": {
+              "image": "python",
+              "resources": {
+                "vcpus": 1,
+                "memory_mib": 512,
+                "disk_mib": 1024
+              }
+            }
+          },
+          "response": {
+            "status": 409,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001",
+              "content-type": "application/problem+json",
+              "retry-after": "1"
+            },
+            "json": {
+              "code": "REQUEST_IN_PROGRESS",
+              "kind": "UNRESOLVED",
+              "retry": "SAME_REQUEST_LATER",
+              "message": "An earlier request with this idempotency key is still being decided",
+              "request_id": "req_000000000000000000000001",
+              "idempotency_key": "key-0001",
+              "type": "urn:acf:problem:request-in-progress",
+              "title": "An earlier request with this idempotency key is still being decided",
+              "status": 409,
+              "detail": "An earlier request with this idempotency key is still being decided",
+              "instance": "urn:acf:request:req_000000000000000000000001"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes",
+            "headers": {
+              "idempotency-key": "$KEY"
+            },
+            "json": {
+              "image": "python",
+              "resources": {
+                "vcpus": 1,
+                "memory_mib": 512,
+                "disk_mib": 1024
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001"
+            },
+            "json": {
+              "operation_id": "op-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "project": "prj_0000000000000001",
+              "type": "sandbox.create",
+              "state": "SUCCEEDED",
+              "terminal": true,
+              "effect": "APPLIED",
+              "target": {
+                "sandbox_id": "sbx-00000000000000000000000000000001",
+                "generation": 1
+              },
+              "result": {
+                "sandbox": {
+                  "sandbox_id": "sbx-00000000000000000000000000000001",
+                  "project": "prj_0000000000000001",
+                  "state": "PROVISIONING",
+                  "generation": 1,
+                  "revision": "r11.0123456789ab",
+                  "image": {
+                    "alias": "python",
+                    "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                  },
+                  "resources": {
+                    "vcpus": 1,
+                    "memory_mib": 512,
+                    "disk_mib": 1024
+                  },
+                  "network": {
+                    "mode": "none",
+                    "entries": []
+                  },
+                  "expires_at": "2026-11-19T12:00:00.000Z",
+                  "notes": [],
+                  "updated_at": "2026-11-19T10:00:02.000Z"
+                }
+              },
+              "initiated_by": "CALLER",
+              "actor": {
+                "principal_id": "prn_0000000000000001"
+              },
+              "created_at": "2026-11-19T10:00:00.000Z",
+              "updated_at": "2026-11-19T10:00:02.000Z",
+              "replayed": false,
+              "recorded": false,
+              "idempotency_key_digest": "5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "outcome": "success",
+        "result": {
+          "sandbox_id": "sbx-00000000000000000000000000000001"
+        },
+        "exit_code": "success"
+      }
+    },
+    {
+      "id": "cp-007-state-conflict-is-not-retried",
+      "title": "A 409 that is STATE_CONFLICT is not retried: the status alone decides nothing.",
+      "rules": [
+        "CP-3",
+        "SDK-4",
+        "CC3-2"
+      ],
+      "call": {
+        "name": "sandbox.exec",
+        "args": {
+          "sandbox_id": "sbx-00000000000000000000000000000001",
+          "expected_generation": 2,
+          "argv": [
+            "python",
+            "-V"
+          ],
+          "idempotency_key": "key-0100"
+        }
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes/sbx-00000000000000000000000000000001/executions",
+            "headers": {
+              "idempotency-key": "$KEY"
+            },
+            "json": {
+              "expected_generation": 2,
+              "argv": [
+                "python",
+                "-V"
+              ]
+            }
+          },
+          "response": {
+            "status": 409,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001",
+              "content-type": "application/problem+json"
+            },
+            "json": {
+              "code": "STATE_CONFLICT",
+              "kind": "REFUSED",
+              "retry": "AFTER_CHANGE",
+              "message": "State conflict",
+              "request_id": "req_000000000000000000000001",
+              "type": "urn:acf:problem:state-conflict",
+              "title": "State conflict",
+              "status": 409,
+              "detail": "State conflict",
+              "instance": "urn:acf:request:req_000000000000000000000001"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "outcome": "error",
+        "error": {
+          "class": "StateConflictError",
+          "code": "STATE_CONFLICT",
+          "kind": "REFUSED"
+        },
+        "exit_code": "refused"
+      }
+    },
+    {
+      "id": "cp-008-rate-limited-honours-retry-after",
+      "title": "A server Retry-After replaces the computed delay when it is longer.",
+      "rules": [
+        "RT-1"
+      ],
+      "call": {
+        "name": "sandbox.create",
+        "args": {
+          "image": "python",
+          "vcpus": 1,
+          "memory_mib": 512,
+          "disk_mib": 1024,
+          "start": false,
+          "idempotency_key": "key-0001"
+        }
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes",
+            "headers": {
+              "idempotency-key": "$KEY"
+            },
+            "json": {
+              "image": "python",
+              "resources": {
+                "vcpus": 1,
+                "memory_mib": 512,
+                "disk_mib": 1024
+              }
+            }
+          },
+          "response": {
+            "status": 429,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001",
+              "content-type": "application/problem+json",
+              "retry-after": "3"
+            },
+            "json": {
+              "code": "RATE_LIMITED",
+              "kind": "REFUSED",
+              "retry": "SAME_REQUEST_LATER",
+              "message": "Rate limited",
+              "request_id": "req_000000000000000000000001",
+              "type": "urn:acf:problem:rate-limited",
+              "title": "Rate limited",
+              "status": 429,
+              "detail": "Rate limited",
+              "instance": "urn:acf:request:req_000000000000000000000001"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes",
+            "headers": {
+              "idempotency-key": "$KEY"
+            },
+            "json": {
+              "image": "python",
+              "resources": {
+                "vcpus": 1,
+                "memory_mib": 512,
+                "disk_mib": 1024
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001"
+            },
+            "json": {
+              "operation_id": "op-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "project": "prj_0000000000000001",
+              "type": "sandbox.create",
+              "state": "SUCCEEDED",
+              "terminal": true,
+              "effect": "APPLIED",
+              "target": {
+                "sandbox_id": "sbx-00000000000000000000000000000001",
+                "generation": 1
+              },
+              "result": {
+                "sandbox": {
+                  "sandbox_id": "sbx-00000000000000000000000000000001",
+                  "project": "prj_0000000000000001",
+                  "state": "PROVISIONING",
+                  "generation": 1,
+                  "revision": "r11.0123456789ab",
+                  "image": {
+                    "alias": "python",
+                    "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                  },
+                  "resources": {
+                    "vcpus": 1,
+                    "memory_mib": 512,
+                    "disk_mib": 1024
+                  },
+                  "network": {
+                    "mode": "none",
+                    "entries": []
+                  },
+                  "expires_at": "2026-11-19T12:00:00.000Z",
+                  "notes": [],
+                  "updated_at": "2026-11-19T10:00:02.000Z"
+                }
+              },
+              "initiated_by": "CALLER",
+              "actor": {
+                "principal_id": "prn_0000000000000001"
+              },
+              "created_at": "2026-11-19T10:00:00.000Z",
+              "updated_at": "2026-11-19T10:00:02.000Z",
+              "replayed": false,
+              "recorded": false,
+              "idempotency_key_digest": "5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "outcome": "success",
+        "result": {
+          "sandbox_id": "sbx-00000000000000000000000000000001"
+        },
+        "min_wait_s": 3,
+        "exit_code": "success"
+      }
+    },
+    {
+      "id": "cp-009-retry-after-beyond-the-cap",
+      "title": "A Retry-After longer than the client's backoff cap is not waited for: the failure is surfaced.",
+      "rules": [
+        "RT-1"
+      ],
+      "call": {
+        "name": "sandbox.create",
+        "args": {
+          "image": "python",
+          "vcpus": 1,
+          "memory_mib": 512,
+          "disk_mib": 1024,
+          "start": false,
+          "idempotency_key": "key-0001"
+        }
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes",
+            "headers": {
+              "idempotency-key": "$KEY"
+            },
+            "json": {
+              "image": "python",
+              "resources": {
+                "vcpus": 1,
+                "memory_mib": 512,
+                "disk_mib": 1024
+              }
+            }
+          },
+          "response": {
+            "status": 429,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001",
+              "content-type": "application/problem+json",
+              "retry-after": "600"
+            },
+            "json": {
+              "code": "RATE_LIMITED",
+              "kind": "REFUSED",
+              "retry": "SAME_REQUEST_LATER",
+              "message": "Rate limited",
+              "request_id": "req_000000000000000000000001",
+              "type": "urn:acf:problem:rate-limited",
+              "title": "Rate limited",
+              "status": 429,
+              "detail": "Rate limited",
+              "instance": "urn:acf:request:req_000000000000000000000001"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "outcome": "error",
+        "error": {
+          "class": "RateLimitError",
+          "code": "RATE_LIMITED",
+          "retry": "SAME_REQUEST_LATER"
+        },
+        "exit_code": "refused"
+      }
+    },
+    {
+      "id": "cp-010-permission-denied",
+      "title": "A refusal with retry NEVER is surfaced at once.",
+      "rules": [
+        "CP-3",
+        "RT-6"
+      ],
+      "call": {
+        "name": "sandbox.create",
+        "args": {
+          "image": "python",
+          "vcpus": 1,
+          "memory_mib": 512,
+          "disk_mib": 1024,
+          "start": false,
+          "idempotency_key": "key-0001"
+        }
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes",
+            "headers": {
+              "idempotency-key": "$KEY"
+            },
+            "json": {
+              "image": "python",
+              "resources": {
+                "vcpus": 1,
+                "memory_mib": 512,
+                "disk_mib": 1024
+              }
+            }
+          },
+          "response": {
+            "status": 403,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001",
+              "content-type": "application/problem+json"
+            },
+            "json": {
+              "code": "PERMISSION_DENIED",
+              "kind": "REFUSED",
+              "retry": "NEVER",
+              "message": "Permission denied",
+              "request_id": "req_000000000000000000000001",
+              "reason": "network_mode",
+              "type": "urn:acf:problem:permission-denied",
+              "title": "Permission denied",
+              "status": 403,
+              "detail": "Permission denied",
+              "instance": "urn:acf:request:req_000000000000000000000001"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "outcome": "error",
+        "error": {
+          "class": "PermissionDeniedError",
+          "code": "PERMISSION_DENIED",
+          "kind": "REFUSED"
+        },
+        "exit_code": "refused"
+      }
+    },
+    {
+      "id": "cp-011-nonzero-exit-is-a-result",
+      "title": "A command that exits with a status other than 0 is a result of a successful operation.",
+      "rules": [
+        "ERR-2"
+      ],
+      "call": {
+        "name": "sandbox.exec",
+        "args": {
+          "sandbox_id": "sbx-00000000000000000000000000000001",
+          "expected_generation": 2,
+          "argv": [
+            "false"
+          ],
+          "idempotency_key": "key-0100"
+        }
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes/sbx-00000000000000000000000000000001/executions",
+            "headers": {
+              "idempotency-key": "$KEY"
+            },
+            "json": {
+              "expected_generation": 2,
+              "argv": [
+                "false"
+              ]
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001"
+            },
+            "json": {
+              "operation_id": "op-cccccccccccccccccccccccccccccccc",
+              "project": "prj_0000000000000001",
+              "type": "execution.create",
+              "state": "SUCCEEDED",
+              "terminal": true,
+              "effect": "APPLIED",
+              "target": {
+                "sandbox_id": "sbx-00000000000000000000000000000001",
+                "generation": 2,
+                "execution_id": "exe-00000000000000000000000000000001"
+              },
+              "result": {
+                "execution": {
+                  "execution_id": "exe-00000000000000000000000000000001",
+                  "operation_id": "op-cccccccccccccccccccccccccccccccc",
+                  "project": "prj_0000000000000001",
+                  "sandbox_id": "sbx-00000000000000000000000000000001",
+                  "generation": 2,
+                  "state": "SUCCEEDED",
+                  "terminal": true,
+                  "status": "EXITED",
+                  "exit_code": 1,
+                  "durations": {
+                    "guest_ms": 12,
+                    "wall_ms": 20
+                  },
+                  "stdout": {
+                    "stored_bytes": 0,
+                    "produced_bytes": 0,
+                    "completeness": "COMPLETE"
+                  },
+                  "stderr": {
+                    "stored_bytes": 0,
+                    "produced_bytes": 0,
+                    "completeness": "COMPLETE"
+                  },
+                  "host_backstop_fired": false,
+                  "runtime_ended": false,
+                  "evidence_status": "COMPLETE",
+                  "provenance": {
+                    "status": "GUEST_REPORTED",
+                    "exit_code": "GUEST_REPORTED",
+                    "signal": "GUEST_REPORTED",
+                    "durations.guest_ms": "GUEST_REPORTED",
+                    "durations.wall_ms": "HOST_OBSERVED",
+                    "stdout": "GUEST_REPORTED",
+                    "stderr": "GUEST_REPORTED",
+                    "host_backstop_fired": "HOST_OBSERVED",
+                    "runtime_ended": "HOST_OBSERVED",
+                    "evidence_status": "HOST_OBSERVED"
+                  }
+                }
+              },
+              "initiated_by": "CALLER",
+              "actor": {
+                "principal_id": "prn_0000000000000001"
+              },
+              "created_at": "2026-11-19T10:00:00.000Z",
+              "updated_at": "2026-11-19T10:00:02.000Z",
+              "replayed": false,
+              "recorded": false,
+              "idempotency_key_digest": "5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "outcome": "success",
+        "result": {
+          "execution_id": "exe-00000000000000000000000000000001",
+          "status": "EXITED",
+          "exit_code": 1
+        },
+        "exit_code": "command_failed"
+      }
+    },
+    {
+      "id": "cp-012-operation-failed-not-applied",
+      "title": "An operation that ends FAILED with effect NOT_APPLIED is a failure, and nothing was applied.",
+      "rules": [
+        "ERR-2",
+        "LRO-6"
+      ],
+      "call": {
+        "name": "sandbox.exec",
+        "args": {
+          "sandbox_id": "sbx-00000000000000000000000000000001",
+          "expected_generation": 2,
+          "argv": [
+            "python",
+            "-V"
+          ],
+          "idempotency_key": "key-0100"
+        }
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes/sbx-00000000000000000000000000000001/executions",
+            "headers": {
+              "idempotency-key": "$KEY"
+            },
+            "json": {
+              "expected_generation": 2,
+              "argv": [
+                "python",
+                "-V"
+              ]
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001"
+            },
+            "json": {
+              "operation_id": "op-cccccccccccccccccccccccccccccccc",
+              "project": "prj_0000000000000001",
+              "type": "execution.create",
+              "state": "FAILED",
+              "terminal": true,
+              "effect": "NOT_APPLIED",
+              "failure": {
+                "code": "DEPENDENCY_UNAVAILABLE",
+                "retry": "SAME_REQUEST_LATER",
+                "message": "A dependency of the host was unavailable",
+                "side_effect": "NONE"
+              },
+              "cleanup": "COMPLETE",
+              "target": {
+                "sandbox_id": "sbx-00000000000000000000000000000001",
+                "generation": 2,
+                "execution_id": "exe-00000000000000000000000000000001"
+              },
+              "initiated_by": "CALLER",
+              "actor": {
+                "principal_id": "prn_0000000000000001"
+              },
+              "created_at": "2026-11-19T10:00:00.000Z",
+              "updated_at": "2026-11-19T10:00:02.000Z",
+              "replayed": false,
+              "recorded": false,
+              "idempotency_key_digest": "5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "outcome": "error",
+        "error": {
+          "class": "OperationFailedError",
+          "code": "DEPENDENCY_UNAVAILABLE"
+        },
+        "exit_code": "operation_failed"
+      }
+    },
+    {
+      "id": "cp-013-unknown-is-never-success-or-failure",
+      "title": "An operation that ends UNKNOWN is reported as unknown, distinctly.",
+      "rules": [
+        "CP-5",
+        "ERR-3"
+      ],
+      "call": {
+        "name": "sandbox.exec",
+        "args": {
+          "sandbox_id": "sbx-00000000000000000000000000000001",
+          "expected_generation": 2,
+          "argv": [
+            "python",
+            "-V"
+          ],
+          "idempotency_key": "key-0100"
+        }
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes/sbx-00000000000000000000000000000001/executions",
+            "headers": {
+              "idempotency-key": "$KEY"
+            },
+            "json": {
+              "expected_generation": 2,
+              "argv": [
+                "python",
+                "-V"
+              ]
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001"
+            },
+            "json": {
+              "operation_id": "op-cccccccccccccccccccccccccccccccc",
+              "project": "prj_0000000000000001",
+              "type": "execution.create",
+              "state": "UNKNOWN",
+              "terminal": true,
+              "effect": "MAY_BE_APPLIED",
+              "failure": {
+                "code": "UNKNOWN_OUTCOME",
+                "retry": "AFTER_CHANGE",
+                "message": "The outcome of the operation is unknown",
+                "side_effect": "POSSIBLE"
+              },
+              "target": {
+                "sandbox_id": "sbx-00000000000000000000000000000001",
+                "generation": 2,
+                "execution_id": "exe-00000000000000000000000000000001"
+              },
+              "result": {
+                "execution": {
+                  "execution_id": "exe-00000000000000000000000000000001",
+                  "operation_id": "op-cccccccccccccccccccccccccccccccc",
+                  "project": "prj_0000000000000001",
+                  "sandbox_id": "sbx-00000000000000000000000000000001",
+                  "generation": 2,
+                  "state": "UNKNOWN",
+                  "terminal": true,
+                  "status": "UNKNOWN",
+                  "durations": {
+                    "guest_ms": 12,
+                    "wall_ms": 20
+                  },
+                  "stdout": {
+                    "stored_bytes": 0,
+                    "produced_bytes": 0,
+                    "completeness": "COMPLETE"
+                  },
+                  "stderr": {
+                    "stored_bytes": 0,
+                    "produced_bytes": 0,
+                    "completeness": "COMPLETE"
+                  },
+                  "host_backstop_fired": false,
+                  "runtime_ended": false,
+                  "evidence_status": "COMPLETE",
+                  "provenance": {
+                    "status": "GUEST_REPORTED",
+                    "exit_code": "GUEST_REPORTED",
+                    "signal": "GUEST_REPORTED",
+                    "durations.guest_ms": "GUEST_REPORTED",
+                    "durations.wall_ms": "HOST_OBSERVED",
+                    "stdout": "GUEST_REPORTED",
+                    "stderr": "GUEST_REPORTED",
+                    "host_backstop_fired": "HOST_OBSERVED",
+                    "runtime_ended": "HOST_OBSERVED",
+                    "evidence_status": "HOST_OBSERVED"
+                  }
+                }
+              },
+              "initiated_by": "CALLER",
+              "actor": {
+                "principal_id": "prn_0000000000000001"
+              },
+              "created_at": "2026-11-19T10:00:00.000Z",
+              "updated_at": "2026-11-19T10:00:02.000Z",
+              "replayed": false,
+              "recorded": false,
+              "idempotency_key_digest": "5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "outcome": "error",
+        "error": {
+          "class": "OutcomeUnknownError",
+          "code": "UNKNOWN_OUTCOME"
+        },
+        "exit_code": "outcome_unknown"
+      }
+    },
+    {
+      "id": "cp-014-failed-may-be-applied-is-unknown",
+      "title": "FAILED with effect MAY_BE_APPLIED is not a clean failure: the caller must inspect before deciding.",
+      "rules": [
+        "CP-5",
+        "RT-6"
+      ],
+      "call": {
+        "name": "sandbox.exec",
+        "args": {
+          "sandbox_id": "sbx-00000000000000000000000000000001",
+          "expected_generation": 2,
+          "argv": [
+            "python",
+            "-V"
+          ],
+          "idempotency_key": "key-0100"
+        }
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes/sbx-00000000000000000000000000000001/executions",
+            "headers": {
+              "idempotency-key": "$KEY"
+            },
+            "json": {
+              "expected_generation": 2,
+              "argv": [
+                "python",
+                "-V"
+              ]
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001"
+            },
+            "json": {
+              "operation_id": "op-cccccccccccccccccccccccccccccccc",
+              "project": "prj_0000000000000001",
+              "type": "execution.create",
+              "state": "FAILED",
+              "terminal": true,
+              "effect": "MAY_BE_APPLIED",
+              "failure": {
+                "code": "TIMEOUT",
+                "retry": "SAME_REQUEST_LATER",
+                "message": "Timed out",
+                "side_effect": "POSSIBLE"
+              },
+              "cleanup": "PENDING",
+              "target": {
+                "sandbox_id": "sbx-00000000000000000000000000000001",
+                "generation": 2,
+                "execution_id": "exe-00000000000000000000000000000001"
+              },
+              "initiated_by": "CALLER",
+              "actor": {
+                "principal_id": "prn_0000000000000001"
+              },
+              "created_at": "2026-11-19T10:00:00.000Z",
+              "updated_at": "2026-11-19T10:00:02.000Z",
+              "replayed": false,
+              "recorded": false,
+              "idempotency_key_digest": "5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "outcome": "error",
+        "error": {
+          "class": "OutcomeUnknownError",
+          "code": "TIMEOUT"
+        },
+        "exit_code": "outcome_unknown"
+      }
+    },
+    {
+      "id": "cp-015-outcome-lost-is-never-retried",
+      "title": "OUTCOME_LOST is surfaced once and never retried, with this key or with another.",
+      "rules": [
+        "CP-5",
+        "ERR-7",
+        "SDK-5"
+      ],
+      "call": {
+        "name": "sandbox.create",
+        "args": {
+          "image": "python",
+          "vcpus": 1,
+          "memory_mib": 512,
+          "disk_mib": 1024,
+          "start": false,
+          "idempotency_key": "key-0001"
+        }
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes",
+            "headers": {
+              "idempotency-key": "$KEY"
+            },
+            "json": {
+              "image": "python",
+              "resources": {
+                "vcpus": 1,
+                "memory_mib": 512,
+                "disk_mib": 1024
+              }
+            }
+          },
+          "response": {
+            "status": 410,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001",
+              "content-type": "application/problem+json"
+            },
+            "json": {
+              "code": "OUTCOME_LOST",
+              "kind": "UNRESOLVED",
+              "retry": "NEVER",
+              "message": "The outcome of the request is lost; inspect the target before acting again",
+              "request_id": "req_000000000000000000000001",
+              "idempotency_key": "key-0001",
+              "type": "urn:acf:problem:outcome-lost",
+              "title": "The outcome of the request is lost; inspect the target before acting again",
+              "status": 410,
+              "detail": "The outcome of the request is lost; inspect the target before acting again",
+              "instance": "urn:acf:request:req_000000000000000000000001"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "outcome": "error",
+        "error": {
+          "class": "OutcomeLostError",
+          "code": "OUTCOME_LOST",
+          "kind": "UNRESOLVED",
+          "retry": "NEVER"
+        },
+        "exit_code": "outcome_lost"
+      }
+    },
+    {
+      "id": "cp-016-retries-exhausted-stays-unresolved",
+      "title": "When the outcome stays unresolved, the client says so and exposes the key. It never tries a new one.",
+      "rules": [
+        "CP-2",
+        "RT-1",
+        "RT-6",
+        "SDK-5"
+      ],
+      "call": {
+        "name": "sandbox.create",
+        "args": {
+          "image": "python",
+          "vcpus": 1,
+          "memory_mib": 512,
+          "disk_mib": 1024,
+          "start": false,
+          "idempotency_key": "key-0001"
+        }
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes",
+            "headers": {
+              "idempotency-key": "$KEY"
+            },
+            "json": {
+              "image": "python",
+              "resources": {
+                "vcpus": 1,
+                "memory_mib": 512,
+                "disk_mib": 1024
+              }
+            }
+          },
+          "response": {
+            "status": 503,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001",
+              "content-type": "application/problem+json",
+              "retry-after": "1"
+            },
+            "json": {
+              "code": "OUTCOME_UNRESOLVED",
+              "kind": "UNRESOLVED",
+              "retry": "SAME_REQUEST_LATER",
+              "message": "The outcome of the request could not be established",
+              "request_id": "req_000000000000000000000001",
+              "idempotency_key": "key-0001",
+              "type": "urn:acf:problem:outcome-unresolved",
+              "title": "The outcome of the request could not be established",
+              "status": 503,
+              "detail": "The outcome of the request could not be established",
+              "instance": "urn:acf:request:req_000000000000000000000001"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes",
+            "headers": {
+              "idempotency-key": "$KEY"
+            },
+            "json": {
+              "image": "python",
+              "resources": {
+                "vcpus": 1,
+                "memory_mib": 512,
+                "disk_mib": 1024
+              }
+            }
+          },
+          "response": {
+            "status": 503,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001",
+              "content-type": "application/problem+json",
+              "retry-after": "1"
+            },
+            "json": {
+              "code": "OUTCOME_UNRESOLVED",
+              "kind": "UNRESOLVED",
+              "retry": "SAME_REQUEST_LATER",
+              "message": "The outcome of the request could not be established",
+              "request_id": "req_000000000000000000000001",
+              "idempotency_key": "key-0001",
+              "type": "urn:acf:problem:outcome-unresolved",
+              "title": "The outcome of the request could not be established",
+              "status": 503,
+              "detail": "The outcome of the request could not be established",
+              "instance": "urn:acf:request:req_000000000000000000000001"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes",
+            "headers": {
+              "idempotency-key": "$KEY"
+            },
+            "json": {
+              "image": "python",
+              "resources": {
+                "vcpus": 1,
+                "memory_mib": 512,
+                "disk_mib": 1024
+              }
+            }
+          },
+          "response": {
+            "status": 503,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001",
+              "content-type": "application/problem+json",
+              "retry-after": "1"
+            },
+            "json": {
+              "code": "OUTCOME_UNRESOLVED",
+              "kind": "UNRESOLVED",
+              "retry": "SAME_REQUEST_LATER",
+              "message": "The outcome of the request could not be established",
+              "request_id": "req_000000000000000000000001",
+              "idempotency_key": "key-0001",
+              "type": "urn:acf:problem:outcome-unresolved",
+              "title": "The outcome of the request could not be established",
+              "status": 503,
+              "detail": "The outcome of the request could not be established",
+              "instance": "urn:acf:request:req_000000000000000000000001"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "outcome": "error",
+        "error": {
+          "class": "OutcomeUnresolvedError",
+          "code": "OUTCOME_UNRESOLVED",
+          "kind": "UNRESOLVED"
+        },
+        "exit_code": "unresolved"
+      },
+      "config": {
+        "max_retries": 2
+      }
+    },
+    {
+      "id": "cp-017-idempotency-conflict",
+      "title": "A key reused for a different request is refused, and no other key is tried.",
+      "rules": [
+        "RT-6",
+        "IDM-6"
+      ],
+      "call": {
+        "name": "sandbox.create",
+        "args": {
+          "image": "python",
+          "vcpus": 1,
+          "memory_mib": 512,
+          "disk_mib": 1024,
+          "start": false,
+          "idempotency_key": "key-0001"
+        }
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes",
+            "headers": {
+              "idempotency-key": "$KEY"
+            },
+            "json": {
+              "image": "python",
+              "resources": {
+                "vcpus": 1,
+                "memory_mib": 512,
+                "disk_mib": 1024
+              }
+            }
+          },
+          "response": {
+            "status": 422,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001",
+              "content-type": "application/problem+json"
+            },
+            "json": {
+              "code": "IDEMPOTENCY_CONFLICT",
+              "kind": "REFUSED",
+              "retry": "NEVER",
+              "message": "Idempotency key reused for a different request",
+              "request_id": "req_000000000000000000000001",
+              "type": "urn:acf:problem:idempotency-conflict",
+              "title": "Idempotency key reused for a different request",
+              "status": 422,
+              "detail": "Idempotency key reused for a different request",
+              "instance": "urn:acf:request:req_000000000000000000000001"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "outcome": "error",
+        "error": {
+          "class": "IdempotencyConflictError",
+          "code": "IDEMPOTENCY_CONFLICT"
+        },
+        "exit_code": "refused"
+      }
+    },
+    {
+      "id": "cp-018-a-state-never-seen-is-not-terminal",
+      "title": "A state the client does not know is neither terminal nor success: following continues.",
+      "rules": [
+        "CP-4",
+        "VER-12"
+      ],
+      "call": {
+        "name": "sandbox.create",
+        "args": {
+          "image": "python",
+          "vcpus": 1,
+          "memory_mib": 512,
+          "disk_mib": 1024,
+          "start": false,
+          "idempotency_key": "key-0001"
+        }
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes",
+            "headers": {
+              "idempotency-key": "$KEY"
+            },
+            "json": {
+              "image": "python",
+              "resources": {
+                "vcpus": 1,
+                "memory_mib": 512,
+                "disk_mib": 1024
+              }
+            }
+          },
+          "response": {
+            "status": 202,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001",
+              "location": "/v1/projects/prj_0000000000000001/operations/op-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "retry-after": "1"
+            },
+            "json": {
+              "operation_id": "op-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "project": "prj_0000000000000001",
+              "type": "sandbox.create",
+              "state": "AWAITING_PLACEMENT",
+              "terminal": false,
+              "target": {
+                "sandbox_id": "sbx-00000000000000000000000000000001",
+                "generation": 1
+              },
+              "initiated_by": "CALLER",
+              "actor": {
+                "principal_id": "prn_0000000000000001"
+              },
+              "created_at": "2026-11-19T10:00:00.000Z",
+              "updated_at": "2026-11-19T10:00:02.000Z",
+              "replayed": false,
+              "recorded": false,
+              "idempotency_key_digest": "5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "path": "/v1/projects/prj_0000000000000001/operations/op-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "query": {
+              "wait": "30"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001"
+            },
+            "json": {
+              "operation_id": "op-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "project": "prj_0000000000000001",
+              "type": "sandbox.create",
+              "state": "SUCCEEDED",
+              "terminal": true,
+              "effect": "APPLIED",
+              "target": {
+                "sandbox_id": "sbx-00000000000000000000000000000001",
+                "generation": 1
+              },
+              "result": {
+                "sandbox": {
+                  "sandbox_id": "sbx-00000000000000000000000000000001",
+                  "project": "prj_0000000000000001",
+                  "state": "PROVISIONING",
+                  "generation": 1,
+                  "revision": "r11.0123456789ab",
+                  "image": {
+                    "alias": "python",
+                    "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                  },
+                  "resources": {
+                    "vcpus": 1,
+                    "memory_mib": 512,
+                    "disk_mib": 1024
+                  },
+                  "network": {
+                    "mode": "none",
+                    "entries": []
+                  },
+                  "expires_at": "2026-11-19T12:00:00.000Z",
+                  "notes": [],
+                  "updated_at": "2026-11-19T10:00:02.000Z"
+                }
+              },
+              "initiated_by": "CALLER",
+              "actor": {
+                "principal_id": "prn_0000000000000001"
+              },
+              "created_at": "2026-11-19T10:00:00.000Z",
+              "updated_at": "2026-11-19T10:00:02.000Z",
+              "replayed": false,
+              "recorded": false,
+              "idempotency_key_digest": "5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "outcome": "success",
+        "result": {
+          "sandbox_id": "sbx-00000000000000000000000000000001",
+          "state": "PROVISIONING"
+        },
+        "exit_code": "success"
+      }
+    },
+    {
+      "id": "cp-019-list-follows-cursors",
+      "title": "A listing follows cursors to the end.",
+      "rules": [
+        "SDK-7"
+      ],
+      "call": {
+        "name": "sandbox.list",
+        "args": {}
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "GET",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes"
+          },
+          "response": {
+            "status": 200,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001"
+            },
+            "json": {
+              "next_cursor": "c1",
+              "more": true,
+              "items": [
+                {
+                  "sandbox_id": "sbx-00000000000000000000000000000001",
+                  "project": "prj_0000000000000001",
+                  "state": "PROVISIONING",
+                  "generation": 1,
+                  "revision": "r11.0123456789ab",
+                  "image": {
+                    "alias": "python",
+                    "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                  },
+                  "resources": {
+                    "vcpus": 1,
+                    "memory_mib": 512,
+                    "disk_mib": 1024
+                  },
+                  "network": {
+                    "mode": "none",
+                    "entries": []
+                  },
+                  "expires_at": "2026-11-19T12:00:00.000Z",
+                  "notes": [],
+                  "updated_at": "2026-11-19T10:00:02.000Z"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes",
+            "query": {
+              "cursor": "c1"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001"
+            },
+            "json": {
+              "next_cursor": "c2",
+              "more": false,
+              "items": [
+                {
+                  "sandbox_id": "sbx-00000000000000000000000000000002",
+                  "project": "prj_0000000000000001",
+                  "state": "READY",
+                  "generation": 1,
+                  "revision": "r11.0123456789ab",
+                  "image": {
+                    "alias": "python",
+                    "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                  },
+                  "resources": {
+                    "vcpus": 1,
+                    "memory_mib": 512,
+                    "disk_mib": 1024
+                  },
+                  "network": {
+                    "mode": "none",
+                    "entries": []
+                  },
+                  "expires_at": "2026-11-19T12:00:00.000Z",
+                  "notes": [],
+                  "updated_at": "2026-11-19T10:00:02.000Z"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "expect": {
+        "outcome": "success",
+        "result": {
+          "count": 2,
+          "ids": [
+            "sbx-00000000000000000000000000000001",
+            "sbx-00000000000000000000000000000002"
+          ]
+        },
+        "exit_code": "success"
+      }
+    },
+    {
+      "id": "cp-020-cursor-expired-lists-again",
+      "title": "CURSOR_EXPIRED makes the client list again in full.",
+      "rules": [
+        "SDK-7"
+      ],
+      "call": {
+        "name": "sandbox.list",
+        "args": {}
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "GET",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes"
+          },
+          "response": {
+            "status": 200,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001"
+            },
+            "json": {
+              "next_cursor": "c1",
+              "more": true,
+              "items": [
+                {
+                  "sandbox_id": "sbx-00000000000000000000000000000001",
+                  "project": "prj_0000000000000001",
+                  "state": "PROVISIONING",
+                  "generation": 1,
+                  "revision": "r11.0123456789ab",
+                  "image": {
+                    "alias": "python",
+                    "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                  },
+                  "resources": {
+                    "vcpus": 1,
+                    "memory_mib": 512,
+                    "disk_mib": 1024
+                  },
+                  "network": {
+                    "mode": "none",
+                    "entries": []
+                  },
+                  "expires_at": "2026-11-19T12:00:00.000Z",
+                  "notes": [],
+                  "updated_at": "2026-11-19T10:00:02.000Z"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes",
+            "query": {
+              "cursor": "c1"
+            }
+          },
+          "response": {
+            "status": 410,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001",
+              "content-type": "application/problem+json"
+            },
+            "json": {
+              "code": "CURSOR_EXPIRED",
+              "kind": "REFUSED",
+              "retry": "AFTER_CHANGE",
+              "message": "Cursor expired",
+              "request_id": "req_000000000000000000000001",
+              "type": "urn:acf:problem:cursor-expired",
+              "title": "Cursor expired",
+              "status": 410,
+              "detail": "Cursor expired",
+              "instance": "urn:acf:request:req_000000000000000000000001"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes"
+          },
+          "response": {
+            "status": 200,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001"
+            },
+            "json": {
+              "next_cursor": "c9",
+              "more": false,
+              "items": [
+                {
+                  "sandbox_id": "sbx-00000000000000000000000000000001",
+                  "project": "prj_0000000000000001",
+                  "state": "PROVISIONING",
+                  "generation": 1,
+                  "revision": "r11.0123456789ab",
+                  "image": {
+                    "alias": "python",
+                    "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                  },
+                  "resources": {
+                    "vcpus": 1,
+                    "memory_mib": 512,
+                    "disk_mib": 1024
+                  },
+                  "network": {
+                    "mode": "none",
+                    "entries": []
+                  },
+                  "expires_at": "2026-11-19T12:00:00.000Z",
+                  "notes": [],
+                  "updated_at": "2026-11-19T10:00:02.000Z"
+                },
+                {
+                  "sandbox_id": "sbx-00000000000000000000000000000002",
+                  "project": "prj_0000000000000001",
+                  "state": "READY",
+                  "generation": 1,
+                  "revision": "r11.0123456789ab",
+                  "image": {
+                    "alias": "python",
+                    "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                  },
+                  "resources": {
+                    "vcpus": 1,
+                    "memory_mib": 512,
+                    "disk_mib": 1024
+                  },
+                  "network": {
+                    "mode": "none",
+                    "entries": []
+                  },
+                  "expires_at": "2026-11-19T12:00:00.000Z",
+                  "notes": [],
+                  "updated_at": "2026-11-19T10:00:02.000Z"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "expect": {
+        "outcome": "success",
+        "result": {
+          "count": 2,
+          "ids": [
+            "sbx-00000000000000000000000000000001",
+            "sbx-00000000000000000000000000000002"
+          ]
+        },
+        "exit_code": "success"
+      }
+    },
+    {
+      "id": "cp-021-unknown-members-and-values-are-tolerated",
+      "title": "A member and an enumeration value the client has never seen do not break it.",
+      "rules": [
+        "VER-4"
+      ],
+      "call": {
+        "name": "sandbox.get",
+        "args": {
+          "sandbox": "sbx-00000000000000000000000000000001"
+        }
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "GET",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes/sbx-00000000000000000000000000000001"
+          },
+          "response": {
+            "status": 200,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001",
+              "etag": "\"r11.0123456789ab\""
+            },
+            "json": {
+              "sandbox_id": "sbx-00000000000000000000000000000001",
+              "project": "prj_0000000000000001",
+              "state": "HIBERNATED",
+              "generation": 1,
+              "revision": "r11.0123456789ab",
+              "image": {
+                "alias": "python",
+                "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+              },
+              "resources": {
+                "vcpus": 1,
+                "memory_mib": 512,
+                "disk_mib": 1024
+              },
+              "network": {
+                "mode": "none",
+                "entries": []
+              },
+              "expires_at": "2026-11-19T12:00:00.000Z",
+              "notes": [],
+              "updated_at": "2026-11-19T10:00:02.000Z",
+              "placement": {
+                "zone": "a"
+              }
+            }
+          }
+        }
+      ],
+      "expect": {
+        "outcome": "success",
+        "result": {
+          "sandbox_id": "sbx-00000000000000000000000000000001",
+          "state": "HIBERNATED"
+        },
+        "exit_code": "success"
+      }
+    },
+    {
+      "id": "cp-022-an-unknown-code-is-handled-by-kind-and-retry",
+      "title": "A refusal code the client has never seen is handled by its kind and its retry advice: NEVER is not retried.",
+      "rules": [
+        "VER-12",
+        "CP-3"
+      ],
+      "call": {
+        "name": "sandbox.create",
+        "args": {
+          "image": "python",
+          "vcpus": 1,
+          "memory_mib": 512,
+          "disk_mib": 1024,
+          "start": false,
+          "idempotency_key": "key-0001"
+        }
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes",
+            "headers": {
+              "idempotency-key": "$KEY"
+            },
+            "json": {
+              "image": "python",
+              "resources": {
+                "vcpus": 1,
+                "memory_mib": 512,
+                "disk_mib": 1024
+              }
+            }
+          },
+          "response": {
+            "status": 409,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001",
+              "content-type": "application/problem+json"
+            },
+            "json": {
+              "code": "FUTURE_REFUSAL",
+              "kind": "REFUSED",
+              "retry": "NEVER",
+              "message": "A code this client has never seen",
+              "request_id": "req_000000000000000000000001",
+              "type": "urn:acf:problem:future-refusal",
+              "title": "A code this client has never seen",
+              "status": 409,
+              "detail": "A code this client has never seen",
+              "instance": "urn:acf:request:req_000000000000000000000001"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "outcome": "error",
+        "error": {
+          "class": "RefusedError",
+          "code": "FUTURE_REFUSAL",
+          "kind": "REFUSED",
+          "retry": "NEVER"
+        },
+        "exit_code": "refused"
+      }
+    },
+    {
+      "id": "cp-023-an-unknown-code-that-says-later-is-retried",
+      "title": "The same unknown code with retry SAME_REQUEST_LATER is retried, with the same key.",
+      "rules": [
+        "VER-12",
+        "CP-3"
+      ],
+      "call": {
+        "name": "sandbox.create",
+        "args": {
+          "image": "python",
+          "vcpus": 1,
+          "memory_mib": 512,
+          "disk_mib": 1024,
+          "start": false,
+          "idempotency_key": "key-0001"
+        }
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes",
+            "headers": {
+              "idempotency-key": "$KEY"
+            },
+            "json": {
+              "image": "python",
+              "resources": {
+                "vcpus": 1,
+                "memory_mib": 512,
+                "disk_mib": 1024
+              }
+            }
+          },
+          "response": {
+            "status": 503,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001",
+              "content-type": "application/problem+json",
+              "retry-after": "1"
+            },
+            "json": {
+              "code": "FUTURE_REFUSAL",
+              "kind": "REFUSED",
+              "retry": "SAME_REQUEST_LATER",
+              "message": "A code this client has never seen",
+              "request_id": "req_000000000000000000000001",
+              "type": "urn:acf:problem:future-refusal",
+              "title": "A code this client has never seen",
+              "status": 503,
+              "detail": "A code this client has never seen",
+              "instance": "urn:acf:request:req_000000000000000000000001"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes",
+            "headers": {
+              "idempotency-key": "$KEY"
+            },
+            "json": {
+              "image": "python",
+              "resources": {
+                "vcpus": 1,
+                "memory_mib": 512,
+                "disk_mib": 1024
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001"
+            },
+            "json": {
+              "operation_id": "op-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "project": "prj_0000000000000001",
+              "type": "sandbox.create",
+              "state": "SUCCEEDED",
+              "terminal": true,
+              "effect": "APPLIED",
+              "target": {
+                "sandbox_id": "sbx-00000000000000000000000000000001",
+                "generation": 1
+              },
+              "result": {
+                "sandbox": {
+                  "sandbox_id": "sbx-00000000000000000000000000000001",
+                  "project": "prj_0000000000000001",
+                  "state": "PROVISIONING",
+                  "generation": 1,
+                  "revision": "r11.0123456789ab",
+                  "image": {
+                    "alias": "python",
+                    "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                  },
+                  "resources": {
+                    "vcpus": 1,
+                    "memory_mib": 512,
+                    "disk_mib": 1024
+                  },
+                  "network": {
+                    "mode": "none",
+                    "entries": []
+                  },
+                  "expires_at": "2026-11-19T12:00:00.000Z",
+                  "notes": [],
+                  "updated_at": "2026-11-19T10:00:02.000Z"
+                }
+              },
+              "initiated_by": "CALLER",
+              "actor": {
+                "principal_id": "prn_0000000000000001"
+              },
+              "created_at": "2026-11-19T10:00:00.000Z",
+              "updated_at": "2026-11-19T10:00:02.000Z",
+              "replayed": false,
+              "recorded": false,
+              "idempotency_key_digest": "5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "outcome": "success",
+        "result": {
+          "sandbox_id": "sbx-00000000000000000000000000000001"
+        },
+        "exit_code": "success"
+      }
+    },
+    {
+      "id": "cp-024-start-fails-and-the-sandbox-is-destroyed",
+      "title": "When the start fails, the default policy destroys the sandbox and the error names both outcomes.",
+      "rules": [
+        "SDK-9"
+      ],
+      "call": {
+        "name": "sandbox.create",
+        "args": {
+          "image": "python",
+          "vcpus": 1,
+          "memory_mib": 512,
+          "disk_mib": 1024,
+          "idempotency_key": "key-0024"
+        }
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes",
+            "headers": {
+              "idempotency-key": "$KEY"
+            },
+            "json": {
+              "image": "python",
+              "resources": {
+                "vcpus": 1,
+                "memory_mib": 512,
+                "disk_mib": 1024
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001"
+            },
+            "json": {
+              "operation_id": "op-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "project": "prj_0000000000000001",
+              "type": "sandbox.create",
+              "state": "SUCCEEDED",
+              "terminal": true,
+              "effect": "APPLIED",
+              "target": {
+                "sandbox_id": "sbx-00000000000000000000000000000001",
+                "generation": 1
+              },
+              "result": {
+                "sandbox": {
+                  "sandbox_id": "sbx-00000000000000000000000000000001",
+                  "project": "prj_0000000000000001",
+                  "state": "PROVISIONING",
+                  "generation": 1,
+                  "revision": "r11.0123456789ab",
+                  "image": {
+                    "alias": "python",
+                    "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                  },
+                  "resources": {
+                    "vcpus": 1,
+                    "memory_mib": 512,
+                    "disk_mib": 1024
+                  },
+                  "network": {
+                    "mode": "none",
+                    "entries": []
+                  },
+                  "expires_at": "2026-11-19T12:00:00.000Z",
+                  "notes": [],
+                  "updated_at": "2026-11-19T10:00:02.000Z"
+                }
+              },
+              "initiated_by": "CALLER",
+              "actor": {
+                "principal_id": "prn_0000000000000001"
+              },
+              "created_at": "2026-11-19T10:00:00.000Z",
+              "updated_at": "2026-11-19T10:00:02.000Z",
+              "replayed": false,
+              "recorded": false,
+              "idempotency_key_digest": "5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes/sbx-00000000000000000000000000000001/start",
+            "headers": {
+              "idempotency-key": "$KEY:start"
+            },
+            "json": {
+              "expected_generation": 1
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001"
+            },
+            "json": {
+              "operation_id": "op-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "project": "prj_0000000000000001",
+              "type": "sandbox.start",
+              "state": "FAILED",
+              "terminal": true,
+              "effect": "NOT_APPLIED",
+              "failure": {
+                "code": "RESOURCE_EXHAUSTED",
+                "retry": "SAME_REQUEST_LATER",
+                "message": "The host has no capacity for this request",
+                "side_effect": "NONE"
+              },
+              "cleanup": "COMPLETE",
+              "target": {
+                "sandbox_id": "sbx-00000000000000000000000000000001",
+                "generation": 1
+              },
+              "initiated_by": "CALLER",
+              "actor": {
+                "principal_id": "prn_0000000000000001"
+              },
+              "created_at": "2026-11-19T10:00:00.000Z",
+              "updated_at": "2026-11-19T10:00:02.000Z",
+              "replayed": false,
+              "recorded": false,
+              "idempotency_key_digest": "5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "DELETE",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes/sbx-00000000000000000000000000000001",
+            "query": {
+              "expected_generation": "1"
+            },
+            "headers": {
+              "idempotency-key": "$KEY:destroy"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001"
+            },
+            "json": {
+              "operation_id": "op-dddddddddddddddddddddddddddddddd",
+              "project": "prj_0000000000000001",
+              "type": "sandbox.destroy",
+              "state": "SUCCEEDED",
+              "terminal": true,
+              "effect": "APPLIED",
+              "target": {
+                "sandbox_id": "sbx-00000000000000000000000000000001",
+                "generation": 1
+              },
+              "result": {
+                "sandbox": {
+                  "sandbox_id": "sbx-00000000000000000000000000000001",
+                  "project": "prj_0000000000000001",
+                  "state": "DESTROYED",
+                  "generation": 1,
+                  "revision": "r11.0123456789ab",
+                  "image": {
+                    "alias": "python",
+                    "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                  },
+                  "resources": {
+                    "vcpus": 1,
+                    "memory_mib": 512,
+                    "disk_mib": 1024
+                  },
+                  "network": {
+                    "mode": "none",
+                    "entries": []
+                  },
+                  "expires_at": "2026-11-19T12:00:00.000Z",
+                  "notes": [],
+                  "updated_at": "2026-11-19T10:00:02.000Z"
+                }
+              },
+              "initiated_by": "CALLER",
+              "actor": {
+                "principal_id": "prn_0000000000000001"
+              },
+              "created_at": "2026-11-19T10:00:00.000Z",
+              "updated_at": "2026-11-19T10:00:02.000Z",
+              "replayed": false,
+              "recorded": false,
+              "idempotency_key_digest": "5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "outcome": "error",
+        "error": {
+          "class": "SandboxStartError",
+          "code": "RESOURCE_EXHAUSTED"
+        },
+        "exit_code": "operation_failed"
+      }
+    },
+    {
+      "id": "cp-025-follow-bound-reached",
+      "title": "At the follow bound the client reports that the operation is still running. It assumes nothing. A bound shorter than the server's own wait is said to the server with the mutation.",
+      "rules": [
+        "CP-4",
+        "LRO-2",
+        "LRO-4"
+      ],
+      "call": {
+        "name": "sandbox.exec",
+        "args": {
+          "sandbox_id": "sbx-00000000000000000000000000000001",
+          "expected_generation": 2,
+          "argv": [
+            "python",
+            "-V"
+          ],
+          "idempotency_key": "key-0100"
+        }
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes/sbx-00000000000000000000000000000001/executions",
+            "headers": {
+              "idempotency-key": "$KEY"
+            },
+            "json": {
+              "expected_generation": 2,
+              "argv": [
+                "python",
+                "-V"
+              ]
+            },
+            "query": {
+              "wait": "5"
+            }
+          },
+          "response": {
+            "status": 202,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001",
+              "location": "/v1/projects/prj_0000000000000001/operations/op-cccccccccccccccccccccccccccccccc",
+              "retry-after": "1"
+            },
+            "json": {
+              "operation_id": "op-cccccccccccccccccccccccccccccccc",
+              "project": "prj_0000000000000001",
+              "type": "execution.create",
+              "state": "IN_PROGRESS",
+              "terminal": false,
+              "target": {
+                "sandbox_id": "sbx-00000000000000000000000000000001",
+                "generation": 2,
+                "execution_id": "exe-00000000000000000000000000000001"
+              },
+              "initiated_by": "CALLER",
+              "actor": {
+                "principal_id": "prn_0000000000000001"
+              },
+              "created_at": "2026-11-19T10:00:00.000Z",
+              "updated_at": "2026-11-19T10:00:02.000Z",
+              "replayed": false,
+              "recorded": false,
+              "idempotency_key_digest": "5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "path": "/v1/projects/prj_0000000000000001/operations/op-cccccccccccccccccccccccccccccccc",
+            "query": {
+              "wait": "4"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001",
+              "retry-after": "1"
+            },
+            "json": {
+              "operation_id": "op-cccccccccccccccccccccccccccccccc",
+              "project": "prj_0000000000000001",
+              "type": "execution.create",
+              "state": "IN_PROGRESS",
+              "terminal": false,
+              "target": {
+                "sandbox_id": "sbx-00000000000000000000000000000001",
+                "generation": 2,
+                "execution_id": "exe-00000000000000000000000000000001"
+              },
+              "initiated_by": "CALLER",
+              "actor": {
+                "principal_id": "prn_0000000000000001"
+              },
+              "created_at": "2026-11-19T10:00:00.000Z",
+              "updated_at": "2026-11-19T10:00:02.000Z",
+              "replayed": false,
+              "recorded": false,
+              "idempotency_key_digest": "5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "path": "/v1/projects/prj_0000000000000001/operations/op-cccccccccccccccccccccccccccccccc",
+            "query": {
+              "wait": "3"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001",
+              "retry-after": "1"
+            },
+            "json": {
+              "operation_id": "op-cccccccccccccccccccccccccccccccc",
+              "project": "prj_0000000000000001",
+              "type": "execution.create",
+              "state": "IN_PROGRESS",
+              "terminal": false,
+              "target": {
+                "sandbox_id": "sbx-00000000000000000000000000000001",
+                "generation": 2,
+                "execution_id": "exe-00000000000000000000000000000001"
+              },
+              "initiated_by": "CALLER",
+              "actor": {
+                "principal_id": "prn_0000000000000001"
+              },
+              "created_at": "2026-11-19T10:00:00.000Z",
+              "updated_at": "2026-11-19T10:00:02.000Z",
+              "replayed": false,
+              "recorded": false,
+              "idempotency_key_digest": "5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "path": "/v1/projects/prj_0000000000000001/operations/op-cccccccccccccccccccccccccccccccc",
+            "query": {
+              "wait": "2"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001",
+              "retry-after": "1"
+            },
+            "json": {
+              "operation_id": "op-cccccccccccccccccccccccccccccccc",
+              "project": "prj_0000000000000001",
+              "type": "execution.create",
+              "state": "IN_PROGRESS",
+              "terminal": false,
+              "target": {
+                "sandbox_id": "sbx-00000000000000000000000000000001",
+                "generation": 2,
+                "execution_id": "exe-00000000000000000000000000000001"
+              },
+              "initiated_by": "CALLER",
+              "actor": {
+                "principal_id": "prn_0000000000000001"
+              },
+              "created_at": "2026-11-19T10:00:00.000Z",
+              "updated_at": "2026-11-19T10:00:02.000Z",
+              "replayed": false,
+              "recorded": false,
+              "idempotency_key_digest": "5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "path": "/v1/projects/prj_0000000000000001/operations/op-cccccccccccccccccccccccccccccccc",
+            "query": {
+              "wait": "1"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001",
+              "retry-after": "1"
+            },
+            "json": {
+              "operation_id": "op-cccccccccccccccccccccccccccccccc",
+              "project": "prj_0000000000000001",
+              "type": "execution.create",
+              "state": "IN_PROGRESS",
+              "terminal": false,
+              "target": {
+                "sandbox_id": "sbx-00000000000000000000000000000001",
+                "generation": 2,
+                "execution_id": "exe-00000000000000000000000000000001"
+              },
+              "initiated_by": "CALLER",
+              "actor": {
+                "principal_id": "prn_0000000000000001"
+              },
+              "created_at": "2026-11-19T10:00:00.000Z",
+              "updated_at": "2026-11-19T10:00:02.000Z",
+              "replayed": false,
+              "recorded": false,
+              "idempotency_key_digest": "5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c5f2c"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "outcome": "error",
+        "error": {
+          "class": "OperationStillRunningError"
+        },
+        "exit_code": "still_running"
+      },
+      "config": {
+        "follow_max_s": 5
+      }
+    },
+    {
+      "id": "cp-026-not-found",
+      "title": "A record of another project, or one that does not exist, is NOT_FOUND.",
+      "rules": [
+        "SEC-120"
+      ],
+      "call": {
+        "name": "sandbox.get",
+        "args": {
+          "sandbox": "sbx-00000000000000000000000000000001"
+        }
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "GET",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes/sbx-00000000000000000000000000000001"
+          },
+          "response": {
+            "status": 404,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001",
+              "content-type": "application/problem+json"
+            },
+            "json": {
+              "code": "NOT_FOUND",
+              "kind": "REFUSED",
+              "retry": "NEVER",
+              "message": "Not found",
+              "request_id": "req_000000000000000000000001",
+              "type": "urn:acf:problem:not-found",
+              "title": "Not found",
+              "status": 404,
+              "detail": "Not found",
+              "instance": "urn:acf:request:req_000000000000000000000001"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "outcome": "error",
+        "error": {
+          "class": "NotFoundError",
+          "code": "NOT_FOUND"
+        },
+        "exit_code": "refused"
+      }
+    },
+    {
+      "id": "cp-027-upstream-unavailable-is-retried",
+      "title": "UPSTREAM_UNAVAILABLE says nothing was sent: the same request is repeated later.",
+      "rules": [
+        "RT-1"
+      ],
+      "call": {
+        "name": "sandbox.get",
+        "args": {
+          "sandbox": "sbx-00000000000000000000000000000001"
+        }
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "GET",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes/sbx-00000000000000000000000000000001"
+          },
+          "response": {
+            "status": 503,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001",
+              "content-type": "application/problem+json",
+              "retry-after": "1"
+            },
+            "json": {
+              "code": "UPSTREAM_UNAVAILABLE",
+              "kind": "REFUSED",
+              "retry": "SAME_REQUEST_LATER",
+              "message": "A dependency of the platform is unavailable; nothing was sent",
+              "request_id": "req_000000000000000000000001",
+              "type": "urn:acf:problem:upstream-unavailable",
+              "title": "A dependency of the platform is unavailable; nothing was sent",
+              "status": 503,
+              "detail": "A dependency of the platform is unavailable; nothing was sent",
+              "instance": "urn:acf:request:req_000000000000000000000001"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "path": "/v1/projects/prj_0000000000000001/sandboxes/sbx-00000000000000000000000000000001"
+          },
+          "response": {
+            "status": 200,
+            "headers": {
+              "x-request-id": "req_000000000000000000000001",
+              "etag": "\"r11.0123456789ab\""
+            },
+            "json": {
+              "sandbox_id": "sbx-00000000000000000000000000000001",
+              "project": "prj_0000000000000001",
+              "state": "READY",
+              "generation": 1,
+              "revision": "r11.0123456789ab",
+              "image": {
+                "alias": "python",
+                "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+              },
+              "resources": {
+                "vcpus": 1,
+                "memory_mib": 512,
+                "disk_mib": 1024
+              },
+              "network": {
+                "mode": "none",
+                "entries": []
+              },
+              "expires_at": "2026-11-19T12:00:00.000Z",
+              "notes": [],
+              "updated_at": "2026-11-19T10:00:02.000Z"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "outcome": "success",
+        "result": {
+          "sandbox_id": "sbx-00000000000000000000000000000001",
+          "state": "READY"
+        },
+        "exit_code": "success"
+      }
+    }
+  ]
+}

@@ -109,8 +109,8 @@ that supersedes. **Reversibility:** expensive (recovery depends on it).
 ## ADR-007 — A narrow journal of our own, with lineage, sequence, epoch and a reserve
 **Context.** Admission needs an atomic check-and-append with one writer, small state and crash behaviour that can
 be tested exhaustively. An embedded database would be a large dependency inside a root process.
-**Decision.** An append-only file of CRC-framed batches of full-record upserts. One mutex spans check, append,
-fsync and apply. A lineage id qualifies every sequence and cursor; the commit sequence is each record's revision;
+**Decision.** An append-only file of CRC-framed batches of full-record upserts. One writer lock spans check,
+append, fsync and apply; readers use a separate lock on the committed state (ADR-034). A lineage id qualifies every sequence and cursor; the commit sequence is each record's revision;
 an activation epoch fences stale writers. A torn tail is repaired; any other corruption makes the host
 `READ_ONLY`; an uncertain commit is a fail-stop. A ballast file keeps room to record containment on a full disk.
 **Consequences.** The store's failure behaviour is unit-tested, including failed appends and lost rollbacks. The
@@ -301,8 +301,9 @@ off by default because it is guest-influenced disk growth. **Reversibility:** re
 ## ADR-030 — Pins fail closed
 **Decision.** The Firecracker installer and the image builder refuse to proceed while a digest they need is
 `UNSET`. The lock files use a strict `KEY=VALUE` grammar parsed identically by shell and Python.
-**Consequences.** A root-executed binary is never installed on trust. The base-image and kernel pins are still
-`UNSET` in this repository: the first operator pins them. **Reversibility:** reversible.
+**Consequences.** A root-executed binary is never installed on trust. The four base images and the `x86_64` kernel
+are pinned, each from a measurement (the lock files say how); the `aarch64` kernel is still `UNSET`, so a release
+cannot be cut until someone measures one. **Reversibility:** reversible.
 
 ## ADR-031 — The Makefile is the gate; KVM suites fail, never skip, when enabled
 **Decision.** CI calls make targets, and guard tests fail if a workflow or a document names a target that does
@@ -331,3 +332,26 @@ a root-executed binary lives and a dependency on where that place is mounted. Ha
 per launch for a file of a few megabytes, and the window that remains is covered by the trusted-input rule.
 **Consequences.** A new host needs two more lines in its configuration before it creates a sandbox. Upgrading
 the binaries without the configuration stops new launches and nothing else. **Reversibility:** reversible.
+
+## ADR-034 — No answer waits for a disk: reads bypass the writer, and bulk disk work leaves the async worker
+**Context.** On the first real host, one create's answer was lost: the edge gave up after its 60 s deadline,
+although the core answers a create after at most 30 s. The trigger was a slow disk. That create spent 165 s
+copying, hashing and flushing a 225 MB root filesystem. Two things turned that into a lost answer. The store
+took one mutex for reads and commits alike and held it across each commit's `fdatasync`. On ext4 in ordered mode,
+that flush waits for the filesystem-journal transaction carrying the root filesystem's data blocks. Separately,
+the copy ran inline on an async worker. Measured on that host: a read answered in 2 ms when idle and in about
+5 s, the whole create, when a create was running.
+**Decision.** The store keeps two locks. Writers take a writer lock for *check → append → fsync → apply*. The
+committed state has its own lock, which a writer takes only to apply a batch that is already durable. Readers
+see the last durable state at once. Every flush and every bulk copy goes through `durability::blocking`, which
+first hands the worker's other tasks to another worker (`block_in_place`).
+**Why not `spawn_blocking`.** A detached task outlives the operation that started it. A create that timed out
+could still be writing its copy while its compensation removes the directory.
+**Why not an async store.** Every commit site is synchronous and short on a healthy disk. The defect was readers
+queuing behind flushes, not commits being synchronous.
+**Consequences.** Measured on the same host afterwards: reads during creates have a median of 2 ms, and one read
+in three creates took 0.47 s. Commits still queue behind each other, as they must. A commit's flush still waits
+for what the filesystem has to write first. The store and the sandbox payloads share `state_root`, and so one
+filesystem, so on a slow disk a create's staging still delays the commits made meanwhile, though no longer the
+reads ([OPERATIONS.md](OPERATIONS.md) §9). **Reversibility:** reversible inside `store/journal.rs` and
+`durability.rs`.

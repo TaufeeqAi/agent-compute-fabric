@@ -1,6 +1,8 @@
-# Dependabot keeps every pinned input fresh: the workflows' actions, the Rust lock file and both Python
-# lock files. Each ecosystem is a separate, reviewable pull request, so a bump that breaks the build
-# names its cause. Nothing is auto-merged: this repository's code runs as root on a host.
+# Dependabot keeps every pinned input fresh: the workflows' actions, the Rust lock file, the Python lock
+# files of the tooling and of the host client, and the five locks of the developer platform. Each
+# ecosystem and each project is a separate, reviewable pull request, so a bump that breaks the build
+# names its cause. Nothing is auto-merged: this repository's code runs as root on a host, and the
+# platform's core holds a credential for every project of a deployment.
 version: 2
 
 updates:
@@ -28,6 +30,38 @@ updates:
 
   # uv.lock of the CLI (typer, pydantic, rich): this one is runtime supply-chain surface
   - package-ecosystem: uv
+    directory: /apps/host-cli
+    schedule:
+      interval: weekly
+
+  # ---- the developer platform -------------------------------------------------------------------
+  # uv.lock of the API: the core and the REST edge. Runtime supply-chain surface of the process that
+  # holds the host credential.
+  - package-ecosystem: uv
+    directory: /apps/api
+    schedule:
+      interval: weekly
+
+  # uv.lock of the agent-protocol adapter (the MCP SDK and its dependencies)
+  - package-ecosystem: uv
+    directory: /apps/mcp-gateway
+    schedule:
+      interval: weekly
+
+  # uv.lock of the developer CLI
+  - package-ecosystem: uv
     directory: /apps/cli
+    schedule:
+      interval: weekly
+
+  # uv.lock of the Python SDK: what its tests ran against (its published range is in pyproject.toml)
+  - package-ecosystem: uv
+    directory: /sdks/python
+    schedule:
+      interval: weekly
+
+  # package-lock.json of the TypeScript SDK: development tools only, the package has no runtime dependency
+  - package-ecosystem: npm
+    directory: /sdks/typescript
     schedule:
       interval: weekly

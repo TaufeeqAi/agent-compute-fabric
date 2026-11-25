@@ -197,6 +197,25 @@ fn validate(req: &ExecRequest) -> Result<(), String> {
     Ok(())
 }
 
+/// Let a command be given `RLIMIT_NPROC = max_pids` even where that is above the hard limit this
+/// agent started with.
+///
+/// The child sets the limit after it has become the workload's unprivileged user, and an
+/// unprivileged process may lower its hard limit but never raise it. The kernel derives the default
+/// from the guest's memory (`threads-max / 2`), so in a small guest a request within the safety
+/// profile failed to spawn at all. (Found on a real 256 MiB guest: `max_pids` 1024 was refused while
+/// the default hard limit was below it.) The agent runs as root and raises its own hard limit first;
+/// the child then only lowers it or keeps it. If raising fails, nothing is hidden: the child's
+/// `setrlimit` fails as before and the command is reported as not started.
+fn allow_nproc(max_pids: u32) {
+    use rustix::process::{Resource, getrlimit, setrlimit};
+    let wanted = u64::from(max_pids);
+    let current = getrlimit(Resource::Nproc);
+    if current.maximum.is_some_and(|hard| hard < wanted) {
+        let _ = setrlimit(Resource::Nproc, rustix::process::Rlimit { current: current.current, maximum: Some(wanted) });
+    }
+}
+
 #[allow(unsafe_code)] // The single justified `unsafe` in the guest agent.
 fn apply_child_limits(cmd: &mut Command, max_pids: u32, cgroup_procs_fd: Option<RawFd>) {
     use rustix::process::{Resource, Rlimit, setrlimit};
@@ -327,6 +346,7 @@ pub fn run(req: &ExecRequest, cancel: &AtomicBool, env: &ExecEnv) -> ExecResult 
         cmd.uid(req.uid).gid(req.gid);
     }
     let tree = env.cgroup_root.as_deref().and_then(|root| CgroupTree::create(root, &req.exec_id, req.max_pids).ok());
+    allow_nproc(req.max_pids);
     apply_child_limits(&mut cmd, req.max_pids, tree.as_ref().map(CgroupTree::procs_fd));
     let containment = if tree.is_some() { Containment::Cgroup2 } else { Containment::RlimitNproc };
 

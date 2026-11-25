@@ -256,6 +256,54 @@ async fn t_api_04_reads_carry_as_of_and_changed_since_returns_exactly_the_change
     assert_eq!(a.sandboxes(json!({})).await.items.len(), 1, "and listing again recovers the state");
 }
 
+/// T-API-04, once retention has forgotten a tombstone: "the caller lists again in full" (API-11)
+/// must always be possible. Found on the first real host, whose full listings had all begun to end
+/// with a cursor that was already expired: sandboxes that had not changed since before a newer
+/// tombstone was forgotten. And a list with no tombstones loses nothing when a sandbox's is forgotten.
+#[tokio::test]
+async fn t_api_04_a_full_listing_reaches_its_end_whatever_retention_has_forgotten() {
+    let rig = Rig::new();
+    let host = rig.serving().await;
+    let a = alice(&host);
+    // Two sandboxes that do not change again, then one destroyed after them: its tombstone is newer.
+    let old = [a.create(Some("old-1")).await.sandbox_id, a.create(Some("old-2")).await.sandbox_id];
+    let gone = a.create(Some("gone")).await;
+    a.done("sandbox.destroy", target(&gone)).await;
+    let early = a.operations(json!({"limit": 1})).await;
+    assert!(early.more);
+    let early_cursor = json!({"lineage": early.next.lineage, "sequence": early.next.sequence});
+
+    rig.clock.advance_ms(host.cfg.operations.change_retention_ms + 1);
+    assert!(host.retention().unwrap() >= 1, "the tombstone is forgotten");
+    let floor = host.journal.read(|s| s.change_floor).unwrap();
+    let full = a.sandboxes(json!({})).await;
+    assert!(full.items.iter().all(|v| v.revision < floor), "both remaining sandboxes are older than the floor");
+
+    // Followed one page at a time, a full listing reaches its end and shows exactly what exists.
+    let mut seen = vec![];
+    let mut page = a.sandboxes(json!({"limit": 1})).await;
+    loop {
+        assert!(page.next.sequence >= floor || !page.more, "every cursor handed out is one the host accepts");
+        seen.extend(page.items.iter().map(|v| v.sandbox_id.clone()));
+        if !page.more {
+            break;
+        }
+        page = a.sandboxes(json!({"changed_since": {"lineage": page.next.lineage, "sequence": page.next.sequence}, "limit": 1})).await;
+    }
+    seen.sort();
+    seen.dedup();
+    let mut want = old.to_vec();
+    want.sort();
+    assert_eq!(seen, want);
+
+    // A sandbox cursor from before the floor is refused, as above; an operation cursor is not:
+    // operations have no tombstones, so forgetting a sandbox's took nothing from their followers.
+    let r = a.refused("sandbox.list", json!({"changed_since": early_cursor})).await;
+    assert_eq!(r.class, FailureClass::CursorExpired);
+    let ops = a.operations(json!({"changed_since": early_cursor})).await;
+    assert!(!ops.items.is_empty(), "the operations recorded after the cursor are all there");
+}
+
 /// T-API-05: boundary, overflow and oversize values → `INVALID_REQUEST`; the boundary itself is
 /// accepted.
 #[test]

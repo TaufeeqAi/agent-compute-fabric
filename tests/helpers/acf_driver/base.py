@@ -6,7 +6,7 @@ import time
 from collections.abc import Callable
 from typing import Final
 
-# Exit codes of acf-local (apps/cli/README.md, "Exit codes"). Named so that an assertion reads as a sentence.
+# Exit codes of acf-local (apps/host-cli/README.md, "Exit codes"). Named so that an assertion reads as a sentence.
 EXIT_OK: Final = 0
 EXIT_WORKLOAD_FAILED: Final = 1  # exec / run once: the operation succeeded, the command did not exit with status 0
 EXIT_USAGE: Final = 2  # nothing was sent
@@ -27,6 +27,15 @@ TERMINAL_STATES: Final = frozenset({"SUCCEEDED", "FAILED", "CANCELLED", "UNKNOWN
 
 class DriverError(AssertionError):
     """The system did not do what the test needed in order to go on (the message carries what it said instead)."""
+
+
+class LostAnswerError(DriverError):
+    """A request was written and the peer closed the connection without answering it.
+
+    For a request that creates an operation this is an outcome the protocol allows: the edge says nothing when the
+    core does not answer in time, because it cannot know whether the operation was recorded. The caller resolves it
+    by the operation's id (``retry: true``), never by a new request.
+    """
 
 
 def tail(text: str, limit: int = 2000) -> str:
